@@ -1,0 +1,433 @@
+"""Tests for pymlt.likelihood — log-likelihood correctness, stability, gradients."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from scipy.optimize import check_grad
+
+from pymlt.basis import BernsteinBasis
+from pymlt.likelihood import (
+    _log_diff_ndtr,
+    log_likelihood,
+    negative_log_likelihood,
+)
+from pymlt.variables import CensoredData, CensoringType
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def make_basis(order: int = 3, support: tuple = (0.0, 1.0)) -> BernsteinBasis:
+    return BernsteinBasis(order=order, support=support)
+
+
+def ascending_theta(order: int, low: float = 0.0, step: float = 0.5) -> np.ndarray:
+    return np.array([low + step * i for i in range(order + 1)])
+
+
+# ---------------------------------------------------------------------------
+# _log_diff_ndtr — numerical stability helper
+# ---------------------------------------------------------------------------
+
+class TestLogDiffNdtr:
+    def test_standard_case(self):
+        """log(Φ(1) - Φ(0)) matches reference."""
+        from scipy.stats import norm
+        expected = np.log(norm.cdf(1.0) - norm.cdf(0.0))
+        result = _log_diff_ndtr(np.array([0.0]), np.array([1.0]))
+        np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+    def test_no_inf_for_narrow_interval(self):
+        """Very narrow intervals must not produce -inf."""
+        a = np.array([0.0])
+        b = a + 1e-8
+        result = _log_diff_ndtr(a, b)
+        assert np.isfinite(result), f"Expected finite, got {result}"
+
+    def test_no_inf_for_very_narrow_interval(self):
+        a = np.array([0.0])
+        b = a + 1e-12
+        result = _log_diff_ndtr(a, b)
+        assert np.isfinite(result)
+
+    def test_wide_interval_matches_log_ndtr(self):
+        """For very wide interval, result ≈ log Φ(b)."""
+        from scipy.special import log_ndtr
+        b = np.array([2.0])
+        a = np.array([-100.0])
+        result = _log_diff_ndtr(a, b)
+        np.testing.assert_allclose(result, log_ndtr(b), atol=1e-10)
+
+    def test_symmetric_interval(self):
+        """log(Φ(1) - Φ(-1)) = log(2*Φ(1)-1)."""
+        from scipy.stats import norm
+        expected = np.log(2 * norm.cdf(1.0) - 1.0)
+        result = _log_diff_ndtr(np.array([-1.0]), np.array([1.0]))
+        np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# NONE — exact observations
+# ---------------------------------------------------------------------------
+
+class TestLogLikelihoodNone:
+    def test_known_value(self):
+        """Hardcoded reference: order=2, theta=[0,1,2], y=[0.25, 0.5, 0.75].
+
+        h = [0.5, 1.0, 1.5],  h' = [2.0, 2.0, 2.0]
+        ℓ = Σ norm.logpdf(h) + Σ log(h')
+          = -4.5068155996140183 + 2.0794415416798357
+          = -2.4273740579341826
+        """
+        basis = BernsteinBasis(order=2, support=(0.0, 1.0))
+        theta = np.array([0.0, 1.0, 2.0])
+        y = np.array([0.25, 0.5, 0.75])
+        result = log_likelihood(theta, basis, y)
+        np.testing.assert_allclose(result, -2.4273740579341826, rtol=1e-10)
+
+    def test_manual_computation(self):
+        """LL equals Σ logpdf(h) + Σ log(h') computed directly."""
+        from scipy.stats import norm as _norm
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.3)
+        y = np.linspace(0.1, 0.9, 8)
+
+        B  = basis.evaluate(y)
+        D  = basis.derivative(y, order=1)
+        h  = B @ theta
+        hp = D @ theta
+        expected = np.sum(_norm.logpdf(h)) + np.sum(np.log(hp))
+
+        result = log_likelihood(theta, basis, y)
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+    def test_ndarray_input(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.3, 0.5, 0.7])
+        result = log_likelihood(theta, basis, y)
+        assert np.isfinite(result)
+
+    def test_censored_data_none_equals_ndarray(self):
+        """CensoredData with censoring=NONE gives same result as plain array."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y_arr = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.from_exact(y_arr)
+        result_arr = log_likelihood(theta, basis, y_arr)
+        result_cd  = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(result_arr, result_cd, rtol=1e-12)
+
+    def test_monotonicity_violation_raises(self):
+        """Descending theta → h' ≤ 0 → log(h') = -inf → ValueError."""
+        basis = make_basis(order=2)
+        theta = np.array([2.0, 1.0, 0.0])   # strictly descending
+        y = np.array([0.5])
+        with pytest.raises(ValueError, match="monoton"):
+            log_likelihood(theta, basis, y)
+
+
+# ---------------------------------------------------------------------------
+# RIGHT — right-censored
+# ---------------------------------------------------------------------------
+
+class TestLogLikelihoodRight:
+    def _make_right_data(self, n: int = 50, frac_censored: float = 0.3,
+                         seed: int = 0) -> tuple:
+        """Synthetic right-censored survival data on [0, 3]."""
+        rng = np.random.default_rng(seed)
+        support = (0.0, 3.0)
+        basis = BernsteinBasis(order=3, support=support)
+        theta = ascending_theta(3, step=0.5)
+        y_true = rng.uniform(0.1, 2.9, n)
+        is_censored = rng.random(n) < frac_censored
+        cd = CensoredData.right_censored(y_true, is_censored)
+        return basis, theta, cd
+
+    def test_sign_and_finiteness(self):
+        basis, theta, cd = self._make_right_data()
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+        assert np.isfinite(result)
+
+    def test_all_censored_uses_logsf(self):
+        """All censored → LL = Σ norm.logsf(h)."""
+        from scipy.stats import norm as _norm
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.right_censored(y, np.array([True, True, True]))
+        B  = basis.evaluate(y)
+        h  = B @ theta
+        expected = float(np.sum(_norm.logsf(h)))
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+    def test_no_censoring_equals_none(self):
+        """Right-censored with no censored obs == NONE."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.right_censored(y, np.array([False, False, False]))
+        ll_none  = log_likelihood(theta, basis, y)
+        ll_right = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+        np.testing.assert_allclose(ll_right, ll_none, rtol=1e-12)
+
+    def test_reference_npy(self):
+        """Numerical comparison with R-generated reference values."""
+        import pathlib
+        ref = pathlib.Path(__file__).parent.parent / "reference" / "ll_right_reference.npy"
+        if not ref.exists():
+            pytest.skip("reference/ll_right_reference.npy not yet generated")
+        # TODO: load and compare
+        pass
+
+
+# ---------------------------------------------------------------------------
+# LEFT — left-censored
+# ---------------------------------------------------------------------------
+
+class TestLogLikelihoodLeft:
+    def test_all_censored_uses_logcdf(self):
+        """All censored → LL = Σ log_ndtr(h)."""
+        from scipy.special import log_ndtr as _log_ndtr
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.left_censored(y, np.array([True, True, True]))
+        B  = basis.evaluate(y)
+        h  = B @ theta
+        expected = float(np.sum(_log_ndtr(h)))
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.LEFT)
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+    def test_no_censoring_equals_none(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.left_censored(y, np.array([False, False, False]))
+        ll_none = log_likelihood(theta, basis, y)
+        ll_left = log_likelihood(theta, basis, cd, censoring=CensoringType.LEFT)
+        np.testing.assert_allclose(ll_left, ll_none, rtol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# INTERVAL — interval-censored
+# ---------------------------------------------------------------------------
+
+class TestLogLikelihoodInterval:
+    def test_no_inf_for_narrow_intervals(self):
+        """Narrow intervals (Δy = 1e-6) must not produce -inf."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        centers = np.array([0.2, 0.5, 0.8])
+        eps = 1e-6
+        cd = CensoredData.interval_censored(centers - eps, centers + eps)
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.INTERVAL)
+        assert np.isfinite(result), f"Expected finite, got {result}"
+
+    def test_very_narrow_intervals_finite(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        centers = np.array([0.3, 0.6])
+        eps = 1e-10
+        cd = CensoredData.interval_censored(centers - eps, centers + eps)
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.INTERVAL)
+        assert np.isfinite(result)
+
+    def test_wide_interval_close_to_none(self):
+        """Extremely wide interval → almost all probability covered → LL ≈ 0."""
+        basis = BernsteinBasis(order=3, support=(-10.0, 10.0))
+        theta = ascending_theta(3, low=-2.0, step=1.0)
+        # Interval so wide that Φ(h_upper) - Φ(h_lower) ≈ 1
+        cd = CensoredData.interval_censored(
+            np.array([-9.9]), np.array([9.9])
+        )
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.INTERVAL)
+        assert result > -1.0, f"Expected ≈ 0, got {result}"
+
+    def test_interval_manual(self):
+        """LL = Σ _log_diff_ndtr(h_lo, h_hi) computed independently."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        lo = np.array([0.1, 0.4, 0.7])
+        hi = np.array([0.3, 0.6, 0.9])
+        cd = CensoredData.interval_censored(lo, hi)
+        B_lo = basis.evaluate(lo)
+        B_hi = basis.evaluate(hi)
+        h_lo = B_lo @ theta
+        h_hi = B_hi @ theta
+        expected = float(np.sum(_log_diff_ndtr(h_lo, h_hi)))
+        result = log_likelihood(theta, basis, cd, censoring=CensoringType.INTERVAL)
+        np.testing.assert_allclose(result, expected, rtol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Gradient correctness via scipy.optimize.check_grad
+# ---------------------------------------------------------------------------
+
+class TestGradients:
+    def _check(self, basis, theta, y, censoring, *, X=None, atol=1e-5):
+        cd_or_arr = y
+
+        def f(t):
+            return negative_log_likelihood(t, basis, cd_or_arr, X, censoring)
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t, basis, cd_or_arr, X, censoring, gradient=True
+            )
+            return grad
+
+        err = check_grad(f, g, theta)
+        assert err < atol, f"check_grad error = {err:.2e} for {censoring}"
+
+    def test_gradient_none(self):
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.4)
+        y = np.linspace(0.1, 0.9, 10)
+        self._check(basis, theta, y, CensoringType.NONE)
+
+    def test_gradient_right(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.5)
+        rng = np.random.default_rng(7)
+        y = np.sort(rng.uniform(0.05, 0.95, 12))
+        censored = rng.random(12) < 0.4
+        cd = CensoredData.right_censored(y, censored)
+        self._check(basis, theta, cd, CensoringType.RIGHT)
+
+    def test_gradient_left(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.5)
+        rng = np.random.default_rng(13)
+        y = np.sort(rng.uniform(0.05, 0.95, 10))
+        censored = rng.random(10) < 0.4
+        cd = CensoredData.left_censored(y, censored)
+        self._check(basis, theta, cd, CensoringType.LEFT)
+
+    def test_gradient_interval(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.5)
+        centers = np.linspace(0.2, 0.8, 8)
+        cd = CensoredData.interval_censored(centers - 0.05, centers + 0.05)
+        self._check(basis, theta, cd, CensoringType.INTERVAL)
+
+    def test_gradient_none_with_regression(self):
+        """Gradient with covariate X: includes beta part."""
+        rng = np.random.default_rng(42)
+        basis = make_basis(order=3)
+        n, q = 12, 2
+        y = np.sort(rng.uniform(0.1, 0.9, n))
+        X = rng.standard_normal((n, q))
+        theta_full = np.concatenate([ascending_theta(3, step=0.4), rng.standard_normal(q)])
+
+        def f(t):
+            return negative_log_likelihood(t, basis, y, X, CensoringType.NONE)
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t, basis, y, X, CensoringType.NONE, gradient=True
+            )
+            return grad
+
+        err = check_grad(f, g, theta_full)
+        assert err < 1e-4, f"check_grad (with X) error = {err:.2e}"
+
+    def test_gradient_tuple_returned(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.3, 0.6])
+        result = negative_log_likelihood(theta, basis, y, gradient=True)
+        assert isinstance(result, tuple)
+        nll, grad = result
+        assert isinstance(nll, float)
+        assert grad.shape == theta.shape
+
+    def test_gradient_false_returns_float(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.3, 0.6])
+        result = negative_log_likelihood(theta, basis, y, gradient=False)
+        assert isinstance(result, float)
+
+
+# ---------------------------------------------------------------------------
+# negative_log_likelihood wrapper
+# ---------------------------------------------------------------------------
+
+class TestNegativeLogLikelihood:
+    def test_is_negation(self):
+        basis = make_basis(order=3)
+        theta = ascending_theta(3)
+        y = np.array([0.2, 0.5, 0.8])
+        ll  = log_likelihood(theta, basis, y)
+        nll = negative_log_likelihood(theta, basis, y)
+        np.testing.assert_allclose(nll, -ll, rtol=1e-12)
+
+    def test_positive_for_diffuse_data(self):
+        """For well-separated data, NLL should be positive."""
+        basis = make_basis(order=2)
+        # theta maps [0,1] → [0, 2]: h(0.5)=1, h'=2
+        theta = np.array([0.0, 1.0, 2.0])
+        y = np.array([0.25, 0.5, 0.75])
+        nll = negative_log_likelihood(theta, basis, y)
+        assert nll > 0, f"Expected NLL > 0, got {nll}"
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests
+# ---------------------------------------------------------------------------
+
+@given(
+    order=st.integers(2, 8),
+    seed=st.integers(0, 2**31 - 1),
+    n=st.integers(3, 20),
+)
+@settings(max_examples=150)
+def test_ll_finite_for_valid_theta(order, seed, n):
+    """For ascending theta and y in support, LL is always finite."""
+    rng = np.random.default_rng(seed)
+    basis = BernsteinBasis(order=order, support=(0.0, 1.0))
+    theta = np.cumsum(rng.uniform(0.1, 1.0, size=order + 1))
+    y = rng.uniform(0.01, 0.99, n)
+    result = log_likelihood(theta, basis, y)
+    assert np.isfinite(result), f"Expected finite LL, got {result}"
+
+
+@given(
+    order=st.integers(2, 6),
+    seed=st.integers(0, 2**31 - 1),
+    n=st.integers(3, 15),
+)
+@settings(max_examples=150)
+def test_nll_equals_negation_of_ll(order, seed, n):
+    """negative_log_likelihood == -log_likelihood always."""
+    rng = np.random.default_rng(seed)
+    basis = BernsteinBasis(order=order, support=(0.0, 1.0))
+    theta = np.cumsum(rng.uniform(0.1, 0.5, size=order + 1))
+    y = rng.uniform(0.01, 0.99, n)
+    ll  = log_likelihood(theta, basis, y)
+    nll = negative_log_likelihood(theta, basis, y)
+    np.testing.assert_allclose(nll, -ll, rtol=1e-12)
+
+
+@given(
+    order=st.integers(2, 6),
+    seed=st.integers(0, 2**31 - 1),
+    n=st.integers(4, 15),
+    frac=st.floats(0.1, 0.9),
+)
+@settings(max_examples=100)
+def test_ll_right_finite_for_valid_data(order, seed, n, frac):
+    """RIGHT log-likelihood is finite for valid ascending theta and mixed data."""
+    rng = np.random.default_rng(seed)
+    basis = BernsteinBasis(order=order, support=(0.0, 1.0))
+    theta = np.cumsum(rng.uniform(0.1, 0.5, size=order + 1))
+    y = rng.uniform(0.01, 0.99, n)
+    censored = rng.random(n) < frac
+    cd = CensoredData.right_censored(y, censored)
+    result = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+    assert np.isfinite(result)
