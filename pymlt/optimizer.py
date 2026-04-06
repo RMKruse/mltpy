@@ -117,6 +117,7 @@ def _make_objective(
     X: Optional[NDArray],
     censoring: CensoringType,
     use_gradient: bool,
+    base_distribution: str = "normal",
 ):
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -133,7 +134,8 @@ def _make_objective(
         def obj(theta: NDArray):
             try:
                 return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=True
+                    theta, basis, y, X, censoring, gradient=True,
+                    base_distribution=base_distribution,
                 )
             except ValueError:
                 return _BIG, np.zeros_like(theta)
@@ -141,7 +143,8 @@ def _make_objective(
         def obj(theta: NDArray):
             try:
                 return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=False
+                    theta, basis, y, X, censoring, gradient=False,
+                    base_distribution=base_distribution,
                 )
             except ValueError:
                 return _BIG
@@ -193,6 +196,7 @@ def optimize(
     X: Optional[NDArray] = None,
     censoring: CensoringType = CensoringType.NONE,
     config: Optional[OptimizerConfig] = None,
+    base_distribution: str = "normal",
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
 
@@ -227,7 +231,8 @@ def optimize(
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
     constraints = build_constraints(n_params, solver=config.solver, total_params=total_params)
-    obj = _make_objective(basis, y, X, censoring, config.use_gradient)
+    obj = _make_objective(basis, y, X, censoring, config.use_gradient,
+                          base_distribution=base_distribution)
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
     rng = np.random.default_rng()
@@ -282,7 +287,10 @@ def optimize(
         # All attempts raised exceptions — return the initial point as fallback
         return OptimizationResult(
             theta=theta_init,
-            log_likelihood=float(-negative_log_likelihood(theta_init, basis, y, X, censoring)),
+            log_likelihood=float(-negative_log_likelihood(
+                theta_init, basis, y, X, censoring,
+                base_distribution=base_distribution,
+            )),
             converged=False,
             n_iter=0,
             n_restarts=n_restarts_used,
