@@ -32,6 +32,7 @@ Repository = "https://github.com/RMKruse/pymlt"
 
 [project.optional-dependencies]
 pandas = ["pandas>=2.0"]
+plots = ["matplotlib>=3.5"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
