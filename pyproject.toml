@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymlt"
+version = "0.1.0"
+description = "Conditional Transformation Models — Python port of R mlt"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "René-Marcel Kruse", email = "rene.marcel.kruse@protonmail.com"},
+]
+keywords = ["transformation model", "survival analysis", "censoring"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.urls]
+Repository = "https://github.com/rene-marcel-kruse/pymlt"
+
+[project.optional-dependencies]
+pandas = ["pandas>=2.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "hypothesis>=6.0",
+    "mypy>=1.0",
+    "ruff>=0.1",
+    "twine>=5.0",
+    "build>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pymlt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::pymlt.model.ConvergenceWarning",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.coverage.run]
+source = ["pymlt"]
+omit = ["tests/*", ".venv/*"]
