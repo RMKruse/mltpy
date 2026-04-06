@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/rene-marcel-kruse/pymlt"
+Repository = "https://github.com/RMKruse/pymlt"
 
 [project.optional-dependencies]
 pandas = ["pandas>=2.0"]
