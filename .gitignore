@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# --- R ---
+.Rhistory
+.RData
+.Ruserdata
+.Rapp.history
+*-Ex.R
+/NAMESPACE
+/man/
+/*.tar.gz
+/*.check/
+.Rproj.user/
+
+# --- Betriebssystem & Editoren ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Sensible Daten ---
+.env
+
+# --- dot files ---
+.hypothesis/
+.claude/
+Claude.md
+pymlt.egg-info/
