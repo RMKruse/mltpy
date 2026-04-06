@@ -202,7 +202,8 @@ trust-constr solvers with analytical gradients.
 ---
 
 ## Reference
-
+Hothorn, T., Kneib, T. and Bühlmann, P. (2014), Conditional transformation models. *Journal of
+the Royal Statistical Society: Series B (Statistical Methodology).*, 76: 3-27. https://doi.org/10.1111/rssb.12017
 Hothorn, T. (2020). Most Likely Transformations: The mlt Package.
 *Journal of Statistical Software*, 92(1), 1–68.
 https://doi.org/10.18637/jss.v092.i01
