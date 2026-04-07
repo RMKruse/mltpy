@@ -330,7 +330,10 @@ class ConditionalTransformationModel:
     def _predict_quantile(
         self, probs: NDArray, theta_b: NDArray
     ) -> NDArray:
-        """Numerically invert h(q) = Φ⁻¹(p) via brentq for each p.
+        """Numerically invert h(q) = F⁻¹(p) via brentq for each p.
+
+        F⁻¹ is the quantile function (``dist.ppf``) of the base distribution
+        (normal or logistic depending on ``self.base_distribution``).
 
         Parameters
         ----------
