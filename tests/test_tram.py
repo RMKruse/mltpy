@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from scipy.stats import logistic as _logistic, norm
 
 import pymlt
+from pymlt.model import MLT
 from pymlt.tram import BoxCox, Coxph, Colr, _TramModel
 from pymlt.variables import CensoredData, CensoringType
 
@@ -235,6 +236,16 @@ class TestColrPredictLogistic:
         cdf_back = self.model.predict(q, what="distribution")
         np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
 
+    def test_quantile_h_equals_logistic_ppf(self):
+        """h(quantile(p)) must equal logistic.ppf(p), not norm.ppf(p)."""
+        probs = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+        q = self.model.predict(probs, what="quantile")
+        h_at_q = self._h(q)
+        np.testing.assert_allclose(h_at_q, _logistic.ppf(probs), atol=1e-4)
+        assert not np.allclose(h_at_q, norm.ppf(probs), atol=1e-4), (
+            "h(quantile(p)) matches norm.ppf — logistic.ppf not used as inversion target"
+        )
+
     def test_median_near_data_median(self):
         """Fitted median quantile should be close to the data median."""
         q50 = self.model.predict(np.array([0.5]), what="quantile")
@@ -247,6 +258,52 @@ class TestColrPredictLogistic:
         cdf_boxcox = boxcox.predict(self.grid, what="distribution")
         assert not np.allclose(cdf_colr, cdf_boxcox, atol=1e-3), (
             "Colr and BoxCox CDF predictions are identical — logistic distribution not applied"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Logistic hazard — base_distribution="logistic" with RIGHT censoring
+# ---------------------------------------------------------------------------
+
+class TestLogisticHazard:
+    """predict(what='hazard') must use logistic pdf/sf for logistic-family models.
+
+    Colr hard-codes censoring=NONE so hazard is not available on it directly.
+    This class uses an MLT with base_distribution="logistic" and censoring=RIGHT,
+    which exercises the same code path.
+    """
+
+    def setup_method(self):
+        rng = np.random.default_rng(55)
+        y = rng.uniform(0.05, 0.95, 100)
+        censored = rng.random(100) < 0.3
+        cd = CensoredData.right_censored(y, censored)
+        self.model = MLT(
+            order=5, support=(0.0, 1.0),
+            base_distribution="logistic",
+            censoring=CensoringType.RIGHT,
+        ).fit(cd)
+        self.grid = np.linspace(0.1, 0.9, 25)
+
+    def _h(self, y_vals: np.ndarray) -> np.ndarray:
+        p = self.model.basis.order + 1
+        return self.model.basis.evaluate(y_vals) @ self.model.theta_[:p]
+
+    def test_hazard_matches_logistic_ratio(self):
+        """predict(hazard) == logistic.pdf(h) / logistic.sf(h)."""
+        h = self._h(self.grid)
+        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        np.testing.assert_allclose(
+            self.model.predict(self.grid, what="hazard"), expected
+        )
+
+    def test_hazard_not_norm_ratio(self):
+        """Regression guard: hazard must not equal the normal-based ratio."""
+        h = self._h(self.grid)
+        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        actual = self.model.predict(self.grid, what="hazard")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic hazard returned norm-based values"
         )
 
 
