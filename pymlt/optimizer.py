@@ -19,7 +19,7 @@ from scipy.optimize import minimize
 
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import build_constraints
-from pymlt.likelihood import negative_log_likelihood
+from pymlt.likelihood import negative_log_likelihood, _get_dist
 from pymlt.variables import CensoredData, CensoringType
 
 
@@ -117,7 +117,7 @@ def _make_objective(
     X: Optional[NDArray],
     censoring: CensoringType,
     use_gradient: bool,
-    base_distribution: str = "normal",
+    base_distribution: Literal["normal", "logistic"] = "normal",
 ):
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -196,7 +196,7 @@ def optimize(
     X: Optional[NDArray] = None,
     censoring: CensoringType = CensoringType.NONE,
     config: Optional[OptimizerConfig] = None,
-    base_distribution: str = "normal",
+    base_distribution: Literal["normal", "logistic"] = "normal",
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
 
@@ -225,6 +225,7 @@ def optimize(
         ``converged=False``.  The caller (``model.py``) decides whether to
         raise or warn.
     """
+    _get_dist(base_distribution)  # fail fast; raises ValueError for unsupported values
     if config is None:
         config = OptimizerConfig()
 
