@@ -9,7 +9,9 @@ from scipy.optimize import check_grad
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import (
+    _get_dist,
     _log_diff_ndtr,
+    _VALID_BASE_DISTRIBUTIONS,
     log_likelihood,
     negative_log_likelihood,
 )
@@ -431,3 +433,49 @@ def test_ll_right_finite_for_valid_data(order, seed, n, frac):
     cd = CensoredData.right_censored(y, censored)
     result = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
     assert np.isfinite(result)
+
+
+# ---------------------------------------------------------------------------
+# base_distribution validation
+# ---------------------------------------------------------------------------
+
+class TestGetDist:
+    def test_normal_returns_norm(self):
+        from scipy.stats import norm
+        assert _get_dist("normal") is norm
+
+    def test_logistic_returns_logistic(self):
+        from scipy.stats import logistic
+        assert _get_dist("logistic") is logistic
+
+    def test_invalid_raises_value_error(self):
+        with pytest.raises(ValueError, match="base_distribution"):
+            _get_dist("cauchy")
+
+    def test_error_message_contains_valid_options(self):
+        with pytest.raises(ValueError, match="normal"):
+            _get_dist("student-t")
+
+    @pytest.mark.parametrize("bad", ["Normal", "NORMAL", "gauss", "", "t", "uniform"])
+    def test_case_sensitive_and_rejects_aliases(self, bad):
+        with pytest.raises(ValueError, match="base_distribution"):
+            _get_dist(bad)
+
+    def test_valid_distributions_constant(self):
+        assert set(_VALID_BASE_DISTRIBUTIONS) == {"normal", "logistic"}
+
+
+def test_log_likelihood_invalid_distribution_raises():
+    basis = make_basis()
+    theta = ascending_theta(basis.order)
+    y = np.linspace(0.1, 0.9, 20)
+    with pytest.raises(ValueError, match="base_distribution"):
+        log_likelihood(theta, basis, y, base_distribution="cauchy")
+
+
+def test_negative_log_likelihood_invalid_distribution_raises():
+    basis = make_basis()
+    theta = ascending_theta(basis.order)
+    y = np.linspace(0.1, 0.9, 20)
+    with pytest.raises(ValueError, match="base_distribution"):
+        negative_log_likelihood(theta, basis, y, base_distribution="student-t")
