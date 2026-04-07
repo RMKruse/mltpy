@@ -372,6 +372,10 @@ class TestPlot:
         self.model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
         self.y = simple_y()
 
+    def teardown_method(self):
+        import matplotlib.pyplot as plt
+        plt.close("all")
+
     def test_plot_no_ax_returns_two_axes(self):
         result = self.model.plot(self.y)
         assert isinstance(result, list)
