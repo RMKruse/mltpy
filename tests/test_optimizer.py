@@ -271,3 +271,27 @@ class TestOptimizeRestarts:
         result = optimize(make_basis(order=2), simple_data(n=50), config=cfg)
         if result.converged:
             assert result.n_restarts == 0
+
+
+# ---------------------------------------------------------------------------
+# base_distribution validation in optimize()
+# ---------------------------------------------------------------------------
+
+class TestBaseDistributionValidation:
+    def test_invalid_raises_value_error(self):
+        with pytest.raises(ValueError, match="base_distribution"):
+            optimize(make_basis(), simple_data(), base_distribution="cauchy")
+
+    @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
+    def test_case_sensitive_aliases_rejected(self, bad):
+        with pytest.raises(ValueError, match="base_distribution"):
+            optimize(make_basis(), simple_data(), base_distribution=bad)
+
+    def test_normal_accepted(self):
+        result = optimize(make_basis(), simple_data(), base_distribution="normal")
+        assert isinstance(result, OptimizationResult)
+
+    def test_logistic_accepted(self):
+        result = optimize(make_basis(), simple_data(), base_distribution="logistic")
+        assert isinstance(result, OptimizationResult)
+
