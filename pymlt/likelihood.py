@@ -49,6 +49,27 @@ from scipy.stats import norm, logistic as _logistic
 from pymlt.basis import BernsteinBasis
 from pymlt.variables import CensoredData, CensoringType
 
+_VALID_BASE_DISTRIBUTIONS = ("normal", "logistic")
+
+
+def _get_dist(base_distribution: str):
+    """Return the scipy.stats distribution for *base_distribution*.
+
+    Raises
+    ------
+    ValueError
+        For any value not in ``_VALID_BASE_DISTRIBUTIONS``, so misconfiguration
+        is never silently swallowed.
+    """
+    if base_distribution == "normal":
+        return norm
+    if base_distribution == "logistic":
+        return _logistic
+    raise ValueError(
+        f"base_distribution={base_distribution!r} is not supported. "
+        f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
+    )
+
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
@@ -475,7 +496,7 @@ def log_likelihood(
         violates monotonicity (h' ≤ 0), observations outside support, or
         numerical overflow in the basis evaluation.
     """
-    dist = norm if base_distribution == "normal" else _logistic
+    dist = _get_dist(base_distribution)
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -532,7 +553,7 @@ def negative_log_likelihood(
     if not gradient:
         return nll
 
-    dist = norm if base_distribution == "normal" else _logistic
+    dist = _get_dist(base_distribution)
 
     # Analytical gradient of the negative log-likelihood
     if isinstance(y, np.ndarray):
