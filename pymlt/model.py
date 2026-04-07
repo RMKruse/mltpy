@@ -22,7 +22,6 @@ from typing import Literal, Optional, Union
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
-from scipy.stats import norm, logistic as _logistic
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import log_likelihood, _get_dist
