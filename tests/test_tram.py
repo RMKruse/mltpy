@@ -1,0 +1,271 @@
+"""Tests for pymlt.tram — BoxCox, Coxph, Colr."""
+from __future__ import annotations
+
+import sys
+from unittest.mock import patch
+
+import numpy as np
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+import pymlt
+from pymlt.tram import BoxCox, Coxph, Colr, _TramModel
+from pymlt.variables import CensoredData, CensoringType
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def simple_y(n: int = 80, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).uniform(0.05, 0.95, n)
+
+
+def simple_survival(n: int = 80, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    times = rng.exponential(scale=0.4, size=n).clip(0.01, 0.99)
+    censored = rng.random(n) < 0.3
+    return times, censored
+
+
+# ---------------------------------------------------------------------------
+# Smoke tests — fit + predict, no errors, correct shapes
+# ---------------------------------------------------------------------------
+
+class TestBoxCoxSmoke:
+    def test_instantiate(self):
+        model = BoxCox(support=(0.0, 1.0))
+        assert isinstance(model, BoxCox)
+        assert isinstance(model, _TramModel)
+
+    def test_fit_predict(self):
+        y = simple_y()
+        model = BoxCox(support=(0.0, 1.0))
+        model.fit(y)
+        cdf = model.predict(y, what="distribution")
+        assert cdf.shape == (len(y),)
+        assert np.all(cdf >= 0.0) and np.all(cdf <= 1.0)
+
+    def test_censoring_is_none(self):
+        model = BoxCox(support=(0.0, 1.0))
+        assert model.censoring is CensoringType.NONE
+
+    def test_base_distribution_normal(self):
+        model = BoxCox(support=(0.0, 1.0))
+        assert model.base_distribution == "normal"
+
+    def test_fitted_transformation_shape(self):
+        y = simple_y()
+        model = BoxCox(support=(0.0, 1.0)).fit(y)
+        h = model.fitted_transformation(y)
+        assert h.shape == (len(y),)
+
+    def test_fitted_transformation_before_fit_raises(self):
+        from pymlt.model import NotFittedError
+        model = BoxCox(support=(0.0, 1.0))
+        with pytest.raises(NotFittedError):
+            model.fitted_transformation(simple_y())
+
+
+class TestCoxphSmoke:
+    def test_instantiate(self):
+        model = Coxph(support=(0.0, 1.0))
+        assert isinstance(model, Coxph)
+
+    def test_censoring_is_right(self):
+        model = Coxph(support=(0.0, 1.0))
+        assert model.censoring is CensoringType.RIGHT
+
+    def test_fit_with_censored_data(self):
+        times, censored = simple_survival()
+        cd = CensoredData.right_censored(times, censored)
+        model = Coxph(support=(0.01, 1.0))
+        model.fit(cd)
+        assert model.is_fitted_
+
+    def test_survival_shape_and_range(self):
+        times, censored = simple_survival()
+        cd = CensoredData.right_censored(times, censored)
+        model = Coxph(support=(0.01, 1.0)).fit(cd)
+        grid = np.linspace(0.05, 0.95, 30)
+        s = model.survival(grid)
+        assert s.shape == (30,)
+        assert np.all(s >= 0.0) and np.all(s <= 1.0)
+
+    def test_hazard_shape(self):
+        times, censored = simple_survival()
+        cd = CensoredData.right_censored(times, censored)
+        model = Coxph(support=(0.01, 1.0)).fit(cd)
+        grid = np.linspace(0.05, 0.95, 20)
+        h = model.hazard(grid)
+        assert h.shape == (20,)
+        assert np.all(h >= 0.0)
+
+
+class TestColrSmoke:
+    def test_instantiate(self):
+        model = Colr(support=(0.0, 1.0))
+        assert isinstance(model, Colr)
+
+    def test_base_distribution_logistic(self):
+        model = Colr(support=(0.0, 1.0))
+        assert model.base_distribution == "logistic"
+
+    def test_censoring_is_none(self):
+        model = Colr(support=(0.0, 1.0))
+        assert model.censoring is CensoringType.NONE
+
+    def test_fit_predict_distribution(self):
+        y = simple_y()
+        model = Colr(support=(0.0, 1.0)).fit(y)
+        cdf = model.predict(y, what="distribution")
+        assert cdf.shape == (len(y),)
+        assert np.all(cdf >= 0.0) and np.all(cdf <= 1.0)
+
+    def test_fit_predict_density_non_negative(self):
+        y = simple_y()
+        model = Colr(support=(0.0, 1.0)).fit(y)
+        pdf = model.predict(y, what="density")
+        assert np.all(pdf >= 0.0)
+
+
+# ---------------------------------------------------------------------------
+# BoxCox: fitted_transformation is monotone (Hypothesis)
+# ---------------------------------------------------------------------------
+
+@settings(max_examples=15, deadline=8000)
+@given(seed=st.integers(min_value=0, max_value=99))
+def test_boxcox_fitted_transformation_monotone(seed: int):
+    """h(y) must be non-decreasing — the core monotonicity guarantee."""
+    y = np.random.default_rng(seed).uniform(0.05, 0.95, 60)
+    model = BoxCox(support=(0.0, 1.0), order=4).fit(y)
+    grid = np.linspace(0.05, 0.95, 50)
+    h = model.fitted_transformation(grid)
+    assert np.all(np.diff(h) >= -1e-6), f"seed={seed}: min diff={np.diff(h).min():.2e}"
+
+
+# ---------------------------------------------------------------------------
+# Coxph: survival properties
+# ---------------------------------------------------------------------------
+
+class TestCoxphSurvival:
+    def setup_method(self):
+        times, censored = simple_survival(seed=7)
+        cd = CensoredData.right_censored(times, censored)
+        self.model = Coxph(support=(0.01, 1.0), order=3).fit(cd)
+        self.grid = np.linspace(0.05, 0.95, 40)
+
+    def test_survival_is_complement_of_cdf(self):
+        s = self.model.survival(self.grid)
+        cdf = self.model.predict(self.grid, what="distribution")
+        np.testing.assert_allclose(s, 1.0 - cdf, atol=1e-10)
+
+    def test_survival_monotone_decreasing(self):
+        s = self.model.survival(self.grid)
+        assert np.all(np.diff(s) <= 1e-6), f"survival not monotone: {np.diff(s).max():.2e}"
+
+    def test_hazard_matches_predict(self):
+        h1 = self.model.hazard(self.grid)
+        h2 = self.model.predict(self.grid, what="hazard")
+        np.testing.assert_array_equal(h1, h2)
+
+
+# ---------------------------------------------------------------------------
+# Colr uses logistic distribution (different theta from BoxCox)
+# ---------------------------------------------------------------------------
+
+def test_colr_uses_logistic_distribution():
+    """Colr and BoxCox on the same data must produce different theta_."""
+    y = simple_y(seed=42)
+    boxcox = BoxCox(support=(0.0, 1.0), order=4).fit(y)
+    colr   = Colr(support=(0.0, 1.0), order=4).fit(y)
+    # Theta vectors differ because base distributions differ
+    assert not np.allclose(boxcox.theta_, colr.theta_, atol=1e-3), (
+        "BoxCox and Colr produced identical theta — logistic distribution not applied"
+    )
+
+
+# ---------------------------------------------------------------------------
+# summary()
+# ---------------------------------------------------------------------------
+
+class TestSummary:
+    def test_summary_before_fit(self):
+        model = BoxCox(support=(0.0, 1.0))
+        s = model.summary()
+        assert isinstance(s, str)
+        assert "Fitted:       No" in s
+
+    def test_summary_after_fit(self):
+        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        s = model.summary()
+        assert "Log-lik" in s
+        assert "Fitted:       Yes" in s
+        assert "Converged" in s
+
+    def test_summary_coxph(self):
+        times, censored = simple_survival()
+        cd = CensoredData.right_censored(times, censored)
+        model = Coxph(support=(0.01, 1.0)).fit(cd)
+        s = model.summary()
+        assert "Coxph" in s
+        assert "Log-lik" in s
+
+    def test_summary_colr(self):
+        model = Colr(support=(0.0, 1.0)).fit(simple_y())
+        s = model.summary()
+        assert "Colr" in s
+
+
+# ---------------------------------------------------------------------------
+# __repr__
+# ---------------------------------------------------------------------------
+
+class TestRepr:
+    def test_repr_shows_boxcox(self):
+        assert "BoxCox" in repr(BoxCox(support=(0.0, 1.0)))
+
+    def test_repr_shows_coxph(self):
+        assert "Coxph" in repr(Coxph(support=(0.0, 1.0)))
+
+    def test_repr_shows_colr(self):
+        assert "Colr" in repr(Colr(support=(0.0, 1.0)))
+
+    def test_repr_not_mlt(self):
+        r = repr(BoxCox(support=(0.0, 1.0)))
+        assert "MLT" not in r
+
+    def test_repr_after_fit_has_ll(self):
+        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        assert "ll=" in repr(model)
+
+
+# ---------------------------------------------------------------------------
+# plot()
+# ---------------------------------------------------------------------------
+
+class TestPlot:
+    def test_plot_returns_axes_when_matplotlib_available(self):
+        pytest.importorskip("matplotlib")
+        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        result = model.plot(simple_y())
+        assert result is not None
+
+    def test_plot_raises_import_error_when_no_matplotlib(self):
+        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        with patch.dict(sys.modules, {"matplotlib": None, "matplotlib.pyplot": None}):
+            with pytest.raises(ImportError, match="matplotlib"):
+                model.plot(simple_y())
+
+
+# ---------------------------------------------------------------------------
+# Top-level pymlt import
+# ---------------------------------------------------------------------------
+
+def test_pymlt_top_level_import():
+    assert hasattr(pymlt, "BoxCox")
+    assert hasattr(pymlt, "Coxph")
+    assert hasattr(pymlt, "Colr")
+    model = pymlt.BoxCox(support=(0.0, 1.0))
+    assert isinstance(model, BoxCox)

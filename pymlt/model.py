@@ -91,10 +91,12 @@ class ConditionalTransformationModel:
         basis: BernsteinBasis,
         censoring: CensoringType = CensoringType.NONE,
         optimizer_config: Optional[OptimizerConfig] = None,
+        base_distribution: Literal["normal", "logistic"] = "normal",
     ) -> None:
         self.basis = basis
         self.censoring = censoring
         self.optimizer_config = optimizer_config
+        self.base_distribution = base_distribution
 
         # State — set by fit()
         self.theta_: Optional[NDArray] = None
@@ -217,6 +219,7 @@ class ConditionalTransformationModel:
             X=X_clean,
             censoring=self.censoring,
             config=self.optimizer_config,
+            base_distribution=self.base_distribution,
         )
 
         if not result.converged:
@@ -386,7 +389,8 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
-            self.theta_, self.basis, y_clean, X_clean, self.censoring
+            self.theta_, self.basis, y_clean, X_clean, self.censoring,
+            base_distribution=self.base_distribution,
         )
 
     def simulate(
@@ -476,12 +480,14 @@ class MLT(ConditionalTransformationModel):
         support: tuple[float, float] = (0.0, 1.0),
         censoring: CensoringType = CensoringType.NONE,
         optimizer_config: Optional[OptimizerConfig] = None,
+        base_distribution: Literal["normal", "logistic"] = "normal",
     ) -> None:
         basis = BernsteinBasis(order=order, support=support)
         super().__init__(
             basis=basis,
             censoring=censoring,
             optimizer_config=optimizer_config,
+            base_distribution=base_distribution,
         )
         # Store for repr
         self._order = order
