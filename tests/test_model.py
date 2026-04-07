@@ -11,6 +11,8 @@ from hypothesis import strategies as st
 
 import pymlt
 from pymlt.basis import BernsteinBasis
+from scipy.stats import logistic as _logistic, norm
+
 from pymlt.model import (
     ConditionalTransformationModel,
     ConvergenceWarning,
@@ -382,6 +384,130 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
     cdf = model.predict(grid, what="distribution")
     diffs = np.diff(cdf)
     assert np.all(diffs >= -1e-6), f"order={order}, seed={seed}: min diff={diffs.min():.2e}"
+
+
+# ---------------------------------------------------------------------------
+# R reference integration test
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# base_distribution="logistic" — predictions must use logistic, not normal
+# ---------------------------------------------------------------------------
+
+class TestPredictLogistic:
+    """Prediction output must reflect base_distribution="logistic"."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(7)
+        self.y = np.sort(rng.uniform(0.05, 0.95, 120))
+        self.model = MLT(order=5, support=(0.0, 1.0), base_distribution="logistic").fit(self.y)
+        self.grid = np.linspace(0.1, 0.9, 30)
+
+    def _h(self, y_vals: np.ndarray) -> np.ndarray:
+        """Compute transformation h = B @ theta_b for given y values."""
+        p = self.model.basis.order + 1
+        B = self.model.basis.evaluate(y_vals)
+        return B @ self.model.theta_[:p]
+
+    def test_cdf_matches_logistic_cdf(self):
+        """predict(distribution) must equal logistic.cdf(h), not norm.cdf(h)."""
+        h = self._h(self.grid)
+        expected = _logistic.cdf(h)
+        actual = self.model.predict(self.grid, what="distribution")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_cdf_differs_from_normal_cdf(self):
+        """Logistic CDF must not be equal to normal CDF for the same h."""
+        h = self._h(self.grid)
+        wrong = norm.cdf(h)
+        actual = self.model.predict(self.grid, what="distribution")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(distribution) returned norm.cdf values"
+        )
+
+    def test_density_matches_logistic_pdf(self):
+        """predict(density) must use logistic.pdf(h), not norm.pdf(h)."""
+        p = self.model.basis.order + 1
+        D = self.model.basis.derivative(self.grid, order=1)
+        hp = D @ self.model.theta_[:p]
+        h = self._h(self.grid)
+        expected = _logistic.pdf(h) * np.maximum(hp, 0.0)
+        actual = self.model.predict(self.grid, what="density")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_density_differs_from_normal_density(self):
+        p = self.model.basis.order + 1
+        D = self.model.basis.derivative(self.grid, order=1)
+        hp = D @ self.model.theta_[:p]
+        h = self._h(self.grid)
+        wrong = norm.pdf(h) * np.maximum(hp, 0.0)
+        actual = self.model.predict(self.grid, what="density")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(density) returned norm.pdf values"
+        )
+
+    def test_quantile_cdf_inverse(self):
+        """CDF(quantile(p)) ≈ p for logistic model."""
+        probs = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+        q = self.model.predict(probs, what="quantile")
+        cdf_back = self.model.predict(q, what="distribution")
+        np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
+
+    def test_quantile_in_support(self):
+        probs = np.linspace(0.05, 0.95, 20)
+        q = self.model.predict(probs, what="quantile")
+        assert np.all(q >= 0.0) and np.all(q <= 1.0)
+
+    def test_hazard_matches_logistic_ratio(self):
+        """predict(hazard) must use logistic pdf/sf, not normal."""
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, censoring=CensoringType.RIGHT, base_distribution="logistic"
+        )
+        rng = np.random.default_rng(3)
+        y = rng.uniform(0.05, 0.95, 80)
+        cd = CensoredData.right_censored(y, rng.random(80) < 0.3)
+        model.fit(cd)
+
+        grid = np.linspace(0.1, 0.9, 20)
+        p = model.basis.order + 1
+        B = model.basis.evaluate(grid)
+        h = B @ model.theta_[:p]
+
+        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        actual = model.predict(grid, what="hazard")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_hazard_differs_from_normal_hazard(self):
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, censoring=CensoringType.RIGHT, base_distribution="logistic"
+        )
+        rng = np.random.default_rng(3)
+        y = rng.uniform(0.05, 0.95, 80)
+        cd = CensoredData.right_censored(y, rng.random(80) < 0.3)
+        model.fit(cd)
+
+        grid = np.linspace(0.1, 0.9, 20)
+        p = model.basis.order + 1
+        B = model.basis.evaluate(grid)
+        h = B @ model.theta_[:p]
+
+        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        actual = model.predict(grid, what="hazard")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(hazard) returned norm-based values"
+        )
+
+    def test_normal_model_unchanged(self):
+        """Sanity: normal model still uses norm.cdf (default behaviour)."""
+        model_n = MLT(order=5, support=(0.0, 1.0), base_distribution="normal").fit(self.y)
+        p = model_n.basis.order + 1
+        B = model_n.basis.evaluate(self.grid)
+        h = B @ model_n.theta_[:p]
+        expected = norm.cdf(h)
+        actual = model_n.predict(self.grid, what="distribution")
+        np.testing.assert_allclose(actual, expected)
 
 
 # ---------------------------------------------------------------------------
