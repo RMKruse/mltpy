@@ -122,7 +122,13 @@ class _TramModel(MLT):
         pdf = self.predict(y_sorted, what="density")
 
         if ax is not None:
-            ax_cdf, ax_pdf = ax  # TypeError for wrong shape (e.g. bare single Axes)
+            try:
+                ax_cdf, ax_pdf = ax
+            except (TypeError, ValueError):
+                raise TypeError(
+                    "ax must be a 2-tuple (ax_cdf, ax_pdf); "
+                    "got a bare Axes or a sequence of the wrong length"
+                ) from None
             fig = None
         else:
             fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
