@@ -89,12 +89,13 @@ class _TramModel(MLT):
             Response values at which to evaluate the model.  Must lie within
             ``basis.support``.
         ax:
-            A single ``matplotlib.axes.Axes`` instance.  If ``None``, a new
-            figure with two subplots is created.
+            Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``.
+            If ``None``, a new figure with two subplots is created automatically.
 
         Returns
         -------
-        matplotlib.axes.Axes or list of matplotlib.axes.Axes
+        list of matplotlib.axes.Axes
+            Always ``[ax_cdf, ax_pdf]``.
 
         Raises
         ------
@@ -102,6 +103,8 @@ class _TramModel(MLT):
             If called before :meth:`fit`.
         ImportError
             If matplotlib is not installed.
+        TypeError
+            If ``ax`` is provided but cannot be unpacked into two axes.
         """
         try:
             import matplotlib.pyplot as plt
@@ -119,27 +122,25 @@ class _TramModel(MLT):
         pdf = self.predict(y_sorted, what="density")
 
         if ax is not None:
-            axes = ax
-            ax.plot(y_sorted, cdf, label="CDF")
-            ax.set_xlabel("y")
-            ax.set_ylabel("F(y)")
-            ax.set_title(f"{type(self).__name__} — CDF")
+            ax_cdf, ax_pdf = ax  # TypeError for wrong shape (e.g. bare single Axes)
+            fig = None
         else:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-            ax1.plot(y_sorted, cdf)
-            ax1.set_xlabel("y")
-            ax1.set_ylabel("F(y)")
-            ax1.set_title(f"{type(self).__name__} — CDF")
+            fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
 
-            ax2.plot(y_sorted, pdf)
-            ax2.set_xlabel("y")
-            ax2.set_ylabel("f(y)")
-            ax2.set_title(f"{type(self).__name__} — Density")
+        ax_cdf.plot(y_sorted, cdf)
+        ax_cdf.set_xlabel("y")
+        ax_cdf.set_ylabel("F(y)")
+        ax_cdf.set_title(f"{type(self).__name__} — CDF")
 
+        ax_pdf.plot(y_sorted, pdf)
+        ax_pdf.set_xlabel("y")
+        ax_pdf.set_ylabel("f(y)")
+        ax_pdf.set_title(f"{type(self).__name__} — Density")
+
+        if fig is not None:
             fig.tight_layout()
-            axes = [ax1, ax2]
 
-        return axes
+        return [ax_cdf, ax_pdf]
 
 
 # ---------------------------------------------------------------------------
