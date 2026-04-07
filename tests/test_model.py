@@ -391,6 +391,44 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
+# base_distribution validation — invalid values raise at construction
+# ---------------------------------------------------------------------------
+
+class TestBaseDistributionValidation:
+    def test_ctm_invalid_raises(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            ConditionalTransformationModel(basis, base_distribution="cauchy")
+
+    def test_mlt_invalid_raises(self):
+        with pytest.raises(ValueError, match="base_distribution"):
+            MLT(order=4, support=(0.0, 1.0), base_distribution="student-t")
+
+    @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
+    def test_case_sensitive_and_aliases_rejected(self, bad):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            ConditionalTransformationModel(basis, base_distribution=bad)
+
+    def test_normal_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="normal")
+        assert m.base_distribution == "normal"
+
+    def test_logistic_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="logistic")
+        assert m.base_distribution == "logistic"
+
+    def test_error_raised_before_fit(self):
+        """ValueError must be raised at __init__, not lazily at fit()."""
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            # The exception must come from __init__, not from fit()
+            ConditionalTransformationModel(basis, base_distribution="bad")
+
+
+# ---------------------------------------------------------------------------
 # base_distribution="logistic" — predictions must use logistic, not normal
 # ---------------------------------------------------------------------------
 
