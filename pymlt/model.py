@@ -25,7 +25,7 @@ from scipy.optimize import brentq
 from scipy.stats import norm, logistic as _logistic
 
 from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import log_likelihood
+from pymlt.likelihood import log_likelihood, _get_dist
 from pymlt.optimizer import OptimizerConfig, optimize
 from pymlt.variables import CensoredData, CensoringType
 
@@ -50,11 +50,6 @@ _VALID_WHAT = ("distribution", "density", "quantile", "hazard")
 
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
-
-
-def _get_dist(base_distribution: str):
-    """Return the scipy.stats distribution object for *base_distribution*."""
-    return norm if base_distribution == "normal" else _logistic
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +93,7 @@ class ConditionalTransformationModel:
         optimizer_config: Optional[OptimizerConfig] = None,
         base_distribution: Literal["normal", "logistic"] = "normal",
     ) -> None:
+        _get_dist(base_distribution)  # raises ValueError for unsupported values
         self.basis = basis
         self.censoring = censoring
         self.optimizer_config = optimizer_config
