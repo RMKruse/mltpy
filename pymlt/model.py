@@ -22,7 +22,7 @@ from typing import Literal, Optional, Union
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
-from scipy.stats import norm
+from scipy.stats import norm, logistic as _logistic
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import log_likelihood
@@ -50,6 +50,11 @@ _VALID_WHAT = ("distribution", "density", "quantile", "hazard")
 
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
+
+
+def _get_dist(base_distribution: str):
+    """Return the scipy.stats distribution object for *base_distribution*."""
+    return norm if base_distribution == "normal" else _logistic
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +261,10 @@ class ConditionalTransformationModel:
         what:
             Type of prediction:
 
-            * ``"distribution"`` — CDF: Φ(h(y|x))
-            * ``"density"``      — PDF: φ(h(y|x)) · h'(y|x)
+            * ``"distribution"`` — CDF: F(h(y|x))
+            * ``"density"``      — PDF: f(h(y|x)) · h'(y|x)
             * ``"quantile"``     — Quantile via numerical inversion (brentq)
-            * ``"hazard"``       — Hazard: φ(h)/Φ̄(h); only for
+            * ``"hazard"``       — Hazard: f(h)/F̄(h); only for
               ``censoring=RIGHT``
 
         Returns
@@ -319,12 +324,13 @@ class ConditionalTransformationModel:
             beta = self.theta_[p:]
             h = h + X_arr @ beta
 
+        dist = _get_dist(self.base_distribution)
         if what == "distribution":
-            return norm.cdf(h)
+            return dist.cdf(h)
         elif what == "density":
-            return norm.pdf(h) * np.maximum(hp, 0.0)
+            return dist.pdf(h) * np.maximum(hp, 0.0)
         else:  # hazard
-            return norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+            return dist.pdf(h) / np.maximum(dist.sf(h), 1e-300)
 
     def _predict_quantile(
         self, probs: NDArray, theta_b: NDArray
@@ -350,9 +356,10 @@ class ConditionalTransformationModel:
         def _h_scalar(q: float) -> float:
             return float(self.basis.evaluate(np.array([q]))[0] @ theta_b)
 
+        dist = _get_dist(self.base_distribution)
         quantiles = np.empty(len(probs))
         for i, p in enumerate(probs):
-            z = float(np.clip(norm.ppf(p), z_min, z_max))
+            z = float(np.clip(dist.ppf(p), z_min, z_max))
             quantiles[i] = brentq(
                 lambda q, z=z: _h_scalar(q) - z,
                 a, b,
