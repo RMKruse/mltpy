@@ -310,11 +310,42 @@ class TestRepr:
 # ---------------------------------------------------------------------------
 
 class TestPlot:
-    def test_plot_returns_axes_when_matplotlib_available(self):
+    def setup_method(self):
         pytest.importorskip("matplotlib")
-        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
-        result = model.plot(simple_y())
-        assert result is not None
+        self.model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        self.y = simple_y()
+
+    def test_plot_no_ax_returns_two_axes(self):
+        result = self.model.plot(self.y)
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_plot_no_ax_both_panels_have_data(self):
+        ax_cdf, ax_pdf = self.model.plot(self.y)
+        assert len(ax_cdf.lines) > 0, "CDF panel has no lines"
+        assert len(ax_pdf.lines) > 0, "density panel has no lines"
+
+    def test_plot_with_axes_tuple_returns_list(self):
+        import matplotlib.pyplot as plt
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        result = self.model.plot(self.y, ax=(ax1, ax2))
+        assert result == [ax1, ax2]
+        plt.close(fig)
+
+    def test_plot_with_axes_tuple_plots_both(self):
+        import matplotlib.pyplot as plt
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        self.model.plot(self.y, ax=(ax1, ax2))
+        assert len(ax1.lines) > 0, "CDF axis has no lines"
+        assert len(ax2.lines) > 0, "density axis has no lines"
+        plt.close(fig)
+
+    def test_plot_single_axes_raises_type_error(self):
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        with pytest.raises(TypeError):
+            self.model.plot(self.y, ax=ax)
+        plt.close(fig)
 
     def test_plot_raises_import_error_when_no_matplotlib(self):
         model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
