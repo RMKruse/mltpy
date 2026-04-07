@@ -400,8 +400,22 @@ class TestPlot:
     def test_plot_single_axes_raises_type_error(self):
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots()
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="2-tuple"):
             self.model.plot(self.y, ax=ax)
+        plt.close(fig)
+
+    def test_plot_one_tuple_raises_type_error(self):
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        with pytest.raises(TypeError, match="2-tuple"):
+            self.model.plot(self.y, ax=(ax,))
+        plt.close(fig)
+
+    def test_plot_three_tuple_raises_type_error(self):
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(1, 3)
+        with pytest.raises(TypeError, match="2-tuple"):
+            self.model.plot(self.y, ax=tuple(axes))
         plt.close(fig)
 
     def test_plot_raises_import_error_when_no_matplotlib(self):
