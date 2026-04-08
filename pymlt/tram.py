@@ -16,9 +16,10 @@ Coxph
 Colr
     Continuous outcome logistic regression — uses a logistic base distribution.
 """
+
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -27,10 +28,10 @@ from pymlt.model import MLT
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoringType
 
-
 # ---------------------------------------------------------------------------
 # Internal base class
 # ---------------------------------------------------------------------------
+
 
 class _TramModel(MLT):
     """Base class for all tram convenience models.
@@ -43,6 +44,8 @@ class _TramModel(MLT):
         name = type(self).__name__
         censoring = self.censoring.name
         if self.is_fitted_:
+            if self.result_ is None:
+                raise RuntimeError("Unexpected None result_ for fitted model")
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={self._order}, support={self._support}, "
@@ -73,6 +76,8 @@ class _TramModel(MLT):
             f"Fitted:       {'Yes' if self.is_fitted_ else 'No'}",
         ]
         if self.is_fitted_:
+            if self.result_ is None:
+                raise RuntimeError("Unexpected None result_ for fitted model")
             lines += [
                 f"Log-lik:      {self.result_.log_likelihood:.4f}",
                 f"Converged:    {'Yes' if self.result_.converged else 'No'}",
@@ -80,7 +85,7 @@ class _TramModel(MLT):
             ]
         return "\n".join(lines)
 
-    def plot(self, y: NDArray, ax=None):
+    def plot(self, y: NDArray[np.float64], ax: Any = None) -> Any | list[Any]:
         """Plot the estimated CDF and density side by side.
 
         Parameters
@@ -89,12 +94,16 @@ class _TramModel(MLT):
             Response values at which to evaluate the model.  Must lie within
             ``basis.support``.
         ax:
-            A single ``matplotlib.axes.Axes`` instance.  If ``None``, a new
-            figure with two subplots is created.
+            Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``,
+            or a single ``matplotlib.axes.Axes`` instance. If a single axes is
+            provided, only the CDF is plotted. If ``None``, a new figure with
+            two subplots is created automatically.
 
         Returns
         -------
-        matplotlib.axes.Axes or list of matplotlib.axes.Axes
+        list of matplotlib.axes.Axes, or matplotlib.axes.Axes
+            Returns ``[ax_cdf, ax_pdf]`` if two panels are plotted, otherwise
+            returns the single ``ax_cdf``.
 
         Raises
         ------
@@ -102,6 +111,9 @@ class _TramModel(MLT):
             If called before :meth:`fit`.
         ImportError
             If matplotlib is not installed.
+        TypeError
+            If ``ax`` is provided but cannot be unpacked into two axes, nor used
+            as a single axes.
         """
         try:
             import matplotlib.pyplot as plt
@@ -119,32 +131,44 @@ class _TramModel(MLT):
         pdf = self.predict(y_sorted, what="density")
 
         if ax is not None:
-            axes = ax
-            ax.plot(y_sorted, cdf, label="CDF")
-            ax.set_xlabel("y")
-            ax.set_ylabel("F(y)")
-            ax.set_title(f"{type(self).__name__} — CDF")
+            try:
+                ax_cdf, ax_pdf = ax
+            except (TypeError, ValueError):
+                # If we cannot unpack, assume it's a single Axes object
+                if hasattr(ax, "plot"):
+                    ax_cdf = ax
+                    ax_pdf = None
+                else:
+                    raise TypeError(
+                        "ax must be a 2-tuple (ax_cdf, ax_pdf) or a single Axes"
+                    ) from None
+            fig = None
         else:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-            ax1.plot(y_sorted, cdf)
-            ax1.set_xlabel("y")
-            ax1.set_ylabel("F(y)")
-            ax1.set_title(f"{type(self).__name__} — CDF")
+            fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
 
-            ax2.plot(y_sorted, pdf)
-            ax2.set_xlabel("y")
-            ax2.set_ylabel("f(y)")
-            ax2.set_title(f"{type(self).__name__} — Density")
+        ax_cdf.plot(y_sorted, cdf)
+        ax_cdf.set_xlabel("y")
+        ax_cdf.set_ylabel("F(y)")
+        ax_cdf.set_title(f"{type(self).__name__} — CDF")
 
+        if ax_pdf is not None:
+            ax_pdf.plot(y_sorted, pdf)
+            ax_pdf.set_xlabel("y")
+            ax_pdf.set_ylabel("f(y)")
+            ax_pdf.set_title(f"{type(self).__name__} — Density")
+
+        if fig is not None:
             fig.tight_layout()
-            axes = [ax1, ax2]
 
-        return axes
+        if ax_pdf is None:
+            return ax_cdf
+        return [ax_cdf, ax_pdf]
 
 
 # ---------------------------------------------------------------------------
 # BoxCox
 # ---------------------------------------------------------------------------
+
 
 class BoxCox(_TramModel):
     """Box-Cox transformation model for continuous outcomes.
@@ -179,7 +203,7 @@ class BoxCox(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,
@@ -189,7 +213,7 @@ class BoxCox(_TramModel):
             base_distribution="normal",
         )
 
-    def fitted_transformation(self, y: NDArray) -> NDArray:
+    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Evaluate the raw fitted transformation h(y) = B_k(y) @ theta_b.
 
         This is the monotone function that maps the observed response scale
@@ -211,16 +235,19 @@ class BoxCox(_TramModel):
             If called before :meth:`fit`.
         """
         self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
-        B = self.basis.evaluate(y_arr)   # (m, p)
-        return B @ theta_b               # h(y)
+        B = self.basis.evaluate(y_arr)  # (m, p)
+        return B @ theta_b
 
 
 # ---------------------------------------------------------------------------
 # Coxph
 # ---------------------------------------------------------------------------
+
 
 class Coxph(_TramModel):
     """Cox proportional hazards model for right-censored survival data.
@@ -258,7 +285,7 @@ class Coxph(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,
@@ -270,9 +297,9 @@ class Coxph(_TramModel):
 
     def survival(
         self,
-        y: NDArray,
-        X: Optional[NDArray] = None,
-    ) -> NDArray:
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
         """Estimate the survival function S(y) = 1 − F(y|x).
 
         Parameters
@@ -295,9 +322,9 @@ class Coxph(_TramModel):
 
     def hazard(
         self,
-        y: NDArray,
-        X: Optional[NDArray] = None,
-    ) -> NDArray:
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
         """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
 
         Parameters
@@ -322,6 +349,7 @@ class Coxph(_TramModel):
 # ---------------------------------------------------------------------------
 # Colr
 # ---------------------------------------------------------------------------
+
 
 class Colr(_TramModel):
     """Continuous outcome logistic regression.
@@ -355,7 +383,7 @@ class Colr(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,

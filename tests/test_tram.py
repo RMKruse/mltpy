@@ -8,11 +8,13 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
 import pymlt
-from pymlt.tram import BoxCox, Coxph, Colr, _TramModel
+from pymlt.model import MLT
+from pymlt.tram import BoxCox, Colr, Coxph, _TramModel
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -187,6 +189,125 @@ def test_colr_uses_logistic_distribution():
 
 
 # ---------------------------------------------------------------------------
+# Colr: prediction uses logistic distribution
+# ---------------------------------------------------------------------------
+
+class TestColrPredictLogistic:
+    """Colr.predict() must use the logistic distribution, not normal."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(17)
+        self.y = np.sort(rng.uniform(0.05, 0.95, 120))
+        self.model = Colr(support=(0.0, 1.0), order=5).fit(self.y)
+        self.grid = np.linspace(0.1, 0.9, 30)
+
+    def _h(self, y_vals: np.ndarray) -> np.ndarray:
+        p = self.model.basis.order + 1
+        return self.model.basis.evaluate(y_vals) @ self.model.theta_[:p]
+
+    def test_cdf_matches_logistic(self):
+        h = self._h(self.grid)
+        np.testing.assert_allclose(
+            self.model.predict(self.grid, what="distribution"),
+            _logistic.cdf(h),
+        )
+
+    def test_cdf_not_norm(self):
+        h = self._h(self.grid)
+        actual = self.model.predict(self.grid, what="distribution")
+        assert not np.allclose(actual, norm.cdf(h), atol=1e-6), (
+            "Colr.predict(distribution) returned norm.cdf values"
+        )
+
+    def test_density_matches_logistic(self):
+        p = self.model.basis.order + 1
+        D = self.model.basis.derivative(self.grid, order=1)
+        hp = D @ self.model.theta_[:p]
+        h = self._h(self.grid)
+        expected = _logistic.pdf(h) * np.maximum(hp, 0.0)
+        np.testing.assert_allclose(
+            self.model.predict(self.grid, what="density"),
+            expected,
+        )
+
+    def test_quantile_cdf_inverse(self):
+        probs = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+        q = self.model.predict(probs, what="quantile")
+        cdf_back = self.model.predict(q, what="distribution")
+        np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
+
+    def test_quantile_h_equals_logistic_ppf(self):
+        """h(quantile(p)) must equal logistic.ppf(p), not norm.ppf(p)."""
+        probs = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+        q = self.model.predict(probs, what="quantile")
+        h_at_q = self._h(q)
+        np.testing.assert_allclose(h_at_q, _logistic.ppf(probs), atol=1e-4)
+        assert not np.allclose(h_at_q, norm.ppf(probs), atol=1e-4), (
+            "h(quantile(p)) matches norm.ppf — logistic.ppf not used as inversion target"
+        )
+
+    def test_median_near_data_median(self):
+        """Fitted median quantile should be close to the data median."""
+        q50 = self.model.predict(np.array([0.5]), what="quantile")
+        np.testing.assert_allclose(q50[0], np.median(self.y), atol=0.05)
+
+    def test_colr_cdf_differs_from_boxcox(self):
+        """Same data, different base distribution → different CDF values."""
+        boxcox = BoxCox(support=(0.0, 1.0), order=5).fit(self.y)
+        cdf_colr = self.model.predict(self.grid, what="distribution")
+        cdf_boxcox = boxcox.predict(self.grid, what="distribution")
+        assert not np.allclose(cdf_colr, cdf_boxcox, atol=1e-3), (
+            "Colr and BoxCox CDF predictions are identical — logistic distribution not applied"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Logistic hazard — base_distribution="logistic" with RIGHT censoring
+# ---------------------------------------------------------------------------
+
+class TestLogisticHazard:
+    """predict(what='hazard') must use logistic pdf/sf for logistic-family models.
+
+    Colr hard-codes censoring=NONE so hazard is not available on it directly.
+    This class uses an MLT with base_distribution="logistic" and censoring=RIGHT,
+    which exercises the same code path.
+    """
+
+    def setup_method(self):
+        rng = np.random.default_rng(55)
+        y = rng.uniform(0.05, 0.95, 100)
+        censored = rng.random(100) < 0.3
+        cd = CensoredData.right_censored(y, censored)
+        self.model = MLT(
+            order=5, support=(0.0, 1.0),
+            base_distribution="logistic",
+            censoring=CensoringType.RIGHT,
+        ).fit(cd)
+        self.grid = np.linspace(0.1, 0.9, 25)
+
+    def _h(self, y_vals: np.ndarray) -> np.ndarray:
+        p = self.model.basis.order + 1
+        return self.model.basis.evaluate(y_vals) @ self.model.theta_[:p]
+
+    def test_hazard_matches_logistic_ratio(self):
+        """predict(hazard) == logistic.pdf(h) / logistic.sf(h)."""
+        h = self._h(self.grid)
+        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        np.testing.assert_allclose(
+            self.model.predict(self.grid, what="hazard"), expected
+        )
+
+    def test_hazard_not_norm_ratio(self):
+        """Regression guard: hazard must not equal the normal-based ratio."""
+        h = self._h(self.grid)
+        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        actual = self.model.predict(self.grid, what="hazard")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic hazard returned norm-based values"
+        )
+
+
+# ---------------------------------------------------------------------------
 # summary()
 # ---------------------------------------------------------------------------
 
@@ -246,11 +367,62 @@ class TestRepr:
 # ---------------------------------------------------------------------------
 
 class TestPlot:
-    def test_plot_returns_axes_when_matplotlib_available(self):
+    def setup_method(self):
         pytest.importorskip("matplotlib")
-        model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
-        result = model.plot(simple_y())
-        assert result is not None
+        self.model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
+        self.y = simple_y()
+
+    def teardown_method(self):
+        import matplotlib.pyplot as plt
+        plt.close("all")
+
+    def test_plot_no_ax_returns_two_axes(self):
+        result = self.model.plot(self.y)
+        assert isinstance(result, list)
+        assert len(result) == 2
+
+    def test_plot_no_ax_both_panels_have_data(self):
+        ax_cdf, ax_pdf = self.model.plot(self.y)
+        assert len(ax_cdf.lines) > 0, "CDF panel has no lines"
+        assert len(ax_pdf.lines) > 0, "density panel has no lines"
+
+    def test_plot_with_axes_tuple_returns_list(self):
+        import matplotlib.pyplot as plt
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        result = self.model.plot(self.y, ax=(ax1, ax2))
+        assert result == [ax1, ax2]
+        plt.close(fig)
+
+    def test_plot_with_axes_tuple_plots_both(self):
+        import matplotlib.pyplot as plt
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        self.model.plot(self.y, ax=(ax1, ax2))
+        assert len(ax1.lines) > 0, "CDF axis has no lines"
+        assert len(ax2.lines) > 0, "density axis has no lines"
+        plt.close(fig)
+
+    def test_plot_single_axes_plots_cdf_only(self):
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        ret = self.model.plot(self.y, ax=ax)
+        assert ret is ax
+        assert len(ax.lines) == 1
+        assert "CDF" in ax.get_title()
+        plt.close(fig)
+
+    def test_plot_one_tuple_raises_type_error(self):
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+        with pytest.raises(TypeError, match="2-tuple"):
+            self.model.plot(self.y, ax=(ax,))
+        plt.close(fig)
+
+    def test_plot_three_tuple_raises_type_error(self):
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(1, 3)
+        with pytest.raises(TypeError, match="2-tuple"):
+            self.model.plot(self.y, ax=tuple(axes))
+        plt.close(fig)
 
     def test_plot_raises_import_error_when_no_matplotlib(self):
         model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
