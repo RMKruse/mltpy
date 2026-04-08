@@ -494,6 +494,7 @@ def _grad_right(
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = +B_c.T @ [f(h)/F̄(h)]
         hazard = np.exp(dist.logpdf(h_c) - dist.logsf(h_c))
+        hazard = np.minimum(hazard, _H_CLIP)
         grad[:p] += B_c.T @ hazard
         if X_c is not None:
             grad[p:] += X_c.T @ hazard
@@ -583,10 +584,15 @@ def _grad_interval(
         log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
         w_hi = np.exp(dist.logpdf(h_hi) - log_p)
         w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        # When interval probability ≈ 0, log_p = -inf and weights overflow
+        # to inf/NaN. These observations contribute negligibly — zero them.
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
 
-        grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
-        if X_i is not None:
-            grad[p:] -= X_i.T @ (w_hi - w_lo)
+        with np.errstate(invalid="ignore"):
+            grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
+            if X_i is not None:
+                grad[p:] -= X_i.T @ (w_hi - w_lo)
 
     return cast(NDArray[np.float64], grad)
 
