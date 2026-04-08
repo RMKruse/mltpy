@@ -17,7 +17,7 @@ MLT
 from __future__ import annotations
 
 import warnings
-from typing import Literal, Optional, Union, cast
+from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -89,7 +89,7 @@ class ConditionalTransformationModel:
         self,
         basis: BernsteinBasis,
         censoring: CensoringType = CensoringType.NONE,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
         base_distribution: Literal["normal", "logistic"] = "normal",
     ) -> None:
         _get_dist(base_distribution)  # raises ValueError for unsupported values
@@ -99,8 +99,8 @@ class ConditionalTransformationModel:
         self.base_distribution = base_distribution
 
         # State — set by fit()
-        self.theta_: Optional[NDArray[np.float64]] = None
-        self.result_: Optional[OptimizationResult] = None
+        self.theta_: NDArray[np.float64] | None = None
+        self.result_: OptimizationResult | None = None
         self.is_fitted_: bool = False
 
     # ------------------------------------------------------------------
@@ -116,9 +116,9 @@ class ConditionalTransformationModel:
 
     def _validate_input(
         self,
-        y: Union[NDArray[np.float64], CensoredData],
-        X: Optional[NDArray[np.float64]],
-    ) -> tuple[Union[NDArray[np.float64], CensoredData], Optional[NDArray[np.float64]]]:
+        y: NDArray[np.float64] | CensoredData,
+        X: NDArray[np.float64] | None,
+    ) -> tuple[NDArray[np.float64] | CensoredData, NDArray[np.float64] | None]:
         """Coerce and validate ``y`` and ``X`` before fitting.
 
         Parameters
@@ -152,7 +152,7 @@ class ConditionalTransformationModel:
                         f"[{a}, {b}]. Passe BernsteinBasis(support=...) an."
                     )
             n = y.n
-            y_clean: Union[NDArray[np.float64], CensoredData] = y
+            y_clean: NDArray[np.float64] | CensoredData = y
         else:
             # Coerce without importing pandas: np.asarray handles pd.Series
             y_arr = np.asarray(y, dtype=float).ravel()
@@ -165,7 +165,7 @@ class ConditionalTransformationModel:
             n = len(y_arr)
             y_clean = y_arr
 
-        X_clean: Optional[NDArray[np.float64]] = None
+        X_clean: NDArray[np.float64] | None = None
         if X is not None:
             X_clean = np.asarray(X, dtype=float)
             if X_clean.ndim == 1:
@@ -184,8 +184,8 @@ class ConditionalTransformationModel:
 
     def fit(
         self,
-        y: Union[NDArray[np.float64], CensoredData],
-        X: Optional[NDArray[np.float64]] = None,
+        y: NDArray[np.float64] | CensoredData,
+        X: NDArray[np.float64] | None = None,
     ) -> "ConditionalTransformationModel":
         """Fit the transformation model by maximum likelihood.
 
@@ -240,7 +240,7 @@ class ConditionalTransformationModel:
     def predict(
         self,
         y_new: NDArray[np.float64],
-        X_new: Optional[NDArray[np.float64]] = None,
+        X_new: NDArray[np.float64] | None = None,
         what: Literal["distribution", "density", "quantile", "hazard"] = "distribution",
     ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
@@ -282,7 +282,8 @@ class ConditionalTransformationModel:
         >>> q50 = model.predict(np.array([0.5]), what="quantile")
         """
         self._check_is_fitted()
-        assert self.theta_ is not None
+        if self.theta_ is None:
+            raise RuntimeError("Modellparameter (theta_) fehlen unerwartet nach dem Fitten.")
 
         if what not in _VALID_WHAT:
             raise ValueError(
@@ -294,7 +295,7 @@ class ConditionalTransformationModel:
         theta_b = self.theta_[:p]
 
         y_arr = np.asarray(y_new, dtype=float).ravel()
-        X_arr: Optional[NDArray[np.float64]] = None
+        X_arr: NDArray[np.float64] | None = None
         if X_new is not None:
             X_arr = np.asarray(X_new, dtype=float)
             if X_arr.ndim == 1:
@@ -369,8 +370,8 @@ class ConditionalTransformationModel:
 
     def score(
         self,
-        y: Union[NDArray[np.float64], CensoredData],
-        X: Optional[NDArray[np.float64]] = None,
+        y: NDArray[np.float64] | CensoredData,
+        X: NDArray[np.float64] | None = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -393,7 +394,8 @@ class ConditionalTransformationModel:
             If called before :meth:`fit`.
         """
         self._check_is_fitted()
-        assert self.theta_ is not None
+        if self.theta_ is None:
+            raise RuntimeError("Modellparameter (theta_) fehlen unerwartet nach dem Fitten.")
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
             self.theta_, self.basis, y_clean, X_clean, self.censoring,
@@ -403,8 +405,8 @@ class ConditionalTransformationModel:
     def simulate(
         self,
         n: int,
-        X: Optional[NDArray[np.float64]] = None,
-        random_state: Union[int, np.random.Generator, None] = None,
+        X: NDArray[np.float64] | None = None,
+        random_state: int | np.random.Generator | None = None,
     ) -> NDArray[np.float64]:
         """Draw samples from the fitted model via the quantile transformation.
 
@@ -445,7 +447,8 @@ class ConditionalTransformationModel:
         order = self.basis.order
         censoring = self.censoring.name
         if self.is_fitted_:
-            assert self.result_ is not None
+            if self.result_ is None:
+                raise RuntimeError("Ergebnis (result_) fehlt unerwartet nach dem Fitten.")
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={order}, censoring={censoring}, "
@@ -487,7 +490,7 @@ class MLT(ConditionalTransformationModel):
         order: int = 6,
         support: tuple[float, float] = (0.0, 1.0),
         censoring: CensoringType = CensoringType.NONE,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
         base_distribution: Literal["normal", "logistic"] = "normal",
     ) -> None:
         basis = BernsteinBasis(order=order, support=support)
@@ -504,7 +507,8 @@ class MLT(ConditionalTransformationModel):
     def __repr__(self) -> str:
         censoring = self.censoring.name
         if self.is_fitted_:
-            assert self.result_ is not None
+            if self.result_ is None:
+                raise RuntimeError("Ergebnis (result_) fehlt unerwartet nach dem Fitten.")
             ll = self.result_.log_likelihood
             return (
                 f"MLT(order={self._order}, support={self._support}, "

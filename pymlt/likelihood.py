@@ -94,14 +94,31 @@ def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = n
 
     Parameters
     ----------
-    a, b:
-        Lower and upper argument.  Must satisfy a <= b.
-    dist:
-        Base distribution object (norm or logistic).
+    a: NDArray[np.float64]
+        Lower arguments. Must satisfy a <= b.
+    b: NDArray[np.float64]
+        Upper arguments. Must satisfy a <= b.
+    dist: Any, default=scipy.stats.norm
+        Base distribution object (e.g., norm or logistic) providing ``logcdf`` and ``logpdf``.
 
     Returns
     -------
-    NDArray, same shape as a/b.
+    NDArray[np.float64]
+        Array of log(F(b) - F(a)) values, same shape as inputs.
+
+    Notes
+    -----
+    Computing `log(F(b) - F(a))` directly can lead to catastrophic cancellation when `F(b) ≈ F(a)`, 
+    resulting in `log(0) = -inf`. This function uses a piecewise approach:
+    
+    1. For **wide intervals** (`log(F(a)) - log(F(b)) < -1e-6`), it uses the logsumexp trick:
+       `log(F(b)) + log1p(-exp(log(F(a)) - log(F(b))))`
+    
+    2. For **narrow intervals** (`log(F(a)) - log(F(b)) >= -1e-6`), it uses a first-order Taylor approximation
+       around the midpoint `mid = (a + b) / 2` to avoid evaluating identical CDFs:
+       `F(b) - F(a) ≈ f(mid) * (b - a)`
+       which in log-space becomes:
+       `log(f(mid)) + log(b - a)`
     """
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
@@ -131,16 +148,50 @@ def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = n
 # ---------------------------------------------------------------------------
 
 def _split_theta(
-    theta: NDArray[np.float64], p: int, X: Optional[NDArray[np.float64]]
-) -> tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
-    """Return (theta_b, beta) where theta_b has length p."""
+    theta: NDArray[np.float64], p: int, X: NDArray[np.float64] | None
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    """Split the full parameter vector `theta` into basis coefficients and regression shifts.
+
+    Parameters
+    ----------
+    theta : NDArray[np.float64]
+        Fitted parameter vector of shape `(p + q,)` where `p` is the order of the
+        Bernstein basis + 1, and `q` is the number of covariates (if any).
+    p : int
+        Number of Bernstein basis coefficients (`order + 1`).
+    X : NDArray[np.float64] | None
+        Covariate matrix of shape `(n, q)`, or None if no covariates are used.
+
+    Returns
+    -------
+    tuple[NDArray[np.float64], NDArray[np.float64] | None]
+        A tuple `(theta_b, beta)` where `theta_b` is the vector of basis coefficients
+        and `beta` is the vector of regression coefficients (if `X` is provided).
+    """
     theta_b = theta[:p]
     beta    = theta[p:] if X is not None else None
     return theta_b, beta
 
 
-def _shift(h: NDArray[np.float64], X: Optional[NDArray[np.float64]], beta: Optional[NDArray[np.float64]]) -> NDArray[np.float64]:
-    """Add regression shift X @ beta to h if X is provided."""
+def _shift(
+    h: NDArray[np.float64], X: NDArray[np.float64] | None, beta: NDArray[np.float64] | None
+) -> NDArray[np.float64]:
+    """Add regression shift X @ beta to the baseline transformation h.
+
+    Parameters
+    ----------
+    h : NDArray[np.float64]
+        Transformation function evaluated at observations.
+    X : NDArray[np.float64] | None
+        Covariates of shape `(n, q)`. If None, `h` is returned unchanged.
+    beta : NDArray[np.float64] | None
+        Regression coefficients for the linear shift `X @ beta`.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Shifted transformation vector: `h + X @ beta`.
+    """
     if X is not None and beta is not None:
         return h + X @ beta
     return h
@@ -149,11 +200,19 @@ def _shift(h: NDArray[np.float64], X: Optional[NDArray[np.float64]], beta: Optio
 def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     """Compute -(∂ log f(h) / ∂h) for the base distribution.
 
-    This is the contribution of exact observations to ∂(-ℓ)/∂θ_b
-    via the chain rule B.T @ neg_score.
+    Parameters
+    ----------
+    h : NDArray[np.float64]
+        Values of the transformation function.
+    dist : Any
+        scipy.stats distribution object (either norm or logistic).
 
-    For normal:   h          (since ∂log φ(h)/∂h = −h)
-    For logistic: 2F(h) − 1  (since ∂log f(h)/∂h = 1 − 2F(h))
+    Returns
+    -------
+    NDArray[np.float64]
+        The negative derivative of the log-density.
+        For normal: `h`
+        For logistic: `tanh(h / 2)`.
     """
     if dist is norm:
         return h
@@ -171,7 +230,30 @@ def _ll_none(
     X: Optional[NDArray[np.float64]],
     dist: Any = norm,
 ) -> float:
-    """ℓ = Σ [log f(h_i) + log h'_i]  (exact observations)."""
+    """Computes the log-likelihood for exactly observed (uncensored) data.
+
+    Formula
+    -------
+    ℓ = Σ [log f(h_i) + log h'_i]
+
+    Parameters
+    ----------
+    y : NDArray[np.float64]
+        Exact observations.
+    theta : NDArray[np.float64]
+        Concatenated parameter vector `[theta_b | beta]`.
+    basis : BernsteinBasis
+        Polynomial basis object.
+    X : NDArray[np.float64] | None
+        Covariates.
+    dist : Any, default=scipy.stats.norm
+        Base distribution.
+
+    Returns
+    -------
+    float
+        Computed log-likelihood.
+    """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
@@ -193,7 +275,31 @@ def _ll_right(
     X: Optional[NDArray[np.float64]],
     dist: Any = norm,
 ) -> float:
-    """ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F̄(h)."""
+    """Computes the log-likelihood for right-censored data.
+
+    Formula
+    -------
+    ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log S(h)
+    where S(h) = 1 - F(h) is the survival function.
+
+    Parameters
+    ----------
+    cd : CensoredData
+        Object containing exact and censored bounds.
+    theta : NDArray[np.float64]
+        Concatenated parameter vector `[theta_b | beta]`.
+    basis : BernsteinBasis
+        Polynomial basis object.
+    X : NDArray[np.float64] | None
+        Covariates.
+    dist : Any, default=scipy.stats.norm
+        Base distribution.
+
+    Returns
+    -------
+    float
+        Computed log-likelihood.
+    """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
     ll = 0.0
@@ -226,7 +332,30 @@ def _ll_left(
     X: Optional[NDArray[np.float64]],
     dist: Any = norm,
 ) -> float:
-    """ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F(h)."""
+    """Computes the log-likelihood for left-censored data.
+
+    Formula
+    -------
+    ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F(h)
+
+    Parameters
+    ----------
+    cd : CensoredData
+        Object containing exact and censored bounds.
+    theta : NDArray[np.float64]
+        Concatenated parameter vector `[theta_b | beta]`.
+    basis : BernsteinBasis
+        Polynomial basis object.
+    X : NDArray[np.float64] | None
+        Covariates.
+    dist : Any, default=scipy.stats.norm
+        Base distribution.
+
+    Returns
+    -------
+    float
+        Computed log-likelihood.
+    """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
     ll = 0.0

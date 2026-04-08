@@ -101,20 +101,21 @@ def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
 
     Parameters
     ----------
-    theta_b:
+    theta_b : NDArray[np.float64]
         Bernstein coefficient vector of length p (may be non-monotone).
 
     Returns
     -------
-    NDArray of length p, sorted ascending.
+    NDArray[np.float64]
+        NDArray of length p, sorted ascending.
     """
     return cast(NDArray[np.float64], np.sort(theta_b))
 
 
-def _make_objective(
+    def _make_objective(
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     censoring: CensoringType,
     use_gradient: bool,
     base_distribution: Literal["normal", "logistic"] = "normal",
@@ -127,6 +128,27 @@ def _make_objective(
 
     ValueError from infeasible theta (h' ≤ 0) is caught and replaced by a
     large penalty so that the optimiser can back off rather than crash.
+
+    Parameters
+    ----------
+    basis : BernsteinBasis
+        Polynomial basis defining the response transformation.
+    y : NDArray[np.float64] | CensoredData
+        Response observations.
+    X : NDArray[np.float64] | None
+        Covariate matrix, if any.
+    censoring : CensoringType
+        Type of censoring for the response variables.
+    use_gradient : bool
+        If True, return analytical gradients along with the negative log-likelihood.
+    base_distribution : Literal["normal", "logistic"], default="normal"
+        The base distribution to estimate transformations against.
+
+    Returns
+    -------
+    Callable[[NDArray[np.float64]], Any]
+        Objective function mapping a parameter vector ``theta`` to a scalar negative log-likelihood
+        (and optionally its gradient vector).
     """
     _BIG = 1e10
 
@@ -153,17 +175,40 @@ def _make_objective(
 
 
 def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
-    """Build the ``options`` dict for the chosen solver."""
+    """Build the dictionary of configuration options passed directly to `scipy.optimize.minimize`.
+
+    Parameters
+    ----------
+    config : OptimizerConfig
+        Object containing settings for the optimization run.
+
+    Returns
+    -------
+    dict[str, Any]
+        A dictionary with optimization solver-specific kwargs.
+    """
     if config.solver == "slsqp":
         return {"maxiter": config.max_iter, "ftol": config.tol}
     return {"maxiter": config.max_iter, "gtol": config.tol}
 
 
-def _initial_theta(n_params: int, X: Optional[NDArray[np.float64]]) -> NDArray[np.float64]:
-    """Default starting point: linearly spaced basis coefficients + zero beta.
+def _initial_theta(n_params: int, X: NDArray[np.float64] | None) -> NDArray[np.float64]:
+    """Default starting point: linearly spaced basis coefficients and zero beta components.
 
-    ``np.linspace(0, 1, n_params)`` is non-decreasing by construction, so it
-    satisfies the monotonicity constraint at the first call.
+    Parameters
+    ----------
+    n_params : int
+        Number of Bernstein basis coefficients (p).
+    X : NDArray[np.float64] | None
+        Covariate matrix, shape `(n, q)`. If covariates exist, their initial weights
+        will be zero-initialized and concatenated with the starting theta vector.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Initial concatenated parameter vector of shape `(p + q,)`.
+        ``np.linspace(0, 1, n_params)`` is non-decreasing by construction, therefore
+        guaranteeing the constraint is met for the first trial.
     """
     theta_b = np.linspace(0.0, 1.0, n_params)
     if X is not None:
@@ -178,7 +223,28 @@ def _perturb_and_project(
     rng: np.random.Generator,
     scale: float = 0.1,
 ) -> NDArray[np.float64]:
-    """Perturb theta_basis, project back to feasible, keep beta unchanged."""
+    """Perturb the current parameter vector randomly and re-project to a feasible state.
+
+    This function adds random Gaussian noise to the Bernstein coefficients (theta_b),
+    in order to break out of poor local minima, while leaving the beta components (if any) unchanged.
+    The perturbed vector is then projected to preserve the monotonic non-decreasing constraints.
+
+    Parameters
+    ----------
+    theta : NDArray[np.float64]
+        The current complete parameter vector `[theta_b | beta]`.
+    n_params : int
+        The length of the `theta_b` sub-vector.
+    rng : np.random.Generator
+        Initialized NumPy random number generator for normal sampling.
+    scale : float, default=0.1
+        Scale (standard deviation) of the normal noise added.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        A valid, non-decreasing parameter vector of identical shape.
+    """
     theta_b = theta[:n_params] + rng.normal(0.0, scale, size=n_params)
     theta_b = _project_to_feasible(theta_b)
     if len(theta) > n_params:
