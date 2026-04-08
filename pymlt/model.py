@@ -61,7 +61,7 @@ class ConditionalTransformationModel:
     """Base class for conditional transformation models.
 
     Fits a monotone transformation h(y|x) parametrised as a Bernstein
-    polynomial such that h(y|x) follows a standard normal distribution.
+    polynomial such that h(y|x) follows a standard distribution.
 
     Parameters
     ----------
