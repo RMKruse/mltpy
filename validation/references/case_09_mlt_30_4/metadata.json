@@ -1,0 +1,9 @@
+{
+  "model": "mlt",
+  "censoring": "none",
+  "n": 30,
+  "order": 4,
+  "support": [0, 1],
+  "seed": 51,
+  "note": "Small sample size — edge case for convergence"
+}
