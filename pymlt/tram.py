@@ -42,7 +42,8 @@ class _TramModel(MLT):
         name = type(self).__name__
         censoring = self.censoring.name
         if self.is_fitted_:
-            assert self.result_ is not None
+            if self.result_ is None:
+                raise RuntimeError("Unexpected None result_ for fitted model")
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={self._order}, support={self._support}, "
@@ -73,7 +74,8 @@ class _TramModel(MLT):
             f"Fitted:       {'Yes' if self.is_fitted_ else 'No'}",
         ]
         if self.is_fitted_:
-            assert self.result_ is not None
+            if self.result_ is None:
+                raise RuntimeError("Unexpected None result_ for fitted model")
             lines += [
                 f"Log-lik:      {self.result_.log_likelihood:.4f}",
                 f"Converged:    {'Yes' if self.result_.converged else 'No'}",
@@ -230,7 +232,8 @@ class BoxCox(_TramModel):
             If called before :meth:`fit`.
         """
         self._check_is_fitted()
-        assert self.theta_ is not None
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
