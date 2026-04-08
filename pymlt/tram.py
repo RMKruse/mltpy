@@ -18,7 +18,7 @@ Colr
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,6 +43,7 @@ class _TramModel(MLT):
         name = type(self).__name__
         censoring = self.censoring.name
         if self.is_fitted_:
+            assert self.result_ is not None
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={self._order}, support={self._support}, "
@@ -73,6 +74,7 @@ class _TramModel(MLT):
             f"Fitted:       {'Yes' if self.is_fitted_ else 'No'}",
         ]
         if self.is_fitted_:
+            assert self.result_ is not None
             lines += [
                 f"Log-lik:      {self.result_.log_likelihood:.4f}",
                 f"Converged:    {'Yes' if self.result_.converged else 'No'}",
@@ -80,7 +82,7 @@ class _TramModel(MLT):
             ]
         return "\n".join(lines)
 
-    def plot(self, y: NDArray, ax=None):
+    def plot(self, y: NDArray[np.float64], ax: Any = None) -> list[Any]:
         """Plot the estimated CDF and density side by side.
 
         Parameters
@@ -196,7 +198,7 @@ class BoxCox(_TramModel):
             base_distribution="normal",
         )
 
-    def fitted_transformation(self, y: NDArray) -> NDArray:
+    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Evaluate the raw fitted transformation h(y) = B_k(y) @ theta_b.
 
         This is the monotone function that maps the observed response scale
@@ -218,11 +220,12 @@ class BoxCox(_TramModel):
             If called before :meth:`fit`.
         """
         self._check_is_fitted()
+        assert self.theta_ is not None
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
         B = self.basis.evaluate(y_arr)   # (m, p)
-        return B @ theta_b               # h(y)
+        return B @ theta_b
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +280,9 @@ class Coxph(_TramModel):
 
     def survival(
         self,
-        y: NDArray,
-        X: Optional[NDArray] = None,
-    ) -> NDArray:
+        y: NDArray[np.float64],
+        X: Optional[NDArray[np.float64]] = None,
+    ) -> NDArray[np.float64]:
         """Estimate the survival function S(y) = 1 − F(y|x).
 
         Parameters
@@ -302,9 +305,9 @@ class Coxph(_TramModel):
 
     def hazard(
         self,
-        y: NDArray,
-        X: Optional[NDArray] = None,
-    ) -> NDArray:
+        y: NDArray[np.float64],
+        X: Optional[NDArray[np.float64]] = None,
+    ) -> NDArray[np.float64]:
         """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
 
         Parameters

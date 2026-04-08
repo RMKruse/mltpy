@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, cast
 
 import numpy as np
+from numpy.typing import NDArray
 
 
 class CensoringType(Enum):
@@ -133,11 +134,11 @@ class CensoredData:
         Optional length-n array of right truncation points.
     """
 
-    exact: np.ndarray
-    lower: np.ndarray
-    upper: np.ndarray
-    trunc_lower: Optional[np.ndarray] = None
-    trunc_upper: Optional[np.ndarray] = None
+    exact: NDArray[np.float64]
+    lower: NDArray[np.float64]
+    upper: NDArray[np.float64]
+    trunc_lower: Optional[NDArray[np.float64]] = None
+    trunc_upper: Optional[NDArray[np.float64]] = None
 
     def __post_init__(self) -> None:
         self.exact = np.asarray(self.exact, dtype=float)
@@ -165,14 +166,14 @@ class CensoredData:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_exact(cls, y: np.ndarray) -> CensoredData:
+    def from_exact(cls, y: NDArray[np.float64]) -> CensoredData:
         """All observations exact (no censoring)."""
         y = np.asarray(y, dtype=float)
         return cls(exact=y.copy(), lower=y.copy(), upper=y.copy())
 
     @classmethod
     def right_censored(
-        cls, y: np.ndarray, censored: np.ndarray
+        cls, y: NDArray[np.float64], censored: NDArray[np.float64]
     ) -> CensoredData:
         """Right-censored data.
 
@@ -195,7 +196,7 @@ class CensoredData:
 
     @classmethod
     def left_censored(
-        cls, y: np.ndarray, censored: np.ndarray
+        cls, y: NDArray[np.float64], censored: NDArray[np.float64]
     ) -> CensoredData:
         """Left-censored data.
 
@@ -218,7 +219,7 @@ class CensoredData:
 
     @classmethod
     def interval_censored(
-        cls, lower: np.ndarray, upper: np.ndarray
+        cls, lower: NDArray[np.float64], upper: NDArray[np.float64]
     ) -> CensoredData:
         """All observations interval-censored with known bounds [lower, upper]."""
         lower = np.asarray(lower, dtype=float)
@@ -238,12 +239,12 @@ class CensoredData:
         return len(self.exact)
 
     @property
-    def is_exact_mask(self) -> np.ndarray:
+    def is_exact_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is exact."""
-        return ~np.isnan(self.exact)
+        return cast(NDArray[np.bool_], ~np.isnan(self.exact))
 
     @property
-    def is_right_censored_mask(self) -> np.ndarray:
+    def is_right_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is right-censored."""
         return (
             np.isnan(self.exact)
@@ -252,7 +253,7 @@ class CensoredData:
         )
 
     @property
-    def is_left_censored_mask(self) -> np.ndarray:
+    def is_left_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is left-censored."""
         return (
             np.isnan(self.exact)
@@ -261,7 +262,7 @@ class CensoredData:
         )
 
     @property
-    def is_interval_censored_mask(self) -> np.ndarray:
+    def is_interval_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is interval-censored."""
         return (
             np.isnan(self.exact)

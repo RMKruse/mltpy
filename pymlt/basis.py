@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import betainc, comb
@@ -11,7 +13,7 @@ from scipy.special import betainc, comb
 # Private helper
 # ---------------------------------------------------------------------------
 
-def _bernstein_matrix(t: NDArray, k: int) -> NDArray:
+def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     """Evaluate the (n, k+1) Bernstein basis matrix at normalised t ∈ [0, 1].
 
     B[j, i] = C(k, i) · t[j]^i · (1 − t[j])^(k − i)
@@ -35,7 +37,7 @@ def _bernstein_matrix(t: NDArray, k: int) -> NDArray:
     i = np.arange(k + 1, dtype=float)               # shape (k+1,)
     binom = comb(k, i, exact=False)                  # shape (k+1,)
     # Broadcasting: t[:, None] × i[None, :] → (n, k+1)
-    return binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i)
+    return cast(NDArray[np.float64], binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i))
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +73,7 @@ class BernsteinBasis:
     # Core methods
     # ------------------------------------------------------------------
 
-    def evaluate(self, y: NDArray) -> NDArray:
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Bernstein design matrix at observations y.
 
         Parameters
@@ -87,7 +89,7 @@ class BernsteinBasis:
         t = np.clip((np.asarray(y, dtype=float).ravel() - a) / (b - a), 0.0, 1.0)
         return _bernstein_matrix(t, self.order)
 
-    def derivative(self, y: NDArray, order: int = 1) -> NDArray:
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
         """Analytical derivative of the Bernstein design matrix.
 
         Uses the recurrence relation — no finite differences.
@@ -142,7 +144,7 @@ class BernsteinBasis:
             result = k * (k - 1) * (B_pad[:, :-2] - 2 * B_pad[:, 1:-1] + B_pad[:, 2:])
             return result / (b - a) ** 2
 
-    def integrate(self, y: NDArray) -> NDArray:
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Running integral of each basis function from a to y.
 
         Uses the regularised incomplete beta function:
@@ -171,14 +173,14 @@ class BernsteinBasis:
         # betainc is vectorised over all arguments via broadcasting
         # t[:, None]: (n, 1),  a_param/b_param: (k+1,)  →  result: (n, k+1)
         result = betainc(a_param[None, :], b_param[None, :], t[:, None])
-        return result * (b - a) / (k + 1)
+        return cast(NDArray[np.float64], result * (b - a) / (k + 1))
 
 
 # ---------------------------------------------------------------------------
 # Module-level convenience function
 # ---------------------------------------------------------------------------
 
-def monotone_trafo(theta: NDArray, basis_matrix: NDArray) -> NDArray:
+def monotone_trafo(theta: NDArray[np.float64], basis_matrix: NDArray[np.float64]) -> NDArray[np.float64]:
     """Evaluate the transformation h(y) = basis_matrix @ theta.
 
     Monotone iff `theta` is non-decreasing.  This function does **not**

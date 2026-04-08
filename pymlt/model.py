@@ -17,7 +17,7 @@ MLT
 from __future__ import annotations
 
 import warnings
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,7 +25,7 @@ from scipy.optimize import brentq
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import log_likelihood, _get_dist
-from pymlt.optimizer import OptimizerConfig, optimize
+from pymlt.optimizer import OptimizerConfig, OptimizationResult, optimize
 from pymlt.variables import CensoredData, CensoringType
 
 
@@ -99,8 +99,8 @@ class ConditionalTransformationModel:
         self.base_distribution = base_distribution
 
         # State — set by fit()
-        self.theta_: Optional[NDArray] = None
-        self.result_ = None
+        self.theta_: Optional[NDArray[np.float64]] = None
+        self.result_: Optional[OptimizationResult] = None
         self.is_fitted_: bool = False
 
     # ------------------------------------------------------------------
@@ -116,9 +116,9 @@ class ConditionalTransformationModel:
 
     def _validate_input(
         self,
-        y: Union[NDArray, CensoredData],
-        X: Optional[NDArray],
-    ) -> tuple[Union[NDArray, CensoredData], Optional[NDArray]]:
+        y: Union[NDArray[np.float64], CensoredData],
+        X: Optional[NDArray[np.float64]],
+    ) -> tuple[Union[NDArray[np.float64], CensoredData], Optional[NDArray[np.float64]]]:
         """Coerce and validate ``y`` and ``X`` before fitting.
 
         Parameters
@@ -152,7 +152,7 @@ class ConditionalTransformationModel:
                         f"[{a}, {b}]. Passe BernsteinBasis(support=...) an."
                     )
             n = y.n
-            y_clean: Union[NDArray, CensoredData] = y
+            y_clean: Union[NDArray[np.float64], CensoredData] = y
         else:
             # Coerce without importing pandas: np.asarray handles pd.Series
             y_arr = np.asarray(y, dtype=float).ravel()
@@ -165,7 +165,7 @@ class ConditionalTransformationModel:
             n = len(y_arr)
             y_clean = y_arr
 
-        X_clean: Optional[NDArray] = None
+        X_clean: Optional[NDArray[np.float64]] = None
         if X is not None:
             X_clean = np.asarray(X, dtype=float)
             if X_clean.ndim == 1:
@@ -184,8 +184,8 @@ class ConditionalTransformationModel:
 
     def fit(
         self,
-        y: Union[NDArray, CensoredData],
-        X: Optional[NDArray] = None,
+        y: Union[NDArray[np.float64], CensoredData],
+        X: Optional[NDArray[np.float64]] = None,
     ) -> "ConditionalTransformationModel":
         """Fit the transformation model by maximum likelihood.
 
@@ -239,10 +239,10 @@ class ConditionalTransformationModel:
 
     def predict(
         self,
-        y_new: NDArray,
-        X_new: Optional[NDArray] = None,
+        y_new: NDArray[np.float64],
+        X_new: Optional[NDArray[np.float64]] = None,
         what: Literal["distribution", "density", "quantile", "hazard"] = "distribution",
-    ) -> NDArray:
+    ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
 
         Parameters
@@ -282,6 +282,7 @@ class ConditionalTransformationModel:
         >>> q50 = model.predict(np.array([0.5]), what="quantile")
         """
         self._check_is_fitted()
+        assert self.theta_ is not None
 
         if what not in _VALID_WHAT:
             raise ValueError(
@@ -293,7 +294,7 @@ class ConditionalTransformationModel:
         theta_b = self.theta_[:p]
 
         y_arr = np.asarray(y_new, dtype=float).ravel()
-        X_arr: Optional[NDArray] = None
+        X_arr: Optional[NDArray[np.float64]] = None
         if X_new is not None:
             X_arr = np.asarray(X_new, dtype=float)
             if X_arr.ndim == 1:
@@ -321,15 +322,15 @@ class ConditionalTransformationModel:
 
         dist = _get_dist(self.base_distribution)
         if what == "distribution":
-            return dist.cdf(h)
+            return cast(NDArray[np.float64], dist.cdf(h))
         elif what == "density":
-            return dist.pdf(h) * np.maximum(hp, 0.0)
+            return cast(NDArray[np.float64], dist.pdf(h) * np.maximum(hp, 0.0))
         else:  # hazard
-            return dist.pdf(h) / np.maximum(dist.sf(h), 1e-300)
+            return cast(NDArray[np.float64], dist.pdf(h) / np.maximum(dist.sf(h), 1e-300))
 
     def _predict_quantile(
-        self, probs: NDArray, theta_b: NDArray
-    ) -> NDArray:
+        self, probs: NDArray[np.float64], theta_b: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
         """Numerically invert h(q) = F⁻¹(p) via brentq for each p.
 
         F⁻¹ is the quantile function (``dist.ppf``) of the base distribution
@@ -364,12 +365,12 @@ class ConditionalTransformationModel:
                 xtol=1e-6,
                 full_output=False,
             )
-        return quantiles
+        return cast(NDArray[np.float64], quantiles)
 
     def score(
         self,
-        y: Union[NDArray, CensoredData],
-        X: Optional[NDArray] = None,
+        y: Union[NDArray[np.float64], CensoredData],
+        X: Optional[NDArray[np.float64]] = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -392,6 +393,7 @@ class ConditionalTransformationModel:
             If called before :meth:`fit`.
         """
         self._check_is_fitted()
+        assert self.theta_ is not None
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
             self.theta_, self.basis, y_clean, X_clean, self.censoring,
@@ -401,9 +403,9 @@ class ConditionalTransformationModel:
     def simulate(
         self,
         n: int,
-        X: Optional[NDArray] = None,
+        X: Optional[NDArray[np.float64]] = None,
         random_state: Union[int, np.random.Generator, None] = None,
-    ) -> NDArray:
+    ) -> NDArray[np.float64]:
         """Draw samples from the fitted model via the quantile transformation.
 
         Samples ``u ~ Uniform(0, 1)`` and returns
@@ -443,6 +445,7 @@ class ConditionalTransformationModel:
         order = self.basis.order
         censoring = self.censoring.name
         if self.is_fitted_:
+            assert self.result_ is not None
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={order}, censoring={censoring}, "
@@ -501,6 +504,7 @@ class MLT(ConditionalTransformationModel):
     def __repr__(self) -> str:
         censoring = self.censoring.name
         if self.is_fitted_:
+            assert self.result_ is not None
             ll = self.result_.log_likelihood
             return (
                 f"MLT(order={self._order}, support={self._support}, "

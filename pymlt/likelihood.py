@@ -39,7 +39,7 @@ Numerical stability
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -52,7 +52,7 @@ from pymlt.variables import CensoredData, CensoringType
 _VALID_BASE_DISTRIBUTIONS = ("normal", "logistic")
 
 
-def _get_dist(base_distribution: str):
+def _get_dist(base_distribution: str) -> Any:
     """Return the scipy.stats distribution for *base_distribution*.
 
     Raises
@@ -78,7 +78,7 @@ _H_CLIP = 30.0
 # Numerically stable log(F(b) − F(a))
 # ---------------------------------------------------------------------------
 
-def _log_diff_ndtr(a: NDArray, b: NDArray, dist=norm) -> NDArray:
+def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = norm) -> NDArray[np.float64]:
     """Compute log(F(b) − F(a)) in a numerically stable way.
 
     Requires b >= a element-wise.
@@ -123,7 +123,7 @@ def _log_diff_ndtr(a: NDArray, b: NDArray, dist=norm) -> NDArray:
     narrow = dist.logpdf(mid) + np.log(width)
 
     # Use fallback when ratio > -1e-6  (i.e. F(a)/F(b) > 1-1e-6)
-    return np.where(ratio < -1e-6, wide, narrow)
+    return cast(NDArray[np.float64], np.where(ratio < -1e-6, wide, narrow))
 
 
 # ---------------------------------------------------------------------------
@@ -131,22 +131,22 @@ def _log_diff_ndtr(a: NDArray, b: NDArray, dist=norm) -> NDArray:
 # ---------------------------------------------------------------------------
 
 def _split_theta(
-    theta: NDArray, p: int, X: Optional[NDArray]
-) -> tuple[NDArray, Optional[NDArray]]:
+    theta: NDArray[np.float64], p: int, X: Optional[NDArray[np.float64]]
+) -> tuple[NDArray[np.float64], Optional[NDArray[np.float64]]]:
     """Return (theta_b, beta) where theta_b has length p."""
     theta_b = theta[:p]
     beta    = theta[p:] if X is not None else None
     return theta_b, beta
 
 
-def _shift(h: NDArray, X: Optional[NDArray], beta: Optional[NDArray]) -> NDArray:
+def _shift(h: NDArray[np.float64], X: Optional[NDArray[np.float64]], beta: Optional[NDArray[np.float64]]) -> NDArray[np.float64]:
     """Add regression shift X @ beta to h if X is provided."""
     if X is not None and beta is not None:
         return h + X @ beta
     return h
 
 
-def _neg_score(h: NDArray, dist) -> NDArray:
+def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     """Compute -(∂ log f(h) / ∂h) for the base distribution.
 
     This is the contribution of exact observations to ∂(-ℓ)/∂θ_b
@@ -157,7 +157,7 @@ def _neg_score(h: NDArray, dist) -> NDArray:
     """
     if dist is norm:
         return h
-    return 2.0 * dist.cdf(h) - 1.0
+    return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -165,11 +165,11 @@ def _neg_score(h: NDArray, dist) -> NDArray:
 # ---------------------------------------------------------------------------
 
 def _ll_none(
-    y: NDArray,
-    theta: NDArray,
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
 ) -> float:
     """ℓ = Σ [log f(h_i) + log h'_i]  (exact observations)."""
     p = basis.order + 1
@@ -188,10 +188,10 @@ def _ll_none(
 
 def _ll_right(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
 ) -> float:
     """ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F̄(h)."""
     p = basis.order + 1
@@ -221,10 +221,10 @@ def _ll_right(
 
 def _ll_left(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
 ) -> float:
     """ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F(h)."""
     p = basis.order + 1
@@ -255,10 +255,10 @@ def _ll_left(
 
 def _ll_interval(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
 ) -> float:
     """ℓ = Σ log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
     p = basis.order + 1
@@ -296,12 +296,12 @@ def _ll_interval(
 # ---------------------------------------------------------------------------
 
 def _grad_none(
-    y: NDArray,
-    theta: NDArray,
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
-) -> NDArray:
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
+) -> NDArray[np.float64]:
     """∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
@@ -316,17 +316,17 @@ def _grad_none(
 
     if X is not None and beta is not None:
         grad_beta = X.T @ ns
-        return np.concatenate([grad_b, grad_beta])
-    return grad_b
+        return cast(NDArray[np.float64], np.concatenate([grad_b, grad_beta]))
+    return cast(NDArray[np.float64], grad_b)
 
 
 def _grad_right(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
-) -> NDArray:
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
+) -> NDArray[np.float64]:
     """Gradient of -ℓ for right-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
@@ -358,16 +358,16 @@ def _grad_right(
         if X_c is not None:
             grad[p:] += X_c.T @ hazard
 
-    return grad
+    return cast(NDArray[np.float64], grad)
 
 
 def _grad_left(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
-) -> NDArray:
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
+) -> NDArray[np.float64]:
     """Gradient of -ℓ for left-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
@@ -400,16 +400,16 @@ def _grad_left(
         if X_c is not None:
             grad[p:] -= X_c.T @ inv_mills
 
-    return grad
+    return cast(NDArray[np.float64], grad)
 
 
 def _grad_interval(
     cd: CensoredData,
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray],
-    dist=norm,
-) -> NDArray:
+    X: Optional[NDArray[np.float64]],
+    dist: Any = norm,
+) -> NDArray[np.float64]:
     """Gradient of -ℓ for interval-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
@@ -448,7 +448,7 @@ def _grad_interval(
         if X_i is not None:
             grad[p:] -= X_i.T @ (w_hi - w_lo)
 
-    return grad
+    return cast(NDArray[np.float64], grad)
 
 
 # ---------------------------------------------------------------------------
@@ -456,10 +456,10 @@ def _grad_interval(
 # ---------------------------------------------------------------------------
 
 def log_likelihood(
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    y: NDArray | CensoredData,
-    X: Optional[NDArray] = None,
+    y: NDArray[np.float64] | CensoredData,
+    X: Optional[NDArray[np.float64]] = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: Literal["normal", "logistic"] = "normal",
 ) -> float:
@@ -521,14 +521,14 @@ def log_likelihood(
 
 
 def negative_log_likelihood(
-    theta: NDArray,
+    theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    y: NDArray | CensoredData,
-    X: Optional[NDArray] = None,
+    y: NDArray[np.float64] | CensoredData,
+    X: Optional[NDArray[np.float64]] = None,
     censoring: CensoringType = CensoringType.NONE,
     gradient: bool = False,
     base_distribution: Literal["normal", "logistic"] = "normal",
-) -> float | tuple[float, NDArray]:
+) -> float | tuple[float, NDArray[np.float64]]:
     """Negative log-likelihood (objective for minimisation) with optional gradient.
 
     Parameters

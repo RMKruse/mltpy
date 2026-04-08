@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -40,7 +40,7 @@ class MonotonicityConstraint:
     """
 
     n_params: int
-    _D: NDArray = field(init=False, repr=False)
+    _D: NDArray[np.float64] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.n_params < 2:
@@ -50,11 +50,11 @@ class MonotonicityConstraint:
 
     # ------------------------------------------------------------------
 
-    def as_matrix(self) -> NDArray:
+    def as_matrix(self) -> NDArray[np.float64]:
         """Return the (n_params-1, n_params) difference matrix D."""
-        return self._D.copy()
+        return cast(NDArray[np.float64], self._D.copy())
 
-    def as_scipy_constraint(self) -> dict:
+    def as_scipy_constraint(self) -> dict[str, Any]:
         """Return an SLSQP-compatible constraint dict.
 
         ``fun(theta)`` returns the vector ``D @ theta``; each element must
@@ -99,17 +99,17 @@ class BoundaryConstraint:
     n_params: int
     lower: Optional[float]
     upper: Optional[float]
-    _A: NDArray = field(init=False, repr=False)
-    _rhs: NDArray = field(init=False, repr=False)
-    _jacs: list[NDArray] = field(init=False, repr=False)
+    _A: NDArray[np.float64] = field(init=False, repr=False)
+    _rhs: NDArray[np.float64] = field(init=False, repr=False)
+    _jacs: list[NDArray[np.float64]] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.lower is None and self.upper is None:
             raise ValueError("At least one of lower or upper must be provided")
 
-        rows: list[NDArray] = []
+        rows: list[NDArray[np.float64]] = []
         rhs: list[float] = []
-        jacs: list[NDArray] = []
+        jacs: list[NDArray[np.float64]] = []
 
         e0 = np.eye(self.n_params)[0]
         e_last = np.eye(self.n_params)[-1]
@@ -130,12 +130,12 @@ class BoundaryConstraint:
 
     # ------------------------------------------------------------------
 
-    def as_scipy_constraint(self) -> list[dict]:
+    def as_scipy_constraint(self) -> list[dict[str, Any]]:
         """Return SLSQP-compatible equality constraint dicts.
 
         Returns one dict per active boundary (one or two elements).
         """
-        constraints: list[dict] = []
+        constraints: list[dict[str, Any]] = []
         idx = 0
         if self.lower is not None:
             lo = self.lower
@@ -174,7 +174,7 @@ def build_constraints(
     upper: Optional[float] = None,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
     total_params: Optional[int] = None,
-) -> list[dict] | list[LinearConstraint]:
+) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
     Always includes the monotonicity constraint (non-decreasing ``theta``).
@@ -217,7 +217,7 @@ def build_constraints(
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
     if solver == "slsqp":
-        result: list[dict] = [{
+        result: list[dict[str, Any]] = [{
             "type": "ineq",
             "fun": lambda theta, _D=D: _D @ theta,
             "jac": lambda theta, _D=D: _D,

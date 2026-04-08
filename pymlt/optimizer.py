@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Any, Callable, Literal, Optional, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -81,7 +81,7 @@ class OptimizationResult:
         scipy's ``result.message`` from the best attempt, unchanged.
     """
 
-    theta: NDArray
+    theta: NDArray[np.float64]
     log_likelihood: float
     converged: bool
     n_iter: int
@@ -93,7 +93,7 @@ class OptimizationResult:
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _project_to_feasible(theta_b: NDArray) -> NDArray:
+def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     """Project an arbitrary vector to the monotone-non-decreasing cone.
 
     Uses the simplest valid projection: ``np.sort``.  The result satisfies
@@ -108,17 +108,17 @@ def _project_to_feasible(theta_b: NDArray) -> NDArray:
     -------
     NDArray of length p, sorted ascending.
     """
-    return np.sort(theta_b)
+    return cast(NDArray[np.float64], np.sort(theta_b))
 
 
 def _make_objective(
     basis: BernsteinBasis,
-    y: NDArray | CensoredData,
-    X: Optional[NDArray],
+    y: NDArray[np.float64] | CensoredData,
+    X: Optional[NDArray[np.float64]],
     censoring: CensoringType,
     use_gradient: bool,
     base_distribution: Literal["normal", "logistic"] = "normal",
-):
+) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
     When ``use_gradient=True`` the closure returns ``(nll, grad)`` and
@@ -131,7 +131,7 @@ def _make_objective(
     _BIG = 1e10
 
     if use_gradient:
-        def obj(theta: NDArray):
+        def obj(theta: NDArray[np.float64]) -> Any:
             try:
                 return negative_log_likelihood(
                     theta, basis, y, X, censoring, gradient=True,
@@ -140,7 +140,7 @@ def _make_objective(
             except ValueError:
                 return _BIG, np.zeros_like(theta)
     else:
-        def obj(theta: NDArray):
+        def obj(theta: NDArray[np.float64]) -> Any:
             try:
                 return negative_log_likelihood(
                     theta, basis, y, X, censoring, gradient=False,
@@ -152,14 +152,14 @@ def _make_objective(
     return obj
 
 
-def _scipy_options(config: OptimizerConfig) -> dict:
+def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
     """Build the ``options`` dict for the chosen solver."""
     if config.solver == "slsqp":
         return {"maxiter": config.max_iter, "ftol": config.tol}
     return {"maxiter": config.max_iter, "gtol": config.tol}
 
 
-def _initial_theta(n_params: int, X: Optional[NDArray]) -> NDArray:
+def _initial_theta(n_params: int, X: Optional[NDArray[np.float64]]) -> NDArray[np.float64]:
     """Default starting point: linearly spaced basis coefficients + zero beta.
 
     ``np.linspace(0, 1, n_params)`` is non-decreasing by construction, so it
@@ -168,21 +168,21 @@ def _initial_theta(n_params: int, X: Optional[NDArray]) -> NDArray:
     theta_b = np.linspace(0.0, 1.0, n_params)
     if X is not None:
         beta = np.zeros(X.shape[1])
-        return np.concatenate([theta_b, beta])
+        return cast(NDArray[np.float64], np.concatenate([theta_b, beta]))
     return theta_b
 
 
 def _perturb_and_project(
-    theta: NDArray,
+    theta: NDArray[np.float64],
     n_params: int,
     rng: np.random.Generator,
     scale: float = 0.1,
-) -> NDArray:
+) -> NDArray[np.float64]:
     """Perturb theta_basis, project back to feasible, keep beta unchanged."""
     theta_b = theta[:n_params] + rng.normal(0.0, scale, size=n_params)
     theta_b = _project_to_feasible(theta_b)
     if len(theta) > n_params:
-        return np.concatenate([theta_b, theta[n_params:]])
+        return cast(NDArray[np.float64], np.concatenate([theta_b, theta[n_params:]]))
     return theta_b
 
 
@@ -192,8 +192,8 @@ def _perturb_and_project(
 
 def optimize(
     basis: BernsteinBasis,
-    y: NDArray | CensoredData,
-    X: Optional[NDArray] = None,
+    y: NDArray[np.float64] | CensoredData,
+    X: Optional[NDArray[np.float64]] = None,
     censoring: CensoringType = CensoringType.NONE,
     config: Optional[OptimizerConfig] = None,
     base_distribution: Literal["normal", "logistic"] = "normal",
@@ -286,12 +286,13 @@ def optimize(
 
     if best_scipy_result is None:
         # All attempts raised exceptions — return the initial point as fallback
+        _nll = cast(float, negative_log_likelihood(
+            theta_init, basis, y, X, censoring,
+            base_distribution=base_distribution,
+        ))
         return OptimizationResult(
             theta=theta_init,
-            log_likelihood=float(-negative_log_likelihood(
-                theta_init, basis, y, X, censoring,
-                base_distribution=base_distribution,
-            )),
+            log_likelihood=float(-_nll),
             converged=False,
             n_iter=0,
             n_restarts=n_restarts_used,
