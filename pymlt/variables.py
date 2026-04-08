@@ -173,7 +173,7 @@ class CensoredData:
 
     @classmethod
     def right_censored(
-        cls, y: NDArray[np.float64], censored: NDArray[np.float64]
+        cls, y: NDArray[np.float64], censored: NDArray[np.bool_]
     ) -> CensoredData:
         """Right-censored data.
 
@@ -196,7 +196,7 @@ class CensoredData:
 
     @classmethod
     def left_censored(
-        cls, y: NDArray[np.float64], censored: NDArray[np.float64]
+        cls, y: NDArray[np.float64], censored: NDArray[np.bool_]
     ) -> CensoredData:
         """Left-censored data.
 
