@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from scipy.stats import logistic as _logistic, norm
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
 import pymlt
 from pymlt.model import MLT
-from pymlt.tram import BoxCox, Coxph, Colr, _TramModel
+from pymlt.tram import BoxCox, Colr, Coxph, _TramModel
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -401,11 +401,13 @@ class TestPlot:
         assert len(ax2.lines) > 0, "density axis has no lines"
         plt.close(fig)
 
-    def test_plot_single_axes_raises_type_error(self):
+    def test_plot_single_axes_plots_cdf_only(self):
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots()
-        with pytest.raises(TypeError, match="2-tuple"):
-            self.model.plot(self.y, ax=ax)
+        ret = self.model.plot(self.y, ax=ax)
+        assert ret is ax
+        assert len(ax.lines) == 1
+        assert "CDF" in ax.get_title()
         plt.close(fig)
 
     def test_plot_one_tuple_raises_type_error(self):
