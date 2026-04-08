@@ -161,10 +161,20 @@ def test_compare_results_pass() -> None:
     assert result.failure_reason is None
 
 
-def test_compare_results_fail_theta() -> None:
-    """Δθ=0.06 > TOL_THETA=0.05 — must fail with theta in reason."""
+def test_compare_results_theta_nonidentifiable() -> None:
+    """Δθ=0.06 > TOL_THETA but ll/cdf match — passes (non-identifiable)."""
     ref = _make_ref()
     fit = _make_fit(ref, theta_offset=0.06)
+    result = compare_results(ref, fit)
+    assert result.passed is True
+    assert result.failure_reason is not None
+    assert "non-identifiable" in result.failure_reason
+
+
+def test_compare_results_fail_theta_with_cdf() -> None:
+    """Δθ=0.06 AND Δcdf=0.03 — must fail (not just non-identifiable)."""
+    ref = _make_ref()
+    fit = _make_fit(ref, theta_offset=0.06, cdf_offset=0.03)
     result = compare_results(ref, fit)
     assert result.passed is False
     assert result.failure_reason is not None
