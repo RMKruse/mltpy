@@ -32,6 +32,9 @@ Thumbs.db
 # --- Sensible Daten ---
 .env
 
+# --- Validation (generated from CSV, not committed) ---
+validation/references/**/*.npy
+
 # --- dot files ---
 .hypothesis/
 .claude/
