@@ -10,7 +10,7 @@ restart mechanism in ``mlt()``.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, cast
 
 import numpy as np
@@ -19,9 +19,8 @@ from scipy.optimize import minimize
 
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import build_constraints
-from pymlt.likelihood import negative_log_likelihood, _get_dist
+from pymlt.likelihood import _get_dist, negative_log_likelihood
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
@@ -112,7 +111,7 @@ def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     return cast(NDArray[np.float64], np.sort(theta_b))
 
 
-    def _make_objective(
+def _make_objective(
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,

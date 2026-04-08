@@ -37,14 +37,16 @@ Numerical stability
 - log(F(b) − F(a)) uses a logsumexp trick with a Taylor fallback for
   very narrow intervals (see _log_diff_ndtr).
 """
+
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import log_ndtr
-from scipy.stats import norm, logistic as _logistic
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
 from pymlt.basis import BernsteinBasis
 from pymlt.variables import CensoredData, CensoringType
@@ -70,6 +72,7 @@ def _get_dist(base_distribution: str) -> Any:
         f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
     )
 
+
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
@@ -78,7 +81,10 @@ _H_CLIP = 30.0
 # Numerically stable log(F(b) − F(a))
 # ---------------------------------------------------------------------------
 
-def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = norm) -> NDArray[np.float64]:
+
+def _log_diff_ndtr(
+    a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = norm
+) -> NDArray[np.float64]:
     """Compute log(F(b) − F(a)) in a numerically stable way.
 
     Requires b >= a element-wise.
@@ -108,12 +114,12 @@ def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = n
 
     Notes
     -----
-    Computing `log(F(b) - F(a))` directly can lead to catastrophic cancellation when `F(b) ≈ F(a)`, 
+    Computing `log(F(b) - F(a))` directly can lead to catastrophic cancellation when `F(b) ≈ F(a)`,
     resulting in `log(0) = -inf`. This function uses a piecewise approach:
-    
+
     1. For **wide intervals** (`log(F(a)) - log(F(b)) < -1e-6`), it uses the logsumexp trick:
        `log(F(b)) + log1p(-exp(log(F(a)) - log(F(b))))`
-    
+
     2. For **narrow intervals** (`log(F(a)) - log(F(b)) >= -1e-6`), it uses a first-order Taylor approximation
        around the midpoint `mid = (a + b) / 2` to avoid evaluating identical CDFs:
        `F(b) - F(a) ≈ f(mid) * (b - a)`
@@ -126,16 +132,16 @@ def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = n
     # Use log_ndtr for normal (more stable at extreme values); dist.logcdf otherwise
     _logcdf = log_ndtr if dist is norm else dist.logcdf
 
-    log_Fa = _logcdf(a)         # log F(a)
-    log_Fb = _logcdf(b)         # log F(b)
-    ratio  = log_Fa - log_Fb    # <= 0  (since a <= b)
+    log_Fa = _logcdf(a)  # log F(a)
+    log_Fb = _logcdf(b)  # log F(b)
+    ratio = log_Fa - log_Fb  # <= 0  (since a <= b)
 
     # Wide-interval path: ratio well below 0 → log1p stable
     ratio_safe = np.minimum(ratio, -1e-15)
     wide = log_Fb + np.log1p(-np.exp(ratio_safe))
 
     # Narrow-interval fallback: F(b)-F(a) ≈ f(mid)·(b−a)
-    mid   = 0.5 * (a + b)
+    mid = 0.5 * (a + b)
     width = np.maximum(b - a, np.finfo(float).tiny)
     narrow = dist.logpdf(mid) + np.log(width)
 
@@ -146,6 +152,7 @@ def _log_diff_ndtr(a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = n
 # ---------------------------------------------------------------------------
 # Helpers: split theta, apply shift, compute score
 # ---------------------------------------------------------------------------
+
 
 def _split_theta(
     theta: NDArray[np.float64], p: int, X: NDArray[np.float64] | None
@@ -169,12 +176,14 @@ def _split_theta(
         and `beta` is the vector of regression coefficients (if `X` is provided).
     """
     theta_b = theta[:p]
-    beta    = theta[p:] if X is not None else None
+    beta = theta[p:] if X is not None else None
     return theta_b, beta
 
 
 def _shift(
-    h: NDArray[np.float64], X: NDArray[np.float64] | None, beta: NDArray[np.float64] | None
+    h: NDArray[np.float64],
+    X: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
 ) -> NDArray[np.float64]:
     """Add regression shift X @ beta to the baseline transformation h.
 
@@ -223,11 +232,12 @@ def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
 # Private log-likelihood functions — one per censoring type
 # ---------------------------------------------------------------------------
 
+
 def _ll_none(
     y: NDArray[np.float64],
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> float:
     """Computes the log-likelihood for exactly observed (uncensored) data.
@@ -257,10 +267,10 @@ def _ll_none(
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
-    B  = basis.evaluate(y)              # (n, p)
-    D  = basis.derivative(y, order=1)   # (n, p)
-    h  = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
-    hp = D @ theta_b                    # h-prime; must be > 0
+    B = basis.evaluate(y)  # (n, p)
+    D = basis.derivative(y, order=1)  # (n, p)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    hp = D @ theta_b  # h-prime; must be > 0
 
     with np.errstate(invalid="ignore", divide="ignore"):
         # np.log(hp) produces -inf/nan when hp <= 0 (monotonicity violated).
@@ -272,7 +282,7 @@ def _ll_right(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> float:
     """Computes the log-likelihood for right-censored data.
@@ -310,13 +320,13 @@ def _ll_right(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll  += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
-        y_c = cd.lower[mask_c]          # last known lower bound
+        y_c = cd.lower[mask_c]  # last known lower bound
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
@@ -329,7 +339,7 @@ def _ll_left(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> float:
     """Computes the log-likelihood for left-censored data.
@@ -366,13 +376,13 @@ def _ll_left(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll  += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
-        y_c = cd.upper[mask_c]          # last known upper bound
+        y_c = cd.upper[mask_c]  # last known upper bound
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
@@ -386,7 +396,7 @@ def _ll_interval(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> float:
     """ℓ = Σ log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
@@ -400,9 +410,9 @@ def _ll_interval(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll  += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
@@ -424,23 +434,24 @@ def _ll_interval(
 # (all return gradient of the NEGATIVE log-likelihood)
 # ---------------------------------------------------------------------------
 
+
 def _grad_none(
     y: NDArray[np.float64],
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> NDArray[np.float64]:
     """∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
-    B  = basis.evaluate(y)              # (n, p)
-    D  = basis.derivative(y, order=1)   # (n, p)
-    h  = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    B = basis.evaluate(y)  # (n, p)
+    D = basis.derivative(y, order=1)  # (n, p)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
     hp = D @ theta_b
 
-    ns = _neg_score(h, dist)            # -(∂ log f(h)/∂h)
+    ns = _neg_score(h, dist)  # -(∂ log f(h)/∂h)
     grad_b = B.T @ ns - D.T @ (1.0 / hp)
 
     if X is not None and beta is not None:
@@ -453,7 +464,7 @@ def _grad_right(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for right-censored data."""
@@ -468,7 +479,7 @@ def _grad_right(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
@@ -494,7 +505,7 @@ def _grad_left(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for left-censored data."""
@@ -509,7 +520,7 @@ def _grad_left(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
@@ -536,7 +547,7 @@ def _grad_interval(
     cd: CensoredData,
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
-    X: Optional[NDArray[np.float64]],
+    X: NDArray[np.float64] | None,
     dist: Any = norm,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for interval-censored data."""
@@ -551,7 +562,7 @@ def _grad_interval(
         X_e = X[mask_e] if X is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e  = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
@@ -569,9 +580,9 @@ def _grad_interval(
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
-        log_p  = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        w_hi   = np.exp(dist.logpdf(h_hi) - log_p)
-        w_lo   = np.exp(dist.logpdf(h_lo) - log_p)
+        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+        w_lo = np.exp(dist.logpdf(h_lo) - log_p)
 
         grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
         if X_i is not None:
@@ -584,11 +595,12 @@ def _grad_interval(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def log_likelihood(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
-    X: Optional[NDArray[np.float64]] = None,
+    X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: Literal["normal", "logistic"] = "normal",
 ) -> float:
@@ -653,7 +665,7 @@ def negative_log_likelihood(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
-    X: Optional[NDArray[np.float64]] = None,
+    X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     gradient: bool = False,
     base_distribution: Literal["normal", "logistic"] = "normal",
@@ -676,8 +688,9 @@ def negative_log_likelihood(
     float  when ``gradient=False``
     (float, NDArray)  when ``gradient=True``
     """
-    nll = -log_likelihood(theta, basis, y, X, censoring,
-                          base_distribution=base_distribution)
+    nll = -log_likelihood(
+        theta, basis, y, X, censoring, base_distribution=base_distribution
+    )
 
     if not gradient:
         return nll

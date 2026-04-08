@@ -1,9 +1,10 @@
 """Variable types and censoring classes for conditional transformation models."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, cast
+from typing import cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -11,10 +12,11 @@ from numpy.typing import NDArray
 
 class CensoringType(Enum):
     """Censoring regime for a dataset passed to the log-likelihood."""
-    NONE     = auto()   # exact observations
-    LEFT     = auto()   # left-censored:   actual value < observed threshold
-    RIGHT    = auto()   # right-censored:  actual value > observed threshold
-    INTERVAL = auto()   # interval-censored: lower <= actual value <= upper
+
+    NONE = auto()  # exact observations
+    LEFT = auto()  # left-censored:   actual value < observed threshold
+    RIGHT = auto()  # right-censored:  actual value > observed threshold
+    INTERVAL = auto()  # interval-censored: lower <= actual value <= upper
 
 
 @dataclass
@@ -37,18 +39,14 @@ class NumericVariable:
 
     name: str
     support: tuple[float, float]
-    bounds: Optional[tuple[float, float]] = None
+    bounds: tuple[float, float] | None = None
     log_first: bool = False
 
     def __post_init__(self) -> None:
         if self.support[0] >= self.support[1]:
-            raise ValueError(
-                f"support must satisfy a < b, got {self.support}"
-            )
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
         if self.bounds is not None and self.bounds[0] >= self.bounds[1]:
-            raise ValueError(
-                f"bounds must satisfy a < b, got {self.bounds}"
-            )
+            raise ValueError(f"bounds must satisfy a < b, got {self.bounds}")
 
 
 @dataclass
@@ -101,9 +99,7 @@ class SurvivalVariable:
                 f"SurvivalVariable support must start at >= 0, got {self.support[0]}"
             )
         if self.support[0] >= self.support[1]:
-            raise ValueError(
-                f"support must satisfy a < b, got {self.support}"
-            )
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
 
 
 @dataclass
@@ -137,8 +133,8 @@ class CensoredData:
     exact: NDArray[np.float64]
     lower: NDArray[np.float64]
     upper: NDArray[np.float64]
-    trunc_lower: Optional[NDArray[np.float64]] = None
-    trunc_upper: Optional[NDArray[np.float64]] = None
+    trunc_lower: NDArray[np.float64] | None = None
+    trunc_upper: NDArray[np.float64] | None = None
 
     def __post_init__(self) -> None:
         self.exact = np.asarray(self.exact, dtype=float)
@@ -147,9 +143,7 @@ class CensoredData:
 
         n = len(self.exact)
         if len(self.lower) != n or len(self.upper) != n:
-            raise ValueError(
-                "exact, lower, and upper must all have the same length"
-            )
+            raise ValueError("exact, lower, and upper must all have the same length")
         if np.any(self.lower > self.upper):
             raise ValueError("lower must be <= upper for every observation")
         if self.trunc_lower is not None:
@@ -246,29 +240,17 @@ class CensoredData:
     @property
     def is_right_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is right-censored."""
-        return (
-            np.isnan(self.exact)
-            & np.isfinite(self.lower)
-            & ~np.isfinite(self.upper)
-        )
+        return np.isnan(self.exact) & np.isfinite(self.lower) & ~np.isfinite(self.upper)
 
     @property
     def is_left_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is left-censored."""
-        return (
-            np.isnan(self.exact)
-            & ~np.isfinite(self.lower)
-            & np.isfinite(self.upper)
-        )
+        return np.isnan(self.exact) & ~np.isfinite(self.lower) & np.isfinite(self.upper)
 
     @property
     def is_interval_censored_mask(self) -> NDArray[np.bool_]:
         """Boolean mask: True where observation is interval-censored."""
-        return (
-            np.isnan(self.exact)
-            & np.isfinite(self.lower)
-            & np.isfinite(self.upper)
-        )
+        return np.isnan(self.exact) & np.isfinite(self.lower) & np.isfinite(self.upper)
 
     @property
     def n_exact(self) -> int:

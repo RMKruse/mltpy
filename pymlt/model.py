@@ -14,6 +14,7 @@ ConditionalTransformationModel
 MLT
     Most Likely Transformation — convenience subclass with sensible defaults.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -24,14 +25,14 @@ from numpy.typing import NDArray
 from scipy.optimize import brentq
 
 from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import log_likelihood, _get_dist
-from pymlt.optimizer import OptimizerConfig, OptimizationResult, optimize
+from pymlt.likelihood import _get_dist, log_likelihood
+from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Exceptions and warnings
 # ---------------------------------------------------------------------------
+
 
 class NotFittedError(ValueError):
     """Raised when a method that requires a fitted model is called before fit()."""
@@ -54,6 +55,7 @@ _BRENTQ_EPS = 1e-10
 # ---------------------------------------------------------------------------
 # ConditionalTransformationModel
 # ---------------------------------------------------------------------------
+
 
 class ConditionalTransformationModel:
     """Base class for conditional transformation models.
@@ -110,9 +112,7 @@ class ConditionalTransformationModel:
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
         if not self.is_fitted_:
-            raise NotFittedError(
-                "Modell wurde noch nicht gefittet. Rufe fit(y) auf."
-            )
+            raise NotFittedError("Modell wurde noch nicht gefittet. Rufe fit(y) auf.")
 
     def _validate_input(
         self,
@@ -283,13 +283,12 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.theta_ is None:
-            raise RuntimeError("Modellparameter (theta_) fehlen unerwartet nach dem Fitten.")
+            raise RuntimeError(
+                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+            )
 
         if what not in _VALID_WHAT:
-            raise ValueError(
-                f"what={what!r} ist ungültig. "
-                f"Erlaubt: {_VALID_WHAT}"
-            )
+            raise ValueError(f"what={what!r} ist ungültig. Erlaubt: {_VALID_WHAT}")
 
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
@@ -312,10 +311,10 @@ class ConditionalTransformationModel:
                 )
 
         # Evaluate transformation and its derivative
-        B  = self.basis.evaluate(y_arr)           # (m, p)
-        D  = self.basis.derivative(y_arr, order=1)  # (m, p)
-        h  = B @ theta_b                           # (m,)
-        hp = D @ theta_b                           # (m,)
+        B = self.basis.evaluate(y_arr)  # (m, p)
+        D = self.basis.derivative(y_arr, order=1)  # (m, p)
+        h = B @ theta_b  # (m,)
+        hp = D @ theta_b  # (m,)
 
         if X_arr is not None and len(self.theta_) > p:
             beta = self.theta_[p:]
@@ -327,7 +326,9 @@ class ConditionalTransformationModel:
         elif what == "density":
             return cast(NDArray[np.float64], dist.pdf(h) * np.maximum(hp, 0.0))
         else:  # hazard
-            return cast(NDArray[np.float64], dist.pdf(h) / np.maximum(dist.sf(h), 1e-300))
+            return cast(
+                NDArray[np.float64], dist.pdf(h) / np.maximum(dist.sf(h), 1e-300)
+            )
 
     def _predict_quantile(
         self, probs: NDArray[np.float64], theta_b: NDArray[np.float64]
@@ -350,7 +351,7 @@ class ConditionalTransformationModel:
         """
         a, b = self.basis.support
         # Clip z into the range that brentq can bracket
-        z_min = float(theta_b[0])  + _BRENTQ_EPS
+        z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
         def _h_scalar(q: float) -> float:
@@ -362,7 +363,8 @@ class ConditionalTransformationModel:
             z = float(np.clip(dist.ppf(p), z_min, z_max))
             quantiles[i] = brentq(
                 lambda q, z=z: _h_scalar(q) - z,
-                a, b,
+                a,
+                b,
                 xtol=1e-6,
                 full_output=False,
             )
@@ -395,10 +397,16 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.theta_ is None:
-            raise RuntimeError("Modellparameter (theta_) fehlen unerwartet nach dem Fitten.")
+            raise RuntimeError(
+                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+            )
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
-            self.theta_, self.basis, y_clean, X_clean, self.censoring,
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            self.censoring,
             base_distribution=self.base_distribution,
         )
 
@@ -448,7 +456,9 @@ class ConditionalTransformationModel:
         censoring = self.censoring.name
         if self.is_fitted_:
             if self.result_ is None:
-                raise RuntimeError("Ergebnis (result_) fehlt unerwartet nach dem Fitten.")
+                raise RuntimeError(
+                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                )
             ll = self.result_.log_likelihood
             return (
                 f"{name}(order={order}, censoring={censoring}, "
@@ -460,6 +470,7 @@ class ConditionalTransformationModel:
 # ---------------------------------------------------------------------------
 # MLT — convenience subclass
 # ---------------------------------------------------------------------------
+
 
 class MLT(ConditionalTransformationModel):
     """Most Likely Transformation — convenience interface.
@@ -508,7 +519,9 @@ class MLT(ConditionalTransformationModel):
         censoring = self.censoring.name
         if self.is_fitted_:
             if self.result_ is None:
-                raise RuntimeError("Ergebnis (result_) fehlt unerwartet nach dem Fitten.")
+                raise RuntimeError(
+                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                )
             ll = self.result_.log_likelihood
             return (
                 f"MLT(order={self._order}, support={self._support}, "

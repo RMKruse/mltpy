@@ -1,4 +1,5 @@
 """Bernstein polynomial basis and analytical derivatives for transformation models."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,10 +9,10 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.special import betainc, comb
 
-
 # ---------------------------------------------------------------------------
 # Private helper
 # ---------------------------------------------------------------------------
+
 
 def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     """Evaluate the (n, k+1) Bernstein basis matrix at normalised t ∈ [0, 1].
@@ -34,15 +35,18 @@ def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     NDArray of shape (n, k+1).
     """
     t = np.asarray(t, dtype=float)
-    i = np.arange(k + 1, dtype=float)               # shape (k+1,)
-    binom = comb(k, i, exact=False)                  # shape (k+1,)
+    i = np.arange(k + 1, dtype=float)  # shape (k+1,)
+    binom = comb(k, i, exact=False)  # shape (k+1,)
     # Broadcasting: t[:, None] × i[None, :] → (n, k+1)
-    return cast(NDArray[np.float64], binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i))
+    return cast(
+        NDArray[np.float64], binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i)
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public class
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BernsteinBasis:
@@ -166,9 +170,9 @@ class BernsteinBasis:
         a, b = self.support
         t = np.clip((np.asarray(y, dtype=float).ravel() - a) / (b - a), 0.0, 1.0)
 
-        i = np.arange(k + 1)                         # shape (k+1,)
-        a_param = (i + 1).astype(float)              # shape (k+1,)
-        b_param = (k - i + 1).astype(float)          # shape (k+1,)
+        i = np.arange(k + 1)  # shape (k+1,)
+        a_param = (i + 1).astype(float)  # shape (k+1,)
+        b_param = (k - i + 1).astype(float)  # shape (k+1,)
 
         # betainc is vectorised over all arguments via broadcasting
         # t[:, None]: (n, 1),  a_param/b_param: (k+1,)  →  result: (n, k+1)
@@ -180,7 +184,10 @@ class BernsteinBasis:
 # Module-level convenience function
 # ---------------------------------------------------------------------------
 
-def monotone_trafo(theta: NDArray[np.float64], basis_matrix: NDArray[np.float64]) -> NDArray[np.float64]:
+
+def monotone_trafo(
+    theta: NDArray[np.float64], basis_matrix: NDArray[np.float64]
+) -> NDArray[np.float64]:
     """Evaluate the transformation h(y) = basis_matrix @ theta.
 
     Monotone iff `theta` is non-decreasing.  This function does **not**

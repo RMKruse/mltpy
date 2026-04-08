@@ -1,17 +1,18 @@
 """Linear constraints for monotone Bernstein coefficient optimisation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint
 
-
 # ---------------------------------------------------------------------------
 # Monotonicity constraint
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MonotonicityConstraint:
@@ -77,6 +78,7 @@ class MonotonicityConstraint:
 # Boundary constraint
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class BoundaryConstraint:
     """Fix one or both boundary coefficients of the Bernstein expansion.
@@ -97,8 +99,8 @@ class BoundaryConstraint:
     """
 
     n_params: int
-    lower: Optional[float]
-    upper: Optional[float]
+    lower: float | None
+    upper: float | None
     _A: NDArray[np.float64] = field(init=False, repr=False)
     _rhs: NDArray[np.float64] = field(init=False, repr=False)
     _jacs: list[NDArray[np.float64]] = field(init=False, repr=False)
@@ -126,7 +128,7 @@ class BoundaryConstraint:
         # _A: shape (n_active, n_params); _rhs: shape (n_active,)
         self._A = np.array(rows)
         self._rhs = np.array(rhs)
-        self._jacs = jacs          # per-constraint row vectors (precomputed)
+        self._jacs = jacs  # per-constraint row vectors (precomputed)
 
     # ------------------------------------------------------------------
 
@@ -140,20 +142,24 @@ class BoundaryConstraint:
         if self.lower is not None:
             lo = self.lower
             jac_row = self._jacs[idx]
-            constraints.append({
-                "type": "eq",
-                "fun": lambda theta, lo=lo: theta[0] - lo,
-                "jac": lambda theta, j=jac_row: j,
-            })
+            constraints.append(
+                {
+                    "type": "eq",
+                    "fun": lambda theta, lo=lo: theta[0] - lo,
+                    "jac": lambda theta, j=jac_row: j,
+                }
+            )
             idx += 1
         if self.upper is not None:
             up = self.upper
             jac_row = self._jacs[idx]
-            constraints.append({
-                "type": "eq",
-                "fun": lambda theta, up=up: theta[-1] - up,
-                "jac": lambda theta, j=jac_row: j,
-            })
+            constraints.append(
+                {
+                    "type": "eq",
+                    "fun": lambda theta, up=up: theta[-1] - up,
+                    "jac": lambda theta, j=jac_row: j,
+                }
+            )
         return constraints
 
     def as_LinearConstraint(self) -> LinearConstraint:
@@ -168,12 +174,13 @@ class BoundaryConstraint:
 # Public builder
 # ---------------------------------------------------------------------------
 
+
 def build_constraints(
     n_params: int,
-    lower: Optional[float] = None,
-    upper: Optional[float] = None,
+    lower: float | None = None,
+    upper: float | None = None,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
-    total_params: Optional[int] = None,
+    total_params: int | None = None,
 ) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
@@ -217,11 +224,13 @@ def build_constraints(
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
     if solver == "slsqp":
-        result: list[dict[str, Any]] = [{
-            "type": "ineq",
-            "fun": lambda theta, _D=D: _D @ theta,
-            "jac": lambda theta, _D=D: _D,
-        }]
+        result: list[dict[str, Any]] = [
+            {
+                "type": "ineq",
+                "fun": lambda theta, _D=D: _D @ theta,
+                "jac": lambda theta, _D=D: _D,
+            }
+        ]
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
             result.extend(bc.as_scipy_constraint())

@@ -16,9 +16,10 @@ Coxph
 Colr
     Continuous outcome logistic regression — uses a logistic base distribution.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,6 +31,7 @@ from pymlt.variables import CensoringType
 # ---------------------------------------------------------------------------
 # Internal base class
 # ---------------------------------------------------------------------------
+
 
 class _TramModel(MLT):
     """Base class for all tram convenience models.
@@ -167,6 +169,7 @@ class _TramModel(MLT):
 # BoxCox
 # ---------------------------------------------------------------------------
 
+
 class BoxCox(_TramModel):
     """Box-Cox transformation model for continuous outcomes.
 
@@ -200,7 +203,7 @@ class BoxCox(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,
@@ -237,13 +240,14 @@ class BoxCox(_TramModel):
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
-        B = self.basis.evaluate(y_arr)   # (m, p)
+        B = self.basis.evaluate(y_arr)  # (m, p)
         return B @ theta_b
 
 
 # ---------------------------------------------------------------------------
 # Coxph
 # ---------------------------------------------------------------------------
+
 
 class Coxph(_TramModel):
     """Cox proportional hazards model for right-censored survival data.
@@ -281,7 +285,7 @@ class Coxph(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,
@@ -294,7 +298,7 @@ class Coxph(_TramModel):
     def survival(
         self,
         y: NDArray[np.float64],
-        X: Optional[NDArray[np.float64]] = None,
+        X: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the survival function S(y) = 1 − F(y|x).
 
@@ -319,7 +323,7 @@ class Coxph(_TramModel):
     def hazard(
         self,
         y: NDArray[np.float64],
-        X: Optional[NDArray[np.float64]] = None,
+        X: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
 
@@ -345,6 +349,7 @@ class Coxph(_TramModel):
 # ---------------------------------------------------------------------------
 # Colr
 # ---------------------------------------------------------------------------
+
 
 class Colr(_TramModel):
     """Continuous outcome logistic regression.
@@ -378,7 +383,7 @@ class Colr(_TramModel):
         self,
         support: tuple[float, float],
         order: int = 6,
-        optimizer_config: Optional[OptimizerConfig] = None,
+        optimizer_config: OptimizerConfig | None = None,
     ) -> None:
         super().__init__(
             order=order,
