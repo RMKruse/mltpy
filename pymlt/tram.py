@@ -27,7 +27,6 @@ from pymlt.model import MLT
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoringType
 
-
 # ---------------------------------------------------------------------------
 # Internal base class
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ class _TramModel(MLT):
             ]
         return "\n".join(lines)
 
-    def plot(self, y: NDArray[np.float64], ax: Any = None) -> list[Any]:
+    def plot(self, y: NDArray[np.float64], ax: Any = None) -> Any | list[Any]:
         """Plot the estimated CDF and density side by side.
 
         Parameters
@@ -91,13 +90,16 @@ class _TramModel(MLT):
             Response values at which to evaluate the model.  Must lie within
             ``basis.support``.
         ax:
-            Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``.
-            If ``None``, a new figure with two subplots is created automatically.
+            Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``,
+            or a single ``matplotlib.axes.Axes`` instance. If a single axes is
+            provided, only the CDF is plotted. If ``None``, a new figure with
+            two subplots is created automatically.
 
         Returns
         -------
-        list of matplotlib.axes.Axes
-            Always ``[ax_cdf, ax_pdf]``.
+        list of matplotlib.axes.Axes, or matplotlib.axes.Axes
+            Returns ``[ax_cdf, ax_pdf]`` if two panels are plotted, otherwise
+            returns the single ``ax_cdf``.
 
         Raises
         ------
@@ -106,7 +108,8 @@ class _TramModel(MLT):
         ImportError
             If matplotlib is not installed.
         TypeError
-            If ``ax`` is provided but cannot be unpacked into two axes.
+            If ``ax`` is provided but cannot be unpacked into two axes, nor used
+            as a single axes.
         """
         try:
             import matplotlib.pyplot as plt
@@ -127,10 +130,14 @@ class _TramModel(MLT):
             try:
                 ax_cdf, ax_pdf = ax
             except (TypeError, ValueError):
-                raise TypeError(
-                    "ax must be a 2-tuple (ax_cdf, ax_pdf); "
-                    "got a bare Axes or a sequence of the wrong length"
-                ) from None
+                # If we cannot unpack, assume it's a single Axes object
+                if hasattr(ax, "plot"):
+                    ax_cdf = ax
+                    ax_pdf = None
+                else:
+                    raise TypeError(
+                        "ax must be a 2-tuple (ax_cdf, ax_pdf) or a single Axes"
+                    ) from None
             fig = None
         else:
             fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
@@ -140,14 +147,17 @@ class _TramModel(MLT):
         ax_cdf.set_ylabel("F(y)")
         ax_cdf.set_title(f"{type(self).__name__} — CDF")
 
-        ax_pdf.plot(y_sorted, pdf)
-        ax_pdf.set_xlabel("y")
-        ax_pdf.set_ylabel("f(y)")
-        ax_pdf.set_title(f"{type(self).__name__} — Density")
+        if ax_pdf is not None:
+            ax_pdf.plot(y_sorted, pdf)
+            ax_pdf.set_xlabel("y")
+            ax_pdf.set_ylabel("f(y)")
+            ax_pdf.set_title(f"{type(self).__name__} — Density")
 
         if fig is not None:
             fig.tight_layout()
 
+        if ax_pdf is None:
+            return ax_cdf
         return [ax_cdf, ax_pdf]
 
 
