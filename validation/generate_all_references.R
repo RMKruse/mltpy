@@ -8,6 +8,7 @@
 # Then run:  python validation/convert_references.py   to create .npy files
 
 suppressPackageStartupMessages({
+  library(survival)
   library(mlt)
   library(basefun)
   library(variables)
@@ -80,7 +81,11 @@ save_reference <- function(path,
 predict_cdf_grid <- function(fit, var_name, grid) {
   nd <- data.frame(grid)
   names(nd) <- var_name
-  as.numeric(predict(fit, newdata = nd, type = "distribution"))
+  pred <- predict(fit, newdata = nd, type = "distribution")
+  # tram-derived mlt objects may return a matrix (grid × n_obs);
+  # for intercept-only models all columns are identical — take the first
+  if (is.matrix(pred)) pred <- pred[, 1]
+  as.numeric(pred)
 }
 
 # ---------------------------------------------------------------------------
@@ -343,10 +348,13 @@ generate_case_05 <- function(base_path) {
   fit <- BoxCox(y ~ 1, data = data.frame(y = y),
                 support = sup, order = ord)
 
-  theta <- coef(fit)
-  ll <- logLik(fit)
+  # as.mlt() extracts the underlying mlt object — coef() and predict() work
+  # identically to plain mlt fits (tram's own coef() returns only betas)
+  fit_mlt <- as.mlt(fit)
+  theta <- coef(fit_mlt)
+  ll <- logLik(fit_mlt)
   cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 10)
-  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
@@ -392,10 +400,12 @@ generate_case_06 <- function(base_path) {
   fit <- Coxph(Surv(y, status) ~ 1, data = dat,
                support = sup, order = ord)
 
-  theta <- coef(fit)
-  ll <- logLik(fit)
+  # as.mlt() for consistent coef()/predict() behavior (see case 05 comment)
+  fit_mlt <- as.mlt(fit)
+  theta <- coef(fit_mlt)
+  ll <- logLik(fit_mlt)
   cdf_grid <- seq(sup[1] + 0.4, sup[2] - 0.4, length.out = 10)
-  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
@@ -435,10 +445,12 @@ generate_case_07 <- function(base_path) {
   fit <- Colr(y ~ 1, data = data.frame(y = y),
               support = sup, order = ord)
 
-  theta <- coef(fit)
-  ll <- logLik(fit)
+  # as.mlt() for consistent coef()/predict() behavior (see case 05 comment)
+  fit_mlt <- as.mlt(fit)
+  theta <- coef(fit_mlt)
+  ll <- logLik(fit_mlt)
   cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 10)
-  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
