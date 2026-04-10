@@ -252,3 +252,15 @@ case_19_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0229 �
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Total: 27/29 passed (93.1%)
 ```
+
+### Failure Analysis
+
+Both failures involve right-censored survival data where the upper tail is poorly identified by the observed data. They differ in severity.
+
+**case_06 (Coxph) — different local minimum (Δll = 10.2)**
+
+This is a genuine different-basin problem. pymlt finds a *better* log-likelihood (-98.9 vs R's -109.1), meaning pymlt's SLSQP optimizer reaches a higher point on the likelihood surface than R's `alabama::auglag`. The theta vectors are structurally different: pymlt collapses coefficients 1–5 to identical values (2.753) while R keeps them flat at 2.996 but with a much higher final coefficient (4.95 vs 2.76). This likely traces back to the hazard clamping change (`np.minimum(hazard, _H_CLIP)`) in `_grad_right`, which altered the gradient landscape enough to steer the optimizer toward a different basin. pymlt may actually be finding the global optimum, but the validation framework treats R as ground truth.
+
+**case_16 (order=12 + right censoring) — over-parameterization non-identifiability (Δcdf = 0.0219)**
+
+This is non-identifiability caused by over-parameterization. With order=12 there are 13 Bernstein coefficients, but with ~40% right censoring the upper tail of the distribution is poorly informed by data. The upper coefficients are essentially unconstrained — only the monotonicity constraint bounds them. The Δθ = 1913 with Δll = 0.034 tells the story: radically different parameterizations sit on the same near-flat ridge of the likelihood surface. The CDF difference (0.0219) is borderline — just barely over the 0.02 threshold — and is concentrated in the region where censoring removes information. This is not a bug in either implementation; it is a fundamental statistical limitation of fitting a high-degree polynomial to censored data. Order=8 with the same data would likely pass because fewer coefficients means less room for non-identifiable directions.
