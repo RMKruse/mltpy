@@ -70,6 +70,7 @@ class ReferenceCase:
     quantile_values_r: NDArray[np.float64] | None = None
     hazard_grid: NDArray[np.float64] | None = None
     hazard_values_r: NDArray[np.float64] | None = None
+    base_distribution: str = "normal"
 
 
 @dataclass
@@ -169,6 +170,9 @@ def load_reference(case_dir: Path) -> ReferenceCase:
         kwargs["regression"] = True
         kwargs["n_covariates"] = meta.get("n_covariates", 0)
 
+    if "base_distribution" in meta:
+        kwargs["base_distribution"] = meta["base_distribution"]
+
     # Functional output references (optional)
     for name, field in [
         ("pdf_grid", "pdf_grid"),
@@ -248,6 +252,7 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
                 order=order,
                 support=support,
                 censoring=censoring_map[cens],
+                base_distribution=case.base_distribution,
             )
         else:
             print(f"  WARNING: unknown model '{model_name}'", file=sys.stderr)

@@ -748,6 +748,474 @@ generate_case_11 <- function(base_path) {
   list(converged = TRUE, loglik = as.numeric(ll))
 }
 
+# ---------------------------------------------------------------------------
+# Case 12: MLT / NONE + logistic base distribution, n=200, order=6
+# Support: (-1, 5), data from rlogis(n, 2, 0.5)
+# Tests standalone MLT with logistic base (only Colr uses it otherwise)
+# ---------------------------------------------------------------------------
+
+generate_case_12 <- function(base_path) {
+  seed <- 54
+  n <- 200
+  ord <- 6
+  sup <- c(-1, 5)
+  tag <- "case_12_mlt_200_6"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y <- rlogis(n, location = 2, scale = 0.5)
+  y <- pmin(pmax(y, sup[1] + 0.01), sup[2] - 0.01)
+
+  # MLT with logistic base distribution (todistr = "logistic")
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b, todistr = "Logistic")
+  fit <- mlt(mod, data = data.frame(y = y))
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y, theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    metadata = list(model = "mlt", censoring = "none",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    base_distribution = "logistic")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 13: MLT / RIGHT + covariates, n=200, order=6
+# Support: (0, 5), rexp(n, rate=2) + X %*% c(0.5, -0.3), ~30% censored
+# First combined covariate + censoring test
+# ---------------------------------------------------------------------------
+
+generate_case_13 <- function(base_path) {
+  seed <- 55
+  n <- 200
+  ord <- 6
+  sup <- c(0, 5)
+  tag <- "case_13_mlt_200_6"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  X <- matrix(rnorm(n * 2), ncol = 2)
+  colnames(X) <- c("x1", "x2")
+  beta_true <- c(0.5, -0.3)
+  y_latent <- rexp(n, rate = 2) + X %*% beta_true
+  y_latent <- as.numeric(y_latent)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # 30% censoring
+  cens_time <- runif(n, 0, quantile(y_latent, 0.7))
+  event <- y_latent <= cens_time
+  y_obs <- ifelse(event, y_latent, cens_time)
+  y_obs <- pmin(pmax(y_obs, sup[1] + 0.01), sup[2] - 0.01)
+  status <- as.integer(event)
+
+  actual_pct <- round(1 - mean(status), 3)
+  cat(sprintf("(%.0f%% censored) ", actual_pct * 100))
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+
+  dat <- data.frame(y = Surv(y_obs, status), x1 = X[, 1], x2 = X[, 2])
+  mod <- ctm(b, shifting = ~ x1 + x2, data = dat)
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 100)
+
+  # Predictions at X = (0, 0)
+  nd_x <- data.frame(x1 = 0, x2 = 0)
+  cdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "distribution"))
+  pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
+  q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
+  haz_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "hazard"))
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y_obs, status = status, X = X,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
+    metadata = list(model = "mlt", censoring = "right",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    regression = TRUE,
+                    n_covariates = 2,
+                    beta_true = beta_true,
+                    cdf_at_X = c(0, 0),
+                    censoring_pct = actual_pct)
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 14: MLT / INTERVAL + covariates, n=200, order=6
+# Support: (2, 8), rnorm(n, 5, 1) + X %*% c(0.3, -0.2), interval width ~0.1
+# Covariates + interval censoring combined
+# ---------------------------------------------------------------------------
+
+generate_case_14 <- function(base_path) {
+  seed <- 56
+  n <- 200
+  ord <- 6
+  sup <- c(2, 8)
+  tag <- "case_14_mlt_200_6"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  X <- matrix(rnorm(n * 2), ncol = 2)
+  colnames(X) <- c("x1", "x2")
+  beta_true <- c(0.3, -0.2)
+  y_latent <- rnorm(n, mean = 5, sd = 1) + X %*% beta_true
+  y_latent <- as.numeric(y_latent)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # Interval censoring: all observations, width ~ 0.1
+  half_width <- 0.05
+  y_lower <- pmax(y_latent - half_width, sup[1] + 0.001)
+  y_upper <- pmin(y_latent + half_width, sup[2] - 0.001)
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+
+  dat <- data.frame(y = Surv(y_lower, y_upper, type = "interval2"),
+                    x1 = X[, 1], x2 = X[, 2])
+  mod <- ctm(b, shifting = ~ x1 + x2, data = dat)
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
+
+  # Predictions at X = (0, 0)
+  nd_x <- data.frame(x1 = 0, x2 = 0)
+  cdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "distribution"))
+  pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
+  q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y_lower = y_lower, y_upper = y_upper, X = X,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    metadata = list(model = "mlt", censoring = "interval",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    regression = TRUE,
+                    n_covariates = 2,
+                    beta_true = beta_true,
+                    cdf_at_X = c(0, 0),
+                    interval_half_width = half_width)
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 15: MLT / NONE, n=500, order=10
+# Support: (0, 1), data from rbeta(n, 2, 5) — high order stress test
+# ---------------------------------------------------------------------------
+
+generate_case_15 <- function(base_path) {
+  seed <- 57
+  n <- 500
+  ord <- 10
+  sup <- c(0, 1)
+  tag <- "case_15_mlt_500_10"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y <- rbeta(n, shape1 = 2, shape2 = 5)
+  y <- pmin(pmax(y, sup[1] + 0.01), sup[2] - 0.01)
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b)
+  fit <- mlt(mod, data = data.frame(y = y))
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.05, sup[2] - 0.05, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y, theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    metadata = list(model = "mlt", censoring = "none",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    note = "High order (10) stress test")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 16: MLT / RIGHT, n=500, order=12
+# Support: (0, 8), data from rweibull(n, shape=2, scale=3), ~40% censored
+# High order + right censoring
+# ---------------------------------------------------------------------------
+
+generate_case_16 <- function(base_path) {
+  seed <- 58
+  n <- 500
+  ord <- 12
+  sup <- c(0, 8)
+  tag <- "case_16_mlt_500_12"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y_latent <- rweibull(n, shape = 2, scale = 3)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # ~40% censoring
+  cens_time <- runif(n, 0, quantile(y_latent, 0.6))
+  event <- y_latent <= cens_time
+  y_obs <- ifelse(event, y_latent, cens_time)
+  y_obs <- pmin(pmax(y_obs, sup[1] + 0.01), sup[2] - 0.01)
+  status <- as.integer(event)
+
+  actual_pct <- round(1 - mean(status), 3)
+  cat(sprintf("(%.0f%% censored) ", actual_pct * 100))
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b)
+  dat <- data.frame(y = Surv(y_obs, status))
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.4, sup[2] - 0.4, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y_obs, status = status,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
+    metadata = list(model = "mlt", censoring = "right",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    censoring_pct = actual_pct,
+                    note = "High order (12) + right censoring")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 17: MLT / LEFT ~70% censored, n=200, order=6
+# Support: (0, 6), data from rnorm(n, 3, 1), heavy left censoring
+# ---------------------------------------------------------------------------
+
+generate_case_17 <- function(base_path) {
+  seed <- 59
+  n <- 200
+  ord <- 6
+  sup <- c(0, 6)
+  tag <- "case_17_mlt_200_6"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y_latent <- rnorm(n, mean = 3, sd = 1)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # Heavy left-censoring: threshold at 70th percentile
+  threshold <- quantile(y_latent, 0.7)
+  left_censored <- y_latent < threshold
+  y_obs <- ifelse(left_censored, threshold, y_latent)
+  y_obs <- pmin(pmax(y_obs, sup[1] + 0.01), sup[2] - 0.01)
+  status <- as.integer(!left_censored)
+
+  actual_pct <- round(mean(left_censored), 3)
+  cat(sprintf("(%.0f%% left-censored) ", actual_pct * 100))
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b)
+
+  surv_time  <- ifelse(left_censored, NA, y_obs)
+  surv_time2 <- y_obs
+  dat <- data.frame(y = Surv(surv_time, surv_time2, type = "interval2"))
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y_obs, status = status,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    metadata = list(model = "mlt", censoring = "left",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    censoring_pct = actual_pct,
+                    note = "Heavy left censoring stress test (~70%)")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 18: MLT / INTERVAL (wide), n=200, order=6
+# Support: (0, 10), data from rnorm(n, 5, 2), interval width ~1.0
+# Stress test with wide intervals (10x wider than case_04)
+# ---------------------------------------------------------------------------
+
+generate_case_18 <- function(base_path) {
+  seed <- 60
+  n <- 200
+  ord <- 6
+  sup <- c(0, 10)
+  tag <- "case_18_mlt_200_6"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y_latent <- rnorm(n, mean = 5, sd = 2)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # Wide interval censoring: width ~ 1.0
+  half_width <- 0.5
+  y_lower <- pmax(y_latent - half_width, sup[1] + 0.001)
+  y_upper <- pmin(y_latent + half_width, sup[2] - 0.001)
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b)
+
+  dat <- data.frame(y = Surv(y_lower, y_upper, type = "interval2"))
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y_lower = y_lower, y_upper = y_upper,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    metadata = list(model = "mlt", censoring = "interval",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    interval_half_width = half_width,
+                    note = "Wide interval censoring stress test (width ~1.0)")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
+# ---------------------------------------------------------------------------
+# Case 19: MLT / RIGHT ~95% censored, n=200, order=4
+# Support: (0, 5), data from rexp(n, rate=0.5), extreme censoring
+# Near-degenerate: almost all observations censored
+# ---------------------------------------------------------------------------
+
+generate_case_19 <- function(base_path) {
+  seed <- 61
+  n <- 200
+  ord <- 4
+  sup <- c(0, 5)
+  tag <- "case_19_mlt_200_4"
+  cat("  ", tag, "... ")
+
+  set.seed(seed)
+  y_latent <- rexp(n, rate = 0.5)
+  y_latent <- pmin(pmax(y_latent, sup[1] + 0.01), sup[2] - 0.01)
+
+  # ~95% censoring: use very aggressive censoring times
+  cens_time <- runif(n, 0, quantile(y_latent, 0.05))
+  event <- y_latent <= cens_time
+  y_obs <- ifelse(event, y_latent, cens_time)
+  y_obs <- pmin(pmax(y_obs, sup[1] + 0.01), sup[2] - 0.01)
+  status <- as.integer(event)
+
+  actual_pct <- round(1 - mean(status), 3)
+  cat(sprintf("(%.0f%% censored) ", actual_pct * 100))
+
+  m <- numeric_var("y", support = sup, bounds = sup)
+  b <- Bernstein_basis(m, order = ord, ui = "increasing")
+  mod <- ctm(b)
+  dat <- data.frame(y = Surv(y_obs, status))
+  fit <- mlt(mod, data = dat)
+
+  theta <- coef(fit)
+  ll <- logLik(fit)
+  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 100)
+  cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+
+  save_reference(
+    path = file.path(base_path, tag),
+    y = y_obs, status = status,
+    theta = theta, loglik = as.numeric(ll),
+    cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
+    metadata = list(model = "mlt", censoring = "right",
+                    n = n, order = ord,
+                    support = sup, seed = seed,
+                    censoring_pct = actual_pct,
+                    note = "Near-degenerate: ~95% censored stress test")
+  )
+
+  cat("OK\n")
+  list(converged = TRUE, loglik = as.numeric(ll))
+}
+
 # ===========================================================================
 # Main: run all cases with tryCatch, print summary table
 # ===========================================================================
@@ -771,7 +1239,15 @@ main <- function() {
     list(name = "Case 08 (MLT/NONE+Reg)",      fn = generate_case_08),
     list(name = "Case 09 (MLT/NONE n=30)",     fn = generate_case_09),
     list(name = "Case 10 (MLT/RIGHT n=30)",    fn = generate_case_10),
-    list(name = "Case 11 (MLT/RIGHT >50%)",    fn = generate_case_11)
+    list(name = "Case 11 (MLT/RIGHT >50%)",    fn = generate_case_11),
+    list(name = "Case 12 (MLT/NONE logistic)", fn = generate_case_12),
+    list(name = "Case 13 (MLT/RIGHT+Reg)",     fn = generate_case_13),
+    list(name = "Case 14 (MLT/INTERVAL+Reg)",  fn = generate_case_14),
+    list(name = "Case 15 (MLT/NONE ord=10)",   fn = generate_case_15),
+    list(name = "Case 16 (MLT/RIGHT ord=12)",  fn = generate_case_16),
+    list(name = "Case 17 (MLT/LEFT ~70%)",     fn = generate_case_17),
+    list(name = "Case 18 (MLT/INTERVAL wide)", fn = generate_case_18),
+    list(name = "Case 19 (MLT/RIGHT ~95%)",    fn = generate_case_19)
   )
 
   all_results <- list()

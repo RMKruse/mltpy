@@ -21,7 +21,7 @@ The validation runs in three steps:
 
 ## Test Case Coverage
 
-21 cases across 11 scenarios, covering all model types, censoring mechanisms, sample sizes, and Bernstein polynomial orders.
+29 cases across 19 scenarios, covering all model types, censoring mechanisms, sample sizes, Bernstein polynomial orders, base distributions, and covariate combinations.
 
 | Case | Model | Censoring | n | Order | Support | Data source | Notes |
 |------|-------|-----------|---|-------|---------|-------------|-------|
@@ -36,6 +36,14 @@ The validation runs in three steps:
 | case_09 | MLT | None | 30 | 4 | [0, 1] | Uniform(0.02, 0.98) | Small sample edge case |
 | case_10 | MLT | Right | 30 | 4 | [0, 5] | Exp(rate=2), 40% censored | Small sample + right censoring |
 | case_11 | MLT | Right | 200 | 6 | [0, 5] | Exp(rate=2), 88% censored | Heavy censoring stress test |
+| case_12 | MLT | None | 200 | 6 | [-1, 5] | Logistic(2, 0.5) | Logistic base distribution (standalone MLT) |
+| case_13 | MLT | Right | 200 | 6 | [0, 5] | Exp(rate=2) + 2 covariates, ~30% censored | Covariates + right censoring |
+| case_14 | MLT | Interval | 200 | 6 | [2, 8] | N(5, 1) + 2 covariates, width ~0.1 | Covariates + interval censoring |
+| case_15 | MLT | None | 500 | 10 | [0, 1] | Beta(2, 5) | High order (10) stress test |
+| case_16 | MLT | Right | 500 | 12 | [0, 8] | Weibull(shape=2, scale=3), ~40% censored | High order (12) + right censoring |
+| case_17 | MLT | Left | 200 | 6 | [0, 6] | N(3, 1), ~70% left-censored | Heavy left censoring stress test |
+| case_18 | MLT | Interval | 200 | 6 | [0, 10] | N(5, 2), width ~1.0 | Wide interval censoring stress test |
+| case_19 | MLT | Right | 200 | 4 | [0, 5] | Exp(rate=0.5), ~95% censored | Near-degenerate: almost all censored |
 
 All data is generated with fixed random seeds for reproducibility.
 
@@ -164,11 +172,13 @@ Reference values were generated with:
 
 ## Known Limitations
 
-1. **case_06 (Coxph)**: pymlt's Coxph model currently converges to a different local minimum than R's tram::Coxph (Dll = 10.2). This is under investigation and is the only case that does not pass validation.
+1. **case_06 (Coxph)**: pymlt's Coxph model currently converges to a different local minimum than R's tram::Coxph (Δll = 10.2). This is under investigation.
 
-2. **Hazard sensitivity**: Even within the CDF < 0.95 restriction, hazard rate comparisons can show large absolute differences under non-identifiable theta. The two-tier system handles this by downgrading to informational when primary metrics pass.
+2. **case_16 (order=12 + right censoring)**: Extreme non-identifiability at high polynomial order with censoring. The log-likelihood matches (Δll = 0.034 < 0.1) but CDF barely exceeds tolerance (Δcdf = 0.0219 > 0.02). The Δθ = 1913 confirms the two optimizers found radically different parameterizations of nearly the same distribution function — a fundamental consequence of over-parameterization under censoring.
 
-3. **No covariate interaction with censoring**: The test suite does not yet include cases combining covariates (regression) with censored data. Case_08 tests regression without censoring; cases_02/10/11 test censoring without covariates.
+3. **Hazard sensitivity**: Even within the CDF < 0.95 restriction, hazard rate comparisons can show large absolute differences under non-identifiable theta. The two-tier system handles this by downgrading to informational when primary metrics pass.
+
+4. **case_19 (near-degenerate)**: With ~95% censoring, this extreme stress test may show large derived-metric differences or convergence issues due to the very flat likelihood surface. Currently passes cleanly.
 
 
 ## Results of Validation (10.04.2026 - 15:13h MEZ)
@@ -201,4 +211,44 @@ case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 �
 case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000  │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 Total: 20/21 passed (95.2%)
-``
+```
+
+## Results of Validation (10.04.2026 - 29 cases)
+
+```
+pymlt validation — R reference comparison
+==============================================================================================================
+Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll │   Δcdf│   Δpdf │   Δqnt │   Δhaz
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+case_01_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
+case_01_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
+case_01_mlt_1000_8          │ mlt    │  1000 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
+case_01_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
+case_01_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
+case_01_mlt_200_8           │ mlt    │   200 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
+case_02_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0013 │ 0.0000 │ 0.0001│ 0.0004 │ 0.0361 │ 3.8888
+case_02_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0781 │ 0.0000 │ 0.0002│ 0.0004 │ 0.0348 │ 2.7085
+case_02_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0345 │ 3.9716
+case_02_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1747 │ 0.0000 │ 0.0005│ 0.0003 │ 0.0285 │ 2.7364
+case_03_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0017 │    —  
+case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0689 │    —  
+case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0002 │    —  
+case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0004 │    —  
+case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
+case_06_coxph_200_6         │ coxph  │   200 │   6 │ FAIL  │ 2.1921 │10.2179 │ 0.0559│ 0.2017 │ 0.3319 │ 4.2845
+case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0003 │    —  
+case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
+case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
+case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003 │ 0.0004│ 0.0017 │ 0.0366 │ 5.0434
+case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
+case_12_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0008 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —  
+case_13_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │72.6470 │ 0.0068 │ 0.0019│ 0.0015 │ 0.0093 │ 2.7390
+case_14_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0009 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0006 │    —  
+case_15_mlt_500_10          │ mlt    │   500 │  10 │ PASS  │ 0.0018 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0001 │    —  
+case_16_mlt_500_12          │ mlt    │   500 │  12 │ FAIL  │1913.2026│ 0.0343 │ 0.0219│ 0.0642 │ 0.0423 │ 3.2912
+case_17_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1479 │ 0.0000 │ 0.0003│ 0.0010 │ 0.0013 │    —  
+case_18_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —  
+case_19_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0229 │ 0.0000 │ 0.0000│ 0.0004 │ 0.0169 │    —  
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Total: 27/29 passed (93.1%)
+```
