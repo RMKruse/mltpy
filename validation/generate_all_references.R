@@ -30,10 +30,14 @@ save_reference <- function(path,
                            loglik,
                            cdf_grid,
                            cdf_values,
+                           pdf_grid = NULL,
+                           pdf_values = NULL,
+                           quantile_probs = NULL,
+                           quantile_values = NULL,
+                           hazard_grid = NULL,
+                           hazard_values = NULL,
                            metadata) {
   # Validate inputs
-  stopifnot(length(cdf_grid) == 10)
-  stopifnot(length(cdf_values) == 10)
   stopifnot(is.numeric(theta))
   stopifnot(is.numeric(loglik) && length(loglik) == 1)
   stopifnot(is.list(metadata))
@@ -68,6 +72,14 @@ save_reference <- function(path,
   write_vec(cdf_grid,   "cdf_grid.csv")
   write_vec(cdf_values, "cdf_values.csv")
 
+  # Functional outputs (optional)
+  if (!is.null(pdf_grid))        write_vec(pdf_grid, "pdf_grid.csv")
+  if (!is.null(pdf_values))      write_vec(pdf_values, "pdf_values.csv")
+  if (!is.null(quantile_probs))  write_vec(quantile_probs, "quantile_probs.csv")
+  if (!is.null(quantile_values)) write_vec(quantile_values, "quantile_values.csv")
+  if (!is.null(hazard_grid))     write_vec(hazard_grid, "hazard_grid.csv")
+  if (!is.null(hazard_values))   write_vec(hazard_values, "hazard_values.csv")
+
   # metadata.json
   write_json(metadata, path = file.path(path, "metadata.json"),
              auto_unbox = TRUE, digits = 17, pretty = TRUE)
@@ -79,14 +91,32 @@ save_reference <- function(path,
 # ---------------------------------------------------------------------------
 
 predict_cdf_grid <- function(fit, var_name, grid) {
-  nd <- data.frame(grid)
-  names(nd) <- var_name
-  pred <- predict(fit, newdata = nd, type = "distribution")
-  # tram-derived mlt objects may return a matrix (grid × n_obs);
-  # for intercept-only models all columns are identical — take the first
+  # Use q= for tram-derived mlt objects — newdata= uses an internal grid
+  pred <- predict(fit, q = grid, type = "distribution")
   if (is.matrix(pred)) pred <- pred[, 1]
   as.numeric(pred)
 }
+
+predict_pdf_grid <- function(fit, var_name, grid) {
+  pred <- predict(fit, q = grid, type = "density")
+  if (is.matrix(pred)) pred <- pred[, 1]
+  as.numeric(pred)
+}
+
+predict_quantiles <- function(fit, var_name, probs) {
+  pred <- predict(fit, prob = probs, type = "quantile")
+  if (is.matrix(pred)) pred <- pred[, 1]
+  as.numeric(pred)
+}
+
+predict_hazard_grid <- function(fit, var_name, grid) {
+  pred <- predict(fit, q = grid, type = "hazard")
+  if (is.matrix(pred)) pred <- pred[, 1]
+  as.numeric(pred)
+}
+
+# Standard quantile probability levels for all cases
+QUANTILE_PROBS <- c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
 
 # ---------------------------------------------------------------------------
 # Case 01: MLT / NONE, n={200,1000}, order={4,6,8}
@@ -105,8 +135,8 @@ generate_case_01 <- function(base_path) {
   for (cfg in configs) {
     set.seed(cfg$seed)
     y <- runif(cfg$n, 0.02, 0.98)
-    # CDF grid: 10 equidistant points strictly inside support
-    cdf_grid <- seq(sup[1] + 0.05, sup[2] - 0.05, length.out = 10)
+    # CDF/PDF grid: 100 equidistant points strictly inside support
+    cdf_grid <- seq(sup[1] + 0.05, sup[2] - 0.05, length.out = 100)
 
     for (ord in cfg$orders) {
       tag <- sprintf("case_01_mlt_%d_%d", cfg$n, ord)
@@ -120,11 +150,15 @@ generate_case_01 <- function(base_path) {
       theta <- coef(fit)
       ll <- logLik(fit)
       cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+      pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+      q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
 
       save_reference(
         path = file.path(base_path, tag),
         y = y, theta = theta, loglik = as.numeric(ll),
         cdf_grid = cdf_grid, cdf_values = cdf_vals,
+        pdf_grid = cdf_grid, pdf_values = pdf_vals,
+        quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
         metadata = list(model = "mlt", censoring = "none",
                         n = cfg$n, order = ord,
                         support = sup, seed = cfg$seed)
@@ -165,7 +199,7 @@ generate_case_02 <- function(base_path) {
     y_obs <- pmin(pmax(y_obs, sup[1] + 0.01), sup[2] - 0.01)
     status <- as.integer(event)
 
-    cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 10)
+    cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 100)
 
     for (ord in orders) {
       tag <- sprintf("case_02_mlt_%d_%d", cfg$n, ord)
@@ -182,12 +216,18 @@ generate_case_02 <- function(base_path) {
       theta <- coef(fit)
       ll <- logLik(fit)
       cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+      pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+      q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+      haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
 
       save_reference(
         path = file.path(base_path, tag),
         y = y_obs, status = status,
         theta = theta, loglik = as.numeric(ll),
         cdf_grid = cdf_grid, cdf_values = cdf_vals,
+        pdf_grid = cdf_grid, pdf_values = pdf_vals,
+        quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+        hazard_grid = cdf_grid, hazard_values = haz_vals,
         metadata = list(model = "mlt", censoring = "right",
                         n = cfg$n, order = ord,
                         support = sup, seed = cfg$seed,
@@ -225,7 +265,7 @@ generate_case_03 <- function(base_path) {
   # status: 1 = exact observation, 0 = left-censored
   status <- as.integer(!left_censored)
 
-  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
 
   for (ord in orders) {
     tag <- sprintf("case_03_mlt_%d_%d", n, ord)
@@ -251,12 +291,16 @@ generate_case_03 <- function(base_path) {
     theta <- coef(fit)
     ll <- logLik(fit)
     cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+    pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+    q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
 
     save_reference(
       path = file.path(base_path, tag),
       y = y_obs, status = status,
       theta = theta, loglik = as.numeric(ll),
       cdf_grid = cdf_grid, cdf_values = cdf_vals,
+      pdf_grid = cdf_grid, pdf_values = pdf_vals,
+      quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
       metadata = list(model = "mlt", censoring = "left",
                       n = n, order = ord,
                       support = sup, seed = seed,
@@ -291,7 +335,7 @@ generate_case_04 <- function(base_path) {
   y_lower <- pmax(y_latent - half_width, sup[1] + 0.001)
   y_upper <- pmin(y_latent + half_width, sup[2] - 0.001)
 
-  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
 
   for (ord in orders) {
     tag <- sprintf("case_04_mlt_%d_%d", n, ord)
@@ -308,12 +352,16 @@ generate_case_04 <- function(base_path) {
     theta <- coef(fit)
     ll <- logLik(fit)
     cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+    pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+    q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
 
     save_reference(
       path = file.path(base_path, tag),
       y_lower = y_lower, y_upper = y_upper,
       theta = theta, loglik = as.numeric(ll),
       cdf_grid = cdf_grid, cdf_values = cdf_vals,
+      pdf_grid = cdf_grid, pdf_values = pdf_vals,
+      quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
       metadata = list(model = "mlt", censoring = "interval",
                       n = n, order = ord,
                       support = sup, seed = seed,
@@ -353,13 +401,17 @@ generate_case_05 <- function(base_path) {
   fit_mlt <- as.mlt(fit)
   theta <- coef(fit_mlt)
   ll <- logLik(fit_mlt)
-  cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
     metadata = list(model = "boxcox", censoring = "none",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -404,14 +456,20 @@ generate_case_06 <- function(base_path) {
   fit_mlt <- as.mlt(fit)
   theta <- coef(fit_mlt)
   ll <- logLik(fit_mlt)
-  cdf_grid <- seq(sup[1] + 0.4, sup[2] - 0.4, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.4, sup[2] - 0.4, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
+  haz_vals <- predict_hazard_grid(fit_mlt, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
     metadata = list(model = "coxph", censoring = "right",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -449,13 +507,17 @@ generate_case_07 <- function(base_path) {
   fit_mlt <- as.mlt(fit)
   theta <- coef(fit_mlt)
   ll <- logLik(fit_mlt)
-  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.3, sup[2] - 0.3, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
     metadata = list(model = "colr", censoring = "none",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -498,16 +560,20 @@ generate_case_08 <- function(base_path) {
 
   theta <- coef(fit)
   ll <- logLik(fit)
-  # CDF predictions: at grid points for the "average" observation (X = 0)
-  cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 10)
-  nd <- data.frame(y = cdf_grid, x1 = rep(0, 10), x2 = rep(0, 10))
-  cdf_vals <- as.numeric(predict(fit, newdata = nd, type = "distribution"))
+  # Predictions at grid points for the "average" observation (X = 0)
+  cdf_grid <- seq(sup[1] + 0.5, sup[2] - 0.5, length.out = 100)
+  nd_x <- data.frame(x1 = 0, x2 = 0)
+  cdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "distribution"))
+  pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
+  q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
 
   save_reference(
     path = file.path(base_path, tag),
     y = y, X = X,
     theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
     metadata = list(model = "mlt", censoring = "none",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -544,13 +610,17 @@ generate_case_09 <- function(base_path) {
 
   theta <- coef(fit)
   ll <- logLik(fit)
-  cdf_grid <- seq(sup[1] + 0.05, sup[2] - 0.05, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.05, sup[2] - 0.05, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
     metadata = list(model = "mlt", censoring = "none",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -593,14 +663,20 @@ generate_case_10 <- function(base_path) {
 
   theta <- coef(fit)
   ll <- logLik(fit)
-  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
     metadata = list(model = "mlt", censoring = "right",
                     n = n, order = ord,
                     support = sup, seed = seed,
@@ -647,14 +723,20 @@ generate_case_11 <- function(base_path) {
 
   theta <- coef(fit)
   ll <- logLik(fit)
-  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 10)
+  cdf_grid <- seq(sup[1] + 0.25, sup[2] - 0.25, length.out = 100)
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
+  pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
+  q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
 
   save_reference(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
+    pdf_grid = cdf_grid, pdf_values = pdf_vals,
+    quantile_probs = QUANTILE_PROBS, quantile_values = q_vals,
+    hazard_grid = cdf_grid, hazard_values = haz_vals,
     metadata = list(model = "mlt", censoring = "right",
                     n = n, order = ord,
                     support = sup, seed = seed,

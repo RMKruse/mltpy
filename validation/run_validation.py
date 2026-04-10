@@ -31,9 +31,12 @@ from numpy.typing import NDArray
 # Tolerances
 # ---------------------------------------------------------------------------
 
-TOL_THETA = 0.05  # max absolute component-wise difference
+TOL_THETA = 0.05  # max absolute component-wise difference (informational only)
 TOL_LOGLIK = 0.1  # absolute difference in log-likelihood
 TOL_CDF = 0.02  # max absolute CDF difference at grid points
+TOL_PDF = 0.05  # max absolute PDF difference at grid points
+TOL_QUANTILE = 0.05  # max absolute quantile difference
+TOL_HAZARD = 0.10  # max absolute hazard difference (compared only where CDF < 0.95)
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -61,6 +64,12 @@ class ReferenceCase:
     X: NDArray[np.float64] | None = None
     regression: bool = False
     n_covariates: int = 0
+    pdf_grid: NDArray[np.float64] | None = None
+    pdf_values_r: NDArray[np.float64] | None = None
+    quantile_probs: NDArray[np.float64] | None = None
+    quantile_values_r: NDArray[np.float64] | None = None
+    hazard_grid: NDArray[np.float64] | None = None
+    hazard_values_r: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -72,6 +81,9 @@ class FittedResult:
     cdf_values_py: NDArray[np.float64]
     converged: bool
     runtime_s: float
+    pdf_values_py: NDArray[np.float64] | None = None
+    quantile_values_py: NDArray[np.float64] | None = None
+    hazard_values_py: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -89,6 +101,9 @@ class ValidationResult:
     converged: bool
     runtime_s: float
     failure_reason: str | None = None
+    max_delta_pdf: float | None = None
+    max_delta_quantile: float | None = None
+    max_delta_hazard: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +168,19 @@ def load_reference(case_dir: Path) -> ReferenceCase:
     if meta.get("regression", False):
         kwargs["regression"] = True
         kwargs["n_covariates"] = meta.get("n_covariates", 0)
+
+    # Functional output references (optional)
+    for name, field in [
+        ("pdf_grid", "pdf_grid"),
+        ("pdf_values", "pdf_values_r"),
+        ("quantile_probs", "quantile_probs"),
+        ("quantile_values", "quantile_values_r"),
+        ("hazard_grid", "hazard_grid"),
+        ("hazard_values", "hazard_values_r"),
+    ]:
+        p = case_dir / f"{name}.npy"
+        if p.exists():
+            kwargs[field] = np.load(p)
 
     return ReferenceCase(**kwargs)  # type: ignore[arg-type]
 
@@ -264,6 +292,31 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
 
         cdf_py = model.predict(case.cdf_grid, X_new=X_pred, what="distribution")
 
+        # --- PDF at grid points ---
+        pdf_py: NDArray[np.float64] | None = None
+        if case.pdf_grid is not None:
+            X_pdf = None
+            if case.regression:
+                X_pdf = np.zeros((len(case.pdf_grid), case.n_covariates))
+            pdf_py = model.predict(case.pdf_grid, X_new=X_pdf, what="density")
+
+        # --- Quantiles ---
+        quantile_py: NDArray[np.float64] | None = None
+        if case.quantile_probs is not None:
+            quantile_py = model.predict(
+                case.quantile_probs, what="quantile"
+            )
+
+        # --- Hazard at grid points (right-censored only) ---
+        hazard_py: NDArray[np.float64] | None = None
+        if case.hazard_grid is not None and cens == "right":
+            X_haz = None
+            if case.regression:
+                X_haz = np.zeros((len(case.hazard_grid), case.n_covariates))
+            hazard_py = model.predict(
+                case.hazard_grid, X_new=X_haz, what="hazard"
+            )
+
         elapsed = time.perf_counter() - t0
         return FittedResult(
             theta_py=theta_py,
@@ -271,6 +324,9 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
             cdf_values_py=cdf_py,
             converged=converged,
             runtime_s=elapsed,
+            pdf_values_py=pdf_py,
+            quantile_values_py=quantile_py,
+            hazard_values_py=hazard_py,
         )
 
     except Exception as e:
@@ -335,32 +391,101 @@ def compare_results(
     else:
         max_delta_cdf = float("nan")
 
-    failures: list[str] = []
-    loglik_ok = delta_loglik <= TOL_LOGLIK
-    cdf_ok = max_delta_cdf <= TOL_CDF or np.isnan(max_delta_cdf)
-    if max_delta_theta > TOL_THETA:
-        # Under heavy censoring, upper Bernstein coefficients are non-identifiable:
-        # the likelihood is flat and multiple theta vectors yield the same LL and CDF.
-        # pymlt may find a different (often slightly better) point on this flat ridge
-        # than R's auglag optimizer.  When both LL and CDF match, theta differences
-        # in non-identifiable regions are expected and should not cause failure.
-        if loglik_ok and cdf_ok:
-            failures.append(
-                f"theta ({max_delta_theta:.4f} > {TOL_THETA}; "
-                f"non-identifiable — ll/cdf match)"
+    # --- Functional output deltas ---
+    max_delta_pdf: float | None = None
+    if fit.pdf_values_py is not None and ref.pdf_values_r is not None:
+        max_delta_pdf = float(np.max(np.abs(fit.pdf_values_py - ref.pdf_values_r)))
+
+    max_delta_quantile: float | None = None
+    if (
+        fit.quantile_values_py is not None
+        and ref.quantile_values_r is not None
+        and ref.quantile_probs is not None
+    ):
+        # Exclude extreme tail quantiles (p < 0.05, p > 0.95) from comparison:
+        # small CDF differences amplify through the inverse at extremes
+        interior = (ref.quantile_probs >= 0.05) & (ref.quantile_probs <= 0.95)
+        if np.any(interior):
+            max_delta_quantile = float(
+                np.max(
+                    np.abs(
+                        fit.quantile_values_py[interior]
+                        - ref.quantile_values_r[interior]
+                    )
+                )
             )
         else:
-            failures.append(f"theta ({max_delta_theta:.4f} > {TOL_THETA})")
+            max_delta_quantile = float(
+                np.max(np.abs(fit.quantile_values_py - ref.quantile_values_r))
+            )
+
+    max_delta_hazard: float | None = None
+    if (
+        fit.hazard_values_py is not None
+        and ref.hazard_values_r is not None
+        and fit.cdf_values_py is not None
+        and ref.hazard_grid is not None
+    ):
+        # Only compare hazard where the model has reliable estimation:
+        # restrict to grid points where CDF < 0.95 (i.e. S(t) > 0.05).
+        # In the extreme right tail, S(t) → 0 and hazard = f/S amplifies
+        # any tiny CDF difference by orders of magnitude.
+        cdf_at_haz = np.interp(ref.hazard_grid, ref.cdf_grid, fit.cdf_values_py)
+        reliable = cdf_at_haz < 0.95
+        if np.any(reliable):
+            max_delta_hazard = float(
+                np.max(
+                    np.abs(
+                        fit.hazard_values_py[reliable]
+                        - ref.hazard_values_r[reliable]
+                    )
+                )
+            )
+        else:
+            # All grid points in extreme tail — skip hazard comparison
+            max_delta_hazard = None
+
+    # --- Build failure list ---
+    # Primary metrics (loglik, CDF) are always blocking.
+    # Theta is always informational (internal parameterization detail).
+    # PDF, quantile, and hazard are blocking UNLESS loglik+CDF both match,
+    # in which case they are downgraded to informational — because under
+    # non-identifiable theta (heavy censoring), the transformation derivative
+    # h'(y) can differ even when the distribution function F(h(y)) matches,
+    # causing downstream differences in derived quantities.
+    failures: list[str] = []
+    info: list[str] = []
+
+    loglik_ok = delta_loglik <= TOL_LOGLIK
+    cdf_ok = max_delta_cdf <= TOL_CDF or np.isnan(max_delta_cdf)
+
+    if max_delta_theta > TOL_THETA:
+        info.append(f"theta ({max_delta_theta:.4f} > {TOL_THETA}; informational)")
+
     if not loglik_ok:
         failures.append(f"loglik ({delta_loglik:.4f} > {TOL_LOGLIK})")
     if not cdf_ok:
         failures.append(f"cdf ({max_delta_cdf:.4f} > {TOL_CDF})")
 
-    # Pass if hard metrics (loglik, cdf) are within tolerance.  Theta-only
-    # failures when loglik and cdf match indicate non-identifiability, not a bug.
-    hard_failures = [f for f in failures if "non-identifiable" not in f]
-    passed = len(hard_failures) == 0
-    failure_reason = "; ".join(failures) if failures else None
+    # Derived functional outputs: hard failure only when primary metrics fail too
+    _derived: list[tuple[str, float | None, float]] = [
+        ("pdf", max_delta_pdf, TOL_PDF),
+        ("quantile", max_delta_quantile, TOL_QUANTILE),
+        ("hazard", max_delta_hazard, TOL_HAZARD),
+    ]
+    for name, delta, tol in _derived:
+        if delta is not None and delta > tol:
+            if loglik_ok and cdf_ok:
+                info.append(
+                    f"{name} ({delta:.4f} > {tol}; "
+                    f"non-identifiable — ll/cdf match)"
+                )
+            else:
+                failures.append(f"{name} ({delta:.4f} > {tol})")
+
+    passed = len(failures) == 0
+    all_notes = failures + info
+    failure_reason = "; ".join(all_notes) if all_notes else None
 
     if verbose and not passed:
         print(f"  {ref.case_id}:")
@@ -390,6 +515,9 @@ def compare_results(
         converged=fit.converged,
         runtime_s=fit.runtime_s,
         failure_reason=failure_reason,
+        max_delta_pdf=max_delta_pdf,
+        max_delta_quantile=max_delta_quantile,
+        max_delta_hazard=max_delta_hazard,
     )
 
 
@@ -457,13 +585,21 @@ def print_report(results: list[ValidationResult]) -> None:
 
     print()
     print("pymlt validation — R reference comparison")
-    print("=" * 78)
+    print("=" * 110)
     header = (
         f"{'Case':<28}│ {'Model':<7}│ {'n':>5} │ {'Ord':>3} │ {'Status':<6}"
-        f"│ {'Δθ_max':>7} │ {'Δll':>7} │ {'Δcdf':>6}"
+        f"│ {'Δθ':>6} │ {'Δll':>6} │ {'Δcdf':>6}"
+        f"│ {'Δpdf':>6} │ {'Δqnt':>6} │ {'Δhaz':>6}"
     )
     print(header)
-    print("─" * 78)
+    print("─" * 110)
+
+    def _fmt(val: float | None, width: int = 6) -> str:
+        if val is None:
+            return "   —".ljust(width)
+        if np.isnan(val):
+            return " N/A".ljust(width)
+        return f"{val:{width}.4f}"
 
     for r in results:
         if r.passed:
@@ -471,20 +607,19 @@ def print_report(results: list[ValidationResult]) -> None:
         else:
             status = _color("FAIL", _RED)
 
-        def _fmt(val: float, width: int = 7) -> str:
-            if np.isnan(val):
-                return "   N/A".ljust(width)
-            return f"{val:{width}.4f}"
-
         dt = _fmt(r.max_delta_theta)
         dl = _fmt(r.delta_loglik)
-        dc = _fmt(r.max_delta_cdf, 6)
+        dc = _fmt(r.max_delta_cdf)
+        dp = _fmt(r.max_delta_pdf)
+        dq = _fmt(r.max_delta_quantile)
+        dh = _fmt(r.max_delta_hazard)
         print(
             f"{r.case_id:<28}│ {r.model:<7}│ {r.n:>5} "
             f"│ {r.order:>3} │ {status:<6}│ {dt} │ {dl} │ {dc}"
+            f"│ {dp} │ {dq} │ {dh}"
         )
 
-    print("─" * 78)
+    print("─" * 110)
     n_pass = sum(1 for r in results if r.passed)
     n_total = len(results)
     pct = 100.0 * n_pass / n_total if n_total > 0 else 0.0
@@ -511,19 +646,26 @@ def save_report(
     lines = [
         "# pymlt Validation Report",
         "",
-        "| Case | Model | n | Order | Status | Δθ_max | Δll | Δcdf |",
-        "|------|-------|---|-------|--------|--------|-----|------|",
+        "| Case | Model | n | Order | Status | Δθ | Δll | Δcdf"
+        " | Δpdf | Δquant | Δhaz |",
+        "|------|-------|---|-------|--------|-----|-----|------"
+        "|------|--------|------|",
     ]
+
+    def _md(val: float | None) -> str:
+        if val is None:
+            return "—"
+        return "N/A" if np.isnan(val) else f"{val:.4f}"
+
     for r in results:
         status = "PASS" if r.passed else "FAIL"
-
-        def _md(val: float) -> str:
-            return "N/A" if np.isnan(val) else f"{val:.4f}"
 
         lines.append(
             f"| {r.case_id} | {r.model} | {r.n} | {r.order} "
             f"| {status} | {_md(r.max_delta_theta)} "
-            f"| {_md(r.delta_loglik)} | {_md(r.max_delta_cdf)} |"
+            f"| {_md(r.delta_loglik)} | {_md(r.max_delta_cdf)} "
+            f"| {_md(r.max_delta_pdf)} | {_md(r.max_delta_quantile)} "
+            f"| {_md(r.max_delta_hazard)} |"
         )
 
     n_pass = sum(1 for r in results if r.passed)
@@ -534,6 +676,11 @@ def save_report(
     (out_dir / "validation_report.md").write_text("\n".join(lines))
 
     # --- JSON ---
+    def _json_float(val: float | None) -> float | None:
+        if val is None:
+            return None
+        return None if np.isnan(val) else val
+
     records = []
     for r in results:
         records.append(
@@ -543,13 +690,12 @@ def save_report(
                 "n": r.n,
                 "order": r.order,
                 "passed": r.passed,
-                "max_delta_theta": (
-                    None if np.isnan(r.max_delta_theta) else r.max_delta_theta
-                ),
-                "delta_loglik": (None if np.isnan(r.delta_loglik) else r.delta_loglik),
-                "max_delta_cdf": (
-                    None if np.isnan(r.max_delta_cdf) else r.max_delta_cdf
-                ),
+                "max_delta_theta": _json_float(r.max_delta_theta),
+                "delta_loglik": _json_float(r.delta_loglik),
+                "max_delta_cdf": _json_float(r.max_delta_cdf),
+                "max_delta_pdf": _json_float(r.max_delta_pdf),
+                "max_delta_quantile": _json_float(r.max_delta_quantile),
+                "max_delta_hazard": _json_float(r.max_delta_hazard),
                 "converged": r.converged,
                 "runtime_s": round(r.runtime_s, 4),
                 "failure_reason": r.failure_reason,
