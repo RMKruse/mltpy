@@ -169,3 +169,36 @@ Reference values were generated with:
 2. **Hazard sensitivity**: Even within the CDF < 0.95 restriction, hazard rate comparisons can show large absolute differences under non-identifiable theta. The two-tier system handles this by downgrading to informational when primary metrics pass.
 
 3. **No covariate interaction with censoring**: The test suite does not yet include cases combining covariates (regression) with censored data. Case_08 tests regression without censoring; cases_02/10/11 test censoring without covariates.
+
+
+## Results of Validation (10.04.2026 - 15:13h MEZ)
+
+```
+pymlt validation — R reference comparison
+==============================================================================================================
+Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll  │   Δcdf│   Δpdf │   Δqnt │   Δhaz
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+case_01_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_1000_8          │ mlt    │  1000 │   8 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_01_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_01_mlt_200_8           │ mlt    │   200 │   8 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_02_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0013 │ 0.0000  │ 0.0001│ 0.0004 │ 0.0361 │ 3.8888
+case_02_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0781 │ 0.0000  │ 0.0002│ 0.0004 │ 0.0348 │ 2.7085
+case_02_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0001 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0345 │ 3.9716
+case_02_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1747 │ 0.0000  │ 0.0005│ 0.0003 │ 0.0285 │ 2.7364
+case_03_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0017 │    —
+case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0689 │    —
+case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0002 │    —
+case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000  │ 0.0001│ 0.0001 │ 0.0004 │    —
+case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
+case_06_coxph_200_6         │ coxph  │   200 │   6 │ FAIL  │ 2.1921 │ 10.2179 │ 0.0559│ 0.2017 │ 0.3319 │ 4.2845
+case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0003 │    —
+case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
+case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003  │ 0.0004│ 0.0017 │ 0.0366 │ 5.0434
+case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000  │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Total: 20/21 passed (95.2%)
+``
