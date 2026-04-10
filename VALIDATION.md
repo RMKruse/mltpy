@@ -1,5 +1,5 @@
-1. Data Flow
-
+## 1. Data Flow
+```
  validation/references/case_**/
      metadata.json ─────────────────────────┐
      y.npy / y_lower.npy / y_upper.npy ─────┤
@@ -30,12 +30,14 @@
                                                    results/)         1 = tolerance fail
                                                                      2 = no ref data
 
+```
 
 
-2. Model Dispatch: fit_python_model()
+## 2. Model Dispatch: fit_python_model()
 
  Maps metadata.model × metadata.censoring to pymlt class + data preparation:
 
+```
  metadata.model  │ metadata.censoring │ pymlt class │ base_dist  │ Data preparation
  ────────────────┼────────────────────┼─────────────┼────────────┼──────────────────────────────
  "mlt"           │ "none"             │ MLT         │ "normal"   │ fit(y) or fit(y, X=X)
@@ -45,6 +47,7 @@
  "boxcox"        │ "none"             │ BoxCox      │ (forced)   │ fit(y)
  "coxph"         │ "right"            │ Coxph       │ (forced)   │ CensoredData.right_censored(y, ~status.astype(bool))
  "colr"          │ "none"             │ Colr        │ (forced)   │ fit(y)
+```
 
  Key detail: status.npy stores 1=event, 0=censored. pymlt's CensoredData.right_censored(y, censored=...) expects True=censored. So: censored = ~status.astype(bool)
  (invert).
@@ -58,24 +61,28 @@
  that doesn't factor cleanly.
 
  ---
- 3. --case Filter
-
+ 
+ ## 3. --case Filter
+```
  parser = argparse.ArgumentParser()
  parser.add_argument("--case", type=str, default=None,
                      help="Run only cases matching this prefix, e.g. 'case_01' or 'case_05_boxcox'")
  parser.add_argument("--verbose", action="store_true",
                      help="Show per-component delta details")
-
- # In run_all_validations():
+```
+ ### In run_all_validations():
+ ```
  case_dirs = sorted(ref_dir.glob("case_*"))
  if args.case:
      case_dirs = [d for d in case_dirs if d.name.startswith(args.case)]
 
  Prefix match — --case case_01 runs all 6 variants (200/1000 × 4/6/8), --case case_05 runs only BoxCox.
-
+```
  ---
- 4. Tolerances
 
+## 4. Tolerances
+```
  TOL_THETA  = 0.05   # max absolute component-wise difference
  TOL_LOGLIK = 0.1    # absolute difference in log-likelihood
  TOL_CDF    = 0.02   # max absolute CDF difference at grid points
+```
