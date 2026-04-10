@@ -1,9 +1,0 @@
-{
-  "model": "mlt",
-  "censoring": "interval",
-  "n": 200,
-  "order": 6,
-  "support": [2, 8],
-  "seed": 46,
-  "interval_half_width": 0.050000000000000003
-}

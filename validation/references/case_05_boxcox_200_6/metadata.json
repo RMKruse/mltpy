@@ -1,9 +1,0 @@
-{
-  "model": "boxcox",
-  "censoring": "none",
-  "n": 200,
-  "order": 6,
-  "support": [0.01, 10],
-  "seed": 47,
-  "base_distribution": "normal"
-}
