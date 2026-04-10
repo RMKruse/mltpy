@@ -33,7 +33,7 @@ Thumbs.db
 .env
 
 # --- Validation (generated from CSV, not committed) ---
-validation/references/**/*.npy
+validation/references/
 validation/results/
 *.csv
 
