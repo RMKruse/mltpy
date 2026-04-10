@@ -16,7 +16,7 @@
   2. Expand case coverage systematically
 
   Current gaps in the 20-case suite:
-
+```
   ┌────────────────────┬──────────────────────────────────────────────┐
   │        Gap         │                Why it matters                │
   ├────────────────────┼──────────────────────────────────────────────┤
@@ -41,7 +41,7 @@
   │ Near-degenerate    │ All observations nearly identical, or all    │
   │ data               │ censored except 1-2                          │
   └────────────────────┴──────────────────────────────────────────────┘
-
+```
   3. Ask the R authors for canonical test cases
 
   This is where your relationship is most valuable. Specifically ask for:
@@ -70,7 +70,7 @@
   have the same bug, theta and LL would match but both would be wrong).
 
   5. Practical recommendation for structure
-
+```
   validation/
     references/          # R-generated reference data (existing)
     r_scripts/
@@ -78,7 +78,7 @@
   dense grids
       generate_stress_cases.R            # edge cases from section 2
     run_validation.py    # updated to compare functional outputs
-
+```
   The R script would export per-case:
   - density_grid.npy, density_values.npy
   - quantile_probs.npy, quantile_values.npy
