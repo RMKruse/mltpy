@@ -34,12 +34,17 @@ def _make_ref(
     theta: np.ndarray | None = None,
     loglik: float = -100.0,
     cdf: np.ndarray | None = None,
+    pdf: np.ndarray | None = None,
+    quantile_probs: np.ndarray | None = None,
+    quantile_values: np.ndarray | None = None,
+    hazard: np.ndarray | None = None,
 ) -> ReferenceCase:
     """Build a minimal ReferenceCase for comparison tests."""
     if theta is None:
         theta = np.linspace(0, 1, 5)
     if cdf is None:
         cdf = np.linspace(0.1, 0.9, 10)
+    cdf_grid = np.linspace(0.1, 0.9, len(cdf))
     return ReferenceCase(
         case_id=case_id,
         model="mlt",
@@ -50,8 +55,14 @@ def _make_ref(
         y=np.linspace(0.05, 0.95, 100),
         theta_r=theta,
         loglik_r=loglik,
-        cdf_grid=np.linspace(0.1, 0.9, 10),
+        cdf_grid=cdf_grid,
         cdf_values_r=cdf,
+        pdf_grid=cdf_grid if pdf is not None else None,
+        pdf_values_r=pdf,
+        quantile_probs=quantile_probs,
+        quantile_values_r=quantile_values,
+        hazard_grid=cdf_grid if hazard is not None else None,
+        hazard_values_r=hazard,
     )
 
 
@@ -60,15 +71,30 @@ def _make_fit(
     theta_offset: float = 0.0,
     loglik_offset: float = 0.0,
     cdf_offset: float = 0.0,
+    pdf_offset: float = 0.0,
+    quantile_offset: float = 0.0,
+    hazard_offset: float = 0.0,
     converged: bool = True,
 ) -> FittedResult:
     """Build a FittedResult near the reference with controlled deltas."""
+    pdf_py = None
+    if ref.pdf_values_r is not None:
+        pdf_py = ref.pdf_values_r + pdf_offset
+    quantile_py = None
+    if ref.quantile_values_r is not None:
+        quantile_py = ref.quantile_values_r + quantile_offset
+    hazard_py = None
+    if ref.hazard_values_r is not None:
+        hazard_py = ref.hazard_values_r + hazard_offset
     return FittedResult(
         theta_py=ref.theta_r + theta_offset,
         loglik_py=ref.loglik_r + loglik_offset,
         cdf_values_py=ref.cdf_values_r + cdf_offset,
         converged=converged,
         runtime_s=0.1,
+        pdf_values_py=pdf_py,
+        quantile_values_py=quantile_py,
+        hazard_values_py=hazard_py,
     )
 
 
@@ -161,24 +187,24 @@ def test_compare_results_pass() -> None:
     assert result.failure_reason is None
 
 
-def test_compare_results_theta_nonidentifiable() -> None:
-    """Δθ=0.06 > TOL_THETA but ll/cdf match — passes (non-identifiable)."""
+def test_compare_results_theta_informational_only() -> None:
+    """Δθ=0.06 > TOL_THETA — passes because theta is informational only."""
     ref = _make_ref()
     fit = _make_fit(ref, theta_offset=0.06)
     result = compare_results(ref, fit)
     assert result.passed is True
     assert result.failure_reason is not None
-    assert "non-identifiable" in result.failure_reason
+    assert "informational" in result.failure_reason
 
 
-def test_compare_results_fail_theta_with_cdf() -> None:
-    """Δθ=0.06 AND Δcdf=0.03 — must fail (not just non-identifiable)."""
+def test_compare_results_theta_with_cdf_fail() -> None:
+    """Δθ=0.06 AND Δcdf=0.03 — fails on cdf, theta is informational."""
     ref = _make_ref()
     fit = _make_fit(ref, theta_offset=0.06, cdf_offset=0.03)
     result = compare_results(ref, fit)
     assert result.passed is False
     assert result.failure_reason is not None
-    assert "theta" in result.failure_reason
+    assert "cdf" in result.failure_reason
 
 
 def test_compare_results_fail_loglik() -> None:
@@ -213,13 +239,91 @@ def test_compare_results_not_converged() -> None:
 def test_compare_results_multiple_failures() -> None:
     """Multiple tolerances exceeded — all appear in failure_reason."""
     ref = _make_ref()
-    fit = _make_fit(ref, theta_offset=0.06, loglik_offset=0.2, cdf_offset=0.03)
+    fit = _make_fit(ref, loglik_offset=0.2, cdf_offset=0.03)
     result = compare_results(ref, fit)
     assert result.passed is False
     assert result.failure_reason is not None
-    assert "theta" in result.failure_reason
     assert "loglik" in result.failure_reason
     assert "cdf" in result.failure_reason
+
+
+# ---------------------------------------------------------------------------
+# test_compare_results — functional output tests
+# ---------------------------------------------------------------------------
+
+
+def _make_ref_with_functional() -> ReferenceCase:
+    """Build a ReferenceCase with all functional outputs populated."""
+    return _make_ref(
+        pdf=np.linspace(0.5, 1.5, 10),
+        quantile_probs=np.array([0.1, 0.25, 0.5, 0.75, 0.9]),
+        quantile_values=np.array([0.1, 0.25, 0.5, 0.75, 0.9]),
+        hazard=np.linspace(0.1, 2.0, 10),
+    )
+
+
+def test_compare_results_pass_with_functional() -> None:
+    """All functional metrics within tolerance — PASS."""
+    ref = _make_ref_with_functional()
+    fit = _make_fit(ref, pdf_offset=0.01, quantile_offset=0.01, hazard_offset=0.01)
+    result = compare_results(ref, fit)
+    assert result.passed is True
+    assert result.max_delta_pdf is not None
+    assert result.max_delta_quantile is not None
+    assert result.max_delta_hazard is not None
+
+
+def test_compare_results_fail_pdf_with_cdf() -> None:
+    """Δpdf=0.06 AND Δcdf=0.03 — fails on both (derived failures are hard when CDF fails)."""
+    ref = _make_ref_with_functional()
+    fit = _make_fit(ref, pdf_offset=0.06, cdf_offset=0.03)
+    result = compare_results(ref, fit)
+    assert result.passed is False
+    assert result.failure_reason is not None
+    assert "pdf" in result.failure_reason
+    assert "cdf" in result.failure_reason
+
+
+def test_compare_results_pdf_informational_when_cdf_ok() -> None:
+    """Δpdf=0.06 but ll/cdf match — passes (non-identifiable)."""
+    ref = _make_ref_with_functional()
+    fit = _make_fit(ref, pdf_offset=0.06)
+    result = compare_results(ref, fit)
+    assert result.passed is True
+    assert result.failure_reason is not None
+    assert "non-identifiable" in result.failure_reason
+    assert "pdf" in result.failure_reason
+
+
+def test_compare_results_fail_quantile_with_loglik() -> None:
+    """Δquantile=0.06 AND Δll=0.2 — fails (derived failures are hard when loglik fails)."""
+    ref = _make_ref_with_functional()
+    fit = _make_fit(ref, quantile_offset=0.06, loglik_offset=0.2)
+    result = compare_results(ref, fit)
+    assert result.passed is False
+    assert result.failure_reason is not None
+    assert "quantile" in result.failure_reason
+
+
+def test_compare_results_fail_hazard_with_cdf() -> None:
+    """Δhazard=0.11 AND Δcdf=0.03 — fails on both."""
+    ref = _make_ref_with_functional()
+    fit = _make_fit(ref, hazard_offset=0.11, cdf_offset=0.03)
+    result = compare_results(ref, fit)
+    assert result.passed is False
+    assert result.failure_reason is not None
+    assert "hazard" in result.failure_reason
+
+
+def test_compare_results_missing_optional_metrics() -> None:
+    """No PDF/quantile/hazard reference — metrics are None, not failure."""
+    ref = _make_ref()  # no functional outputs
+    fit = _make_fit(ref)
+    result = compare_results(ref, fit)
+    assert result.passed is True
+    assert result.max_delta_pdf is None
+    assert result.max_delta_quantile is None
+    assert result.max_delta_hazard is None
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +345,8 @@ def test_print_report_contains_pass_fail(capsys: pytest.CaptureFixture[str]) -> 
             max_delta_cdf=0.001,
             converged=True,
             runtime_s=0.1,
+            max_delta_pdf=0.005,
+            max_delta_quantile=0.002,
         ),
         ValidationResult(
             case_id="case_fail",
@@ -253,7 +359,9 @@ def test_print_report_contains_pass_fail(capsys: pytest.CaptureFixture[str]) -> 
             max_delta_cdf=0.03,
             converged=True,
             runtime_s=0.2,
-            failure_reason="theta (0.06 > 0.05)",
+            failure_reason="cdf (0.03 > 0.02)",
+            max_delta_pdf=0.06,
+            max_delta_hazard=0.05,
         ),
     ]
     print_report(results)
