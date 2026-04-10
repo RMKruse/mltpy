@@ -35,6 +35,7 @@ Thumbs.db
 # --- Validation (generated from CSV, not committed) ---
 validation/references/**/*.npy
 validation/results/
+*.csv
 
 # --- dot files ---
 .hypothesis/
