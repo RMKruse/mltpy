@@ -55,7 +55,7 @@
  Key detail: For "mlt" with "left" or "right" censoring, the MLT constructor needs censoring=CensoringType.RIGHT / CensoringType.LEFT explicitly.
 
  Regression (case 08): Detected via metadata.get("regression", False). If true, load X.npy and pass to fit(y, X=X). CDF prediction uses predict(cdf_grid,
- X_new=np.zeros((10, n_cov))).
+ X_new=np.zeros((len(cdf_grid), n_cov))).
 
  Implementation: Simple if/elif chain, not a registry or dict — there are only 4 model types and 4 censoring types, and some combinations need special data prep
  that doesn't factor cleanly.

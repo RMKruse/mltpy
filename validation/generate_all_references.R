@@ -447,7 +447,7 @@ generate_case_06 <- function(base_path) {
   y_obs <- pmin(pmax(y_obs, sup[1] + 0.001), sup[2] - 0.001)
   status <- as.integer(event)
 
-  # tram::Coxph uses normal base distribution, right censoring
+  # tram::Coxph uses min_extreme_value (reversed Gumbel) base distribution, right censoring
   dat <- data.frame(y = y_obs, status = status)
   fit <- Coxph(Surv(y, status) ~ 1, data = dat,
                support = sup, order = ord)
@@ -473,7 +473,7 @@ generate_case_06 <- function(base_path) {
     metadata = list(model = "coxph", censoring = "right",
                     n = n, order = ord,
                     support = sup, seed = seed,
-                    base_distribution = "normal",
+                    base_distribution = "min_extreme_value",
                     censoring_pct = round(1 - mean(status), 3))
   )
 
