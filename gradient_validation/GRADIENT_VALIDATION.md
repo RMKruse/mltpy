@@ -19,12 +19,12 @@ The test verifies all four gradient functions in `likelihood.py`:
 
 ### Test Matrix
 
-**Full cross-product:** 4 censoring types x 2 base distributions x 3 theta positions x 2 covariate modes = 48 test configurations.
+**Full cross-product:** 4 censoring types x 3 base distributions x 3 theta positions x 2 covariate modes = 72 test configurations.
 
 | Dimension | Values | Rationale |
 |-----------|--------|-----------|
 | Censoring | none, right, left, interval | Each has a distinct gradient function |
-| Base distribution | normal, logistic | Different score functions: s(h)=h vs s(h)=2F(h)-1 |
+| Base distribution | normal, logistic, min_extreme_value | Different score functions: s(h)=h vs s(h)=2F(h)-1; min_extreme_value covers the Coxph / Gumbel link |
 | Theta position | initial, perturbed, converged | Catches bugs that only appear at specific parameter values |
 | Covariates | without X, with X (q=2) | Verifies gradient w.r.t. both theta_b and beta |
 
@@ -41,8 +41,8 @@ All theta vectors satisfy the monotonicity constraint (`D @ theta_b >= 0`) by co
 For each configuration:
 
 1. **Compute analytical gradient** via `negative_log_likelihood(theta, ..., gradient=True)` which returns `(nll, grad)`.
-2. **Compute finite-difference gradient** via `scipy.optimize.approx_fprime(theta, f, epsilon)` using central differences.
-3. **Compare** with `np.testing.assert_allclose(analytical, finite_diff, rtol=1e-5, atol=1e-7)`.
+2. **Compute finite-difference gradient** via `scipy.optimize.approx_fprime(theta, f, epsilon)` using forward differences.
+3. **Compare** with `np.testing.assert_allclose(analytical, finite_diff, rtol=1e-4, atol=5e-6)`.
 
 ### Why `approx_fprime` Instead of `check_grad`
 
@@ -77,15 +77,15 @@ pytest gradient_validation/test_gradient_verification.py -x --tb=short -v
 | File | Description |
 |------|-------------|
 | `GRADIENT_VALIDATION.md` | This document |
-| `test_gradient_verification.py` | Parametrized pytest tests (54 tests total) |
+| `test_gradient_verification.py` | Parametrized pytest tests (79 tests total) |
 
 ## Test Inventory
 
 The file contains three test functions:
 
-1. **`test_analytical_gradient_matches_finite_difference`** (48 tests) — The full cross-product of censoring × base distribution × theta position × covariate mode. This is the primary correctness check.
+1. **`test_analytical_gradient_matches_finite_difference`** (72 tests) — The full cross-product of censoring × base distribution × theta position × covariate mode. This is the primary correctness check.
 
-2. **`test_narrow_interval_triggers_taylor_branch`** (2 tests, normal + logistic) — Uses interval half-width 5e-7 to force `_log_diff_ndtr` into its Taylor branch. Documents and verifies that `_grad_interval` always uses the wide-formula gradient, with a relaxed tolerance (`rtol=5e-2`) because the Taylor LL and wide gradient are consistent only to O(width²).
+2. **`test_narrow_interval_triggers_taylor_branch`** (3 tests, normal + logistic + min_extreme_value) — Uses interval half-width 5e-7 to force `_log_diff_ndtr` into its Taylor branch. Documents and verifies that `_grad_interval` always uses the wide-formula gradient, with a relaxed tolerance (`rtol=5e-2`) because the Taylor LL and wide gradient are consistent only to O(width²).
 
 3. **`test_gradient_is_near_zero_at_converged_theta`** (4 tests, one per censoring type) — Sanity check that the analytical gradient norm is small at the optimizer's converged point. Catches sign errors that would be invisible to finite-difference comparison alone (if both analytical and finite-difference gradients are wrong in the same way).
 
@@ -158,16 +158,16 @@ gradient_validation/test_gradient_verification.py::test_gradient_is_near_zero_at
 
 | Section | Tests | Passed | Failed |
 |---------|------:|-------:|-------:|
-| Cross-product (main) | 48 | 48 | 0 |
-| Narrow-interval (Taylor branch) | 2 | 2 | 0 |
+| Cross-product (main) | 72 | 72 | 0 |
+| Narrow-interval (Taylor branch) | 3 | 3 | 0 |
 | Converged-gradient sanity | 4 | 4 | 0 |
-| **Total** | **54** | **54** | **0** |
+| **Total** | **79** | **79** | **0** |
 
 ### Interpretation
 
 All four analytical gradient functions (`_grad_none`, `_grad_right`, `_grad_left`, `_grad_interval`) agree with finite differences to ~1e-4 relative tolerance across:
 
-- Both base distributions (normal, logistic)
+- All three base distributions (normal, logistic, min_extreme_value)
 - All three theta positions — including at converged optima where the gradient is near zero and even small component-wise errors would show up
 - Both covariate modes — confirming gradients w.r.t. `beta` are correct in addition to gradients w.r.t. `theta_b`
 
