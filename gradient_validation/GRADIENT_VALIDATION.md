@@ -54,9 +54,8 @@ For each configuration:
 
 The transformation value `h` is clipped to `[-30, 30]` before distribution calls (`_H_CLIP = 30.0`). At the clipping boundary, the gradient is technically undefined. Test theta values are constructed to keep `h` well within the clipped range.
 
-### Hazard clamping in `_grad_right`
-
-The hazard ratio `f(h)/S(h)` is clamped via `np.minimum(hazard, _H_CLIP)`. This introduces a non-differentiable point. Test data is chosen so the hazard stays below the clamp threshold.
+### Exponent capping in `_grad_right`
+To avoid overflow in the hazard computation for right-censored observations, the implementation caps the exponent term `logpdf - logsf` using `_LOG_FLOAT_MAX` before exponentiating, rather than clamping the hazard ratio directly. This still creates a regime change once the cap is hit, so test data is chosen to keep `logpdf - logsf` comfortably below that threshold.
 
 ### Taylor fallback in `_log_diff_ndtr`
 
@@ -93,7 +92,7 @@ The file contains three test functions:
 
 Executed on 2026-04-10 against commit with likelihood.py including hazard clamping in `_grad_right` and `np.errstate` in `_grad_interval`.
 
-**All 54 tests pass.**
+**All 79 tests pass.**
 
 ```
 gradient_validation/test_gradient_verification.py::test_analytical_gradient_matches_finite_difference[no_X-initial-normal-none]          PASSED

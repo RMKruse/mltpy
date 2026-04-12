@@ -1,10 +1,10 @@
 """Finite-difference verification of analytical gradients in pymlt.
 
-Tests every analytical gradient in :mod:`pymlt.likelihood` against a central
-finite-difference approximation computed via :func:`scipy.optimize.approx_fprime`.
-This is an independent correctness check that does not depend on R: it catches
-bugs that the R-comparison validation would miss if both implementations share
-the same error.
+Tests every analytical gradient in :mod:`pymlt.likelihood` against a
+finite-difference approximation computed via
+:func:`scipy.optimize.approx_fprime`. This is an independent correctness
+check that does not depend on R: it catches bugs that the R-comparison
+validation would miss if both implementations share the same error.
 
 The test matrix is the full cross-product of:
 

@@ -1,12 +1,22 @@
-"""Diagnose the case_06 Coxph failure.
+"""HISTORICAL DIAGNOSTIC — case_06 Coxph failure (RESOLVED).
 
-Context
--------
-``case_06_coxph_200_6`` is the last remaining genuine failure in the
-R-comparison suite. pymlt converges to a *better* log-likelihood than R
-(-98.9 vs -109.1) but to a structurally different ``theta``. The
-gradient-verification suite (``test_gradient_verification.py``) has ruled
-out an analytical-gradient bug, so the divergence must be caused by one of:
+This script was written to investigate why ``case_06_coxph_200_6`` diverged
+from R: pymlt converged to loglik -98.9 while R reported -109.1 from a
+structurally different ``theta``.
+
+**Resolution (this PR):** Experiment 6 confirmed the root cause — pymlt's
+``Coxph`` class hardcoded ``base_distribution="normal"`` but ``tram::Coxph``
+uses the minimum extreme value (reversed Gumbel) distribution.  The fix was
+to change ``Coxph`` to hardcode ``base_distribution="min_extreme_value"``.
+case_06 now passes.
+
+**Do not run this script against the current codebase.** Several experiments
+(1, 4, 5) explicitly pass ``base_distribution="normal"`` to reproduce the
+pre-fix state, and ``_grad_right_no_clamp`` in Experiment 4 reflects an older
+version of the hazard computation.  The script is kept as an archive of the
+diagnostic process that led to the fix.
+
+The three candidate causes that were investigated:
 
 1. A different objective function (h-clipping or hazard clamping deforming
    pymlt's likelihood surface relative to R's)
@@ -14,10 +24,6 @@ out an analytical-gradient bug, so the divergence must be caused by one of:
    different initialisations landing in different minima)
 3. Constraint handling differences (SLSQP vs augmented Lagrangian on the
    active monotonicity face)
-
-This script runs the five diagnostic experiments described in the plan and
-prints a labelled block for each. See ``GRADIENT_VALIDATION.md`` and
-``VALIDATION.md`` for the broader context.
 
 No production code is modified. Experiment 4 temporarily monkey-patches
 ``pymlt.likelihood._grad_right`` for a single ``optimize()`` call and then
