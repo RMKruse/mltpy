@@ -30,7 +30,7 @@ The validation runs in three steps:
 | case_03 (2 cases) | MLT | Left | 200 | 4, 6 | [0, 6] | N(3, 1), 30% left-censored | Detection threshold censoring |
 | case_04 (2 cases) | MLT | Interval | 200 | 4, 6 | [2, 8] | N(5, 1), width ~0.1 | All observations interval-censored |
 | case_05 | BoxCox | None | 200 | 6 | [0.01, 10] | LogNormal | tram::BoxCox (normal base distribution) |
-| case_06 | Coxph | Right | 200 | 6 | [0.01, 8] | Exp(rate=1), ~55% censored | tram::Coxph (normal base distribution) |
+| case_06 | Coxph | Right | 200 | 6 | [0.01, 8] | Exp(rate=1), ~55% censored | tram::Coxph (min_extreme_value base distribution) |
 | case_07 | Colr | None | 200 | 6 | [-1, 5] | Logistic(2, 0.5) | tram::Colr (logistic base distribution) |
 | case_08 | MLT | None | 200 | 6 | [0, 10] | N(5, 1) + 2 covariates | Regression model with shifting term |
 | case_09 | MLT | None | 30 | 4 | [0, 1] | Uniform(0.02, 0.98) | Small sample edge case |
@@ -172,7 +172,7 @@ Reference values were generated with:
 
 ## Known Limitations
 
-1. **case_06 (Coxph)**: pymlt's Coxph model currently converges to a different local minimum than R's tram::Coxph (Δll = 10.2). This is under investigation.
+1. **case_06 (Coxph)**: Resolved. The original failure (Δll = 10.2) was caused by pymlt using `base_distribution="normal"` for Coxph, while R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox PH model requires `log[-log S(t)] = h(t)`, which corresponds to `base_distribution="min_extreme_value"`. After the fix, Δll = 0.0001.
 
 2. **case_16 (order=12 + right censoring)**: Extreme non-identifiability at high polynomial order with censoring. The log-likelihood matches (Δll = 0.034 < 0.1) but CDF barely exceeds tolerance (Δcdf = 0.0219 > 0.02). The Δθ = 1913 confirms the two optimizers found radically different parameterizations of nearly the same distribution function — a fundamental consequence of over-parameterization under censoring.
 
@@ -203,14 +203,14 @@ case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 �
 case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0002 │    —
 case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000  │ 0.0001│ 0.0001 │ 0.0004 │    —
 case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
-case_06_coxph_200_6         │ coxph  │   200 │   6 │ FAIL  │ 2.1921 │ 10.2179 │ 0.0559│ 0.2017 │ 0.3319 │ 4.2845
+case_06_coxph_200_6         │ coxph  │   200 │   6 │ PASS  │ 1.9375 │ 0.0001  │ 0.0000│ 0.0000 │ 0.0387 │ 2.1027
 case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0003 │    —
 case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
 case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
 case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003  │ 0.0004│ 0.0017 │ 0.0366 │ 5.0434
 case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000  │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Total: 20/21 passed (95.2%)
+Total: 21/21 passed (100.0%)
 ```
 
 ## Results of Validation (10.04.2026 - 29 cases)
@@ -235,7 +235,7 @@ case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 �
 case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0002 │    —  
 case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0004 │    —  
 case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
-case_06_coxph_200_6         │ coxph  │   200 │   6 │ FAIL  │ 2.1921 │10.2179 │ 0.0559│ 0.2017 │ 0.3319 │ 4.2845
+case_06_coxph_200_6         │ coxph  │   200 │   6 │ PASS  │ 1.9375 │ 0.0001 │ 0.0000│ 0.0000 │ 0.0387 │ 2.1027
 case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0003 │    —  
 case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
 case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
@@ -250,16 +250,16 @@ case_17_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1479 �
 case_18_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —  
 case_19_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0229 │ 0.0000 │ 0.0000│ 0.0004 │ 0.0169 │    —  
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Total: 27/29 passed (93.1%)
+Total: 28/29 passed (96.6%)
 ```
 
 ### Failure Analysis
 
 Both failures involve right-censored survival data where the upper tail is poorly identified by the observed data. They differ in severity.
 
-**case_06 (Coxph) — different local minimum (Δll = 10.2)**
+**case_06 (Coxph) — RESOLVED (was: wrong base distribution)**
 
-This is a genuine different-basin problem. pymlt finds a *better* log-likelihood (-98.9 vs R's -109.1), meaning pymlt's SLSQP optimizer reaches a higher point on the likelihood surface than R's `alabama::auglag`. The theta vectors are structurally different: pymlt collapses coefficients 1–5 to identical values (2.753) while R keeps them flat at 2.996 but with a much higher final coefficient (4.95 vs 2.76). This likely traces back to the hazard clamping change (`np.minimum(hazard, _H_CLIP)`) in `_grad_right`, which altered the gradient landscape enough to steer the optimizer toward a different basin. pymlt may actually be finding the global optimum, but the validation framework treats R as ground truth.
+Root cause: pymlt's `Coxph` class was hardcoded to `base_distribution="normal"`, but R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox proportional hazards model requires `log[-log S(t)] = h(t) + x'β`, which corresponds to `h(T) ~ MinExtrVal`, not `h(T) ~ Normal`. After changing `Coxph` to use `base_distribution="min_extreme_value"`, case_06 passes with Δll = 0.0001. The Δθ = 1.94 reflects a different local optimum (the optimizers converge to slightly different points on the correct likelihood surface), but all functional metrics (CDF, PDF) match to machine precision.
 
 **case_16 (order=12 + right censoring) — over-parameterization non-identifiability (Δcdf = 0.0219)**
 
