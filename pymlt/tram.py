@@ -292,7 +292,7 @@ class Coxph(_TramModel):
             support=support,
             censoring=CensoringType.RIGHT,
             optimizer_config=optimizer_config,
-            base_distribution="normal",
+            base_distribution="min_extreme_value",
         )
 
     def survival(
