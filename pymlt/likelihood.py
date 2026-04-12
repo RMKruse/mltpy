@@ -603,10 +603,13 @@ def _grad_interval(
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
         log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-        w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        # When interval probability ≈ 0, log_p = -inf and weights overflow
-        # to inf/NaN. These observations contribute negligibly — zero them.
+        # When interval probability ≈ 0, log_p = -inf and the subtraction
+        # produces +inf before exp, raising overflow/invalid warnings.  Suppress
+        # them here; nan_to_num zeros the resulting inf/NaN so they never affect
+        # the gradient.
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
         w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
         w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
 
