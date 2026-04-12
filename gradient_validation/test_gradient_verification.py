@@ -332,8 +332,8 @@ def test_analytical_gradient_matches_finite_difference(
 ) -> None:
     """Analytical gradient should agree with central finite differences.
 
-    Runs for the full cross-product of 4 censoring types x 2 base distributions
-    x 3 theta positions x 2 covariate modes = 48 configurations.
+    Runs for the full cross-product of 4 censoring types x 3 base distributions
+    x 3 theta positions x 2 covariate modes = 72 configurations.
     """
     # Deterministic seed derived from the parameters so failures are
     # reproducible. ``hash`` of strings is PYTHONHASHSEED-dependent, so we
