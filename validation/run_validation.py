@@ -390,7 +390,8 @@ def compare_results(
     max_delta_theta = float(np.max(delta_theta))
     delta_loglik = abs(fit.loglik_py - ref.loglik_r)
 
-    if len(fit.cdf_values_py) == len(ref.cdf_values_r):
+    cdf_length_mismatch = len(fit.cdf_values_py) != len(ref.cdf_values_r)
+    if not cdf_length_mismatch:
         delta_cdf = np.abs(fit.cdf_values_py - ref.cdf_values_r)
         max_delta_cdf = float(np.max(delta_cdf))
     else:
@@ -462,14 +463,22 @@ def compare_results(
     info: list[str] = []
 
     loglik_ok = delta_loglik <= TOL_LOGLIK
-    cdf_ok = max_delta_cdf <= TOL_CDF or np.isnan(max_delta_cdf)
+    if cdf_length_mismatch:
+        cdf_ok = False
+    else:
+        cdf_ok = max_delta_cdf <= TOL_CDF
 
     if max_delta_theta > TOL_THETA:
         info.append(f"theta ({max_delta_theta:.4f} > {TOL_THETA}; informational)")
 
     if not loglik_ok:
         failures.append(f"loglik ({delta_loglik:.4f} > {TOL_LOGLIK})")
-    if not cdf_ok:
+    if cdf_length_mismatch:
+        failures.append(
+            f"cdf (length mismatch: got {len(fit.cdf_values_py)},"
+            f" expected {len(ref.cdf_values_r)})"
+        )
+    elif not cdf_ok:
         failures.append(f"cdf ({max_delta_cdf:.4f} > {TOL_CDF})")
 
     # Derived functional outputs: hard failure only when primary metrics fail too
