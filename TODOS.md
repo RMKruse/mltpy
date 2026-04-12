@@ -1,4 +1,4 @@
-# Whats missing from pymlt? A Plan.
+# What's missing from pymlt? A Plan.
 
  pymlt is a Python port of Hothorn's R mlt package for Conditional
  Transformation Models. The core framework is solid: 28/29 R validation
