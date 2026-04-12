@@ -25,7 +25,7 @@ from numpy.typing import NDArray
 from scipy.optimize import brentq
 
 from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import _get_dist, log_likelihood
+from pymlt.likelihood import BaseDistribution, _get_dist, log_likelihood
 from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
 from pymlt.variables import CensoredData, CensoringType
 
@@ -92,7 +92,7 @@ class ConditionalTransformationModel:
         basis: BernsteinBasis,
         censoring: CensoringType = CensoringType.NONE,
         optimizer_config: OptimizerConfig | None = None,
-        base_distribution: Literal["normal", "logistic"] = "normal",
+        base_distribution: BaseDistribution = "normal",
     ) -> None:
         _get_dist(base_distribution)  # raises ValueError for unsupported values
         self.basis = basis
@@ -502,7 +502,7 @@ class MLT(ConditionalTransformationModel):
         support: tuple[float, float] = (0.0, 1.0),
         censoring: CensoringType = CensoringType.NONE,
         optimizer_config: OptimizerConfig | None = None,
-        base_distribution: Literal["normal", "logistic"] = "normal",
+        base_distribution: BaseDistribution = "normal",
     ) -> None:
         basis = BernsteinBasis(order=order, support=support)
         super().__init__(

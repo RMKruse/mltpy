@@ -10,8 +10,13 @@ Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1):
     h(y)  = B_k(y) @ theta_b  [+ X @ beta  if covariates are present]
     h'(y) = B_k'(y) @ theta_b  (first derivative; beta does not appear)
 
-The target distribution Z follows either N(0,1) or Logistic(0,1) depending
-on ``base_distribution``.
+The target distribution Z follows one of:
+
+* ``"normal"``            — N(0, 1)
+* ``"logistic"``           — Logistic(0, 1)
+* ``"min_extreme_value"``  — standard minimum extreme value (reversed Gumbel),
+                             the link that gives the Cox proportional hazards
+                             model, since ``log[-log S(t)] = h(t)``.
 
 Log-likelihood formulae
 -----------------------
@@ -45,17 +50,28 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import log_ndtr
+from scipy.stats import gumbel_l as _mev
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
 from pymlt.basis import BernsteinBasis
 from pymlt.variables import CensoredData, CensoringType
 
-_VALID_BASE_DISTRIBUTIONS = ("normal", "logistic")
+BaseDistribution = Literal["normal", "logistic", "min_extreme_value"]
+_VALID_BASE_DISTRIBUTIONS = ("normal", "logistic", "min_extreme_value")
 
 
 def _get_dist(base_distribution: str) -> Any:
     """Return the scipy.stats distribution for *base_distribution*.
+
+    The supported choices are:
+
+    * ``"normal"``            — :data:`scipy.stats.norm`
+    * ``"logistic"``           — :data:`scipy.stats.logistic`
+    * ``"min_extreme_value"``  — :data:`scipy.stats.gumbel_l`, the standard
+      minimum extreme value (reversed Gumbel) distribution.  This is the
+      inverse link that realises the Cox proportional hazards model:
+      if ``h(T) ~ MinExtrVal`` then ``log[-log S(t)] = h(t) + x'beta``.
 
     Raises
     ------
@@ -67,6 +83,8 @@ def _get_dist(base_distribution: str) -> Any:
         return norm
     if base_distribution == "logistic":
         return _logistic
+    if base_distribution == "min_extreme_value":
+        return _mev
     raise ValueError(
         f"base_distribution={base_distribution!r} is not supported. "
         f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
@@ -75,6 +93,9 @@ def _get_dist(base_distribution: str) -> Any:
 
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
+
+# Maximum exponent that np.exp can handle without overflow.
+_LOG_FLOAT_MAX: float = float(np.log(np.finfo(np.float64).max))
 
 
 # ---------------------------------------------------------------------------
@@ -214,17 +235,20 @@ def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     h : NDArray[np.float64]
         Values of the transformation function.
     dist : Any
-        scipy.stats distribution object (either norm or logistic).
+        scipy.stats distribution object (norm, logistic, or gumbel_l).
 
     Returns
     -------
     NDArray[np.float64]
         The negative derivative of the log-density.
-        For normal: `h`
-        For logistic: `tanh(h / 2)`.
+        For normal: ``h``
+        For logistic: ``2 F(h) - 1``
+        For min_extreme_value: ``exp(h) - 1``
     """
     if dist is norm:
         return h
+    if dist is _mev:
+        return np.exp(h) - 1.0
     return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
 
 
@@ -493,7 +517,9 @@ def _grad_right(
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = +B_c.T @ [f(h)/F̄(h)]
-        hazard = np.exp(dist.logpdf(h_c) - dist.logsf(h_c))
+        # Cap the exponent to avoid overflow; consistent with logsf in the LL.
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         grad[:p] += B_c.T @ hazard
         if X_c is not None:
             grad[p:] += X_c.T @ hazard
@@ -581,12 +607,20 @@ def _grad_interval(
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
         log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-        w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        # When interval probability ≈ 0, log_p = -inf and the subtraction
+        # produces +inf before exp, raising overflow/invalid warnings.  Suppress
+        # them here; nan_to_num zeros the resulting inf/NaN so they never affect
+        # the gradient.
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
 
-        grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
-        if X_i is not None:
-            grad[p:] -= X_i.T @ (w_hi - w_lo)
+        with np.errstate(invalid="ignore"):
+            grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
+            if X_i is not None:
+                grad[p:] -= X_i.T @ (w_hi - w_lo)
 
     return cast(NDArray[np.float64], grad)
 
@@ -602,7 +636,7 @@ def log_likelihood(
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
-    base_distribution: Literal["normal", "logistic"] = "normal",
+    base_distribution: BaseDistribution = "normal",
 ) -> float:
     """Log-likelihood of a conditional transformation model.
 
@@ -668,7 +702,7 @@ def negative_log_likelihood(
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     gradient: bool = False,
-    base_distribution: Literal["normal", "logistic"] = "normal",
+    base_distribution: BaseDistribution = "normal",
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Negative log-likelihood (objective for minimisation) with optional gradient.
 

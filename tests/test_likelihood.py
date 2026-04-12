@@ -462,7 +462,9 @@ class TestGetDist:
             _get_dist(bad)
 
     def test_valid_distributions_constant(self):
-        assert set(_VALID_BASE_DISTRIBUTIONS) == {"normal", "logistic"}
+        assert set(_VALID_BASE_DISTRIBUTIONS) == {
+            "normal", "logistic", "min_extreme_value",
+        }
 
 
 def test_log_likelihood_invalid_distribution_raises():
