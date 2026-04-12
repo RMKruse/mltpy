@@ -81,7 +81,7 @@ class GradCase:
     y: NDArray[np.float64] | CensoredData
     X: NDArray[np.float64] | None
     censoring: CensoringType
-    base_distribution: Literal["normal", "logistic"]
+    base_distribution: Literal["normal", "logistic", "min_extreme_value"]
     n_covariates: int
 
 
@@ -146,7 +146,7 @@ def _converged_theta(
     y_or_cd: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic"],
+    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
 ) -> NDArray[np.float64]:
     """Fit an MLT model and return the converged parameter vector."""
     model = MLT(
@@ -162,7 +162,7 @@ def _converged_theta(
 
 def _make_test_case(
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic"],
+    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
     with_covariates: bool,
     seed: int,
 ) -> GradCase:
@@ -305,6 +305,7 @@ CENSORING_TYPES = [
 BASE_DISTRIBUTIONS = [
     pytest.param("normal", id="normal"),
     pytest.param("logistic", id="logistic"),
+    pytest.param("min_extreme_value", id="min_extreme_value"),
 ]
 
 THETA_POSITIONS = [
@@ -325,7 +326,7 @@ COVARIATE_MODES = [
 @pytest.mark.parametrize("with_covariates", COVARIATE_MODES)
 def test_analytical_gradient_matches_finite_difference(
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic"],
+    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
     theta_position: Literal["initial", "perturbed", "converged"],
     with_covariates: bool,
 ) -> None:
@@ -369,7 +370,7 @@ def test_analytical_gradient_matches_finite_difference(
 
 @pytest.mark.parametrize("base_distribution", BASE_DISTRIBUTIONS)
 def test_narrow_interval_triggers_taylor_branch(
-    base_distribution: Literal["normal", "logistic"],
+    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
 ) -> None:
     """Narrow intervals exercise the Taylor fallback in ``_log_diff_ndtr``.
 
