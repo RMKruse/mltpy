@@ -94,6 +94,9 @@ def _get_dist(base_distribution: str) -> Any:
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
+# Maximum exponent that np.exp can handle without overflow.
+_LOG_FLOAT_MAX: float = float(np.log(np.finfo(np.float64).max))
+
 
 # ---------------------------------------------------------------------------
 # Numerically stable log(F(b) − F(a))
@@ -514,8 +517,9 @@ def _grad_right(
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = +B_c.T @ [f(h)/F̄(h)]
-        hazard = np.exp(dist.logpdf(h_c) - dist.logsf(h_c))
-        hazard = np.minimum(hazard, _H_CLIP)
+        # Cap the exponent to avoid overflow; consistent with logsf in the LL.
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         grad[:p] += B_c.T @ hazard
         if X_c is not None:
             grad[p:] += X_c.T @ hazard
