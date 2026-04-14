@@ -252,7 +252,7 @@ class BoxCox(_TramModel):
 class Coxph(_TramModel):
     """Cox proportional hazards model for right-censored survival data.
 
-     Fits a monotone transformation h(t) under right-censoring using the
+    Fits a monotone transformation h(t) under right-censoring using the
     minimum extreme value (``"min_extreme_value"``) base distribution, also
     known as the reversed Gumbel link. With covariates entering linearly,
     this parameterisation is equivalent to the classical Cox proportional
