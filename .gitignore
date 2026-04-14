@@ -13,6 +13,7 @@ dist/
 
 # --- Sphinx docs (generated) ---
 docs/_build/
+docs/**/.ipynb_checkpoints/
 
 # --- R ---
 .Rhistory
