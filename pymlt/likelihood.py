@@ -486,7 +486,7 @@ def _grad_none(
     if X is not None and beta is not None:
         grad_beta = X.T @ ns
         return cast(NDArray[np.float64], np.concatenate([grad_b, grad_beta]))
-    return cast(NDArray[np.float64], grad_b)
+    return grad_b
 
 
 def _grad_right(
