@@ -11,6 +11,9 @@ dist/
 .pytest_cache/
 .mypy_cache/
 
+# --- Sphinx docs (generated) ---
+docs/_build/
+
 # --- R ---
 .Rhistory
 .RData
