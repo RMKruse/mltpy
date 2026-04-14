@@ -9,15 +9,14 @@ import pytest
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import MonotonicityConstraint
 from pymlt.optimizer import (
-    OptimizerConfig,
     OptimizationResult,
+    OptimizerConfig,
     _initial_theta,
     _perturb_and_project,
     _project_to_feasible,
     optimize,
 )
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers

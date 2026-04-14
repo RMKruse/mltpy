@@ -2,26 +2,23 @@
 from __future__ import annotations
 
 import pathlib
-import warnings
 
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
-import pymlt
 from pymlt.basis import BernsteinBasis
-from scipy.stats import logistic as _logistic, norm
-
 from pymlt.model import (
+    MLT,
     ConditionalTransformationModel,
     ConvergenceWarning,
-    MLT,
     NotFittedError,
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -569,8 +566,8 @@ def test_integration_r_reference():
     model.fit(y_ref)
 
     # Log-likelihoods must agree (within tolerance from different optimisers)
-    from pymlt.likelihood import log_likelihood
     from pymlt.basis import BernsteinBasis
+    from pymlt.likelihood import log_likelihood
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_r = log_likelihood(theta_r, basis, y_ref)
     ll_py = model.score(y_ref)
