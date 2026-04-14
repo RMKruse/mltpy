@@ -1,0 +1,9 @@
+{
+  "model": "mlt",
+  "censoring": "none",
+  "n": 500,
+  "order": 10,
+  "support": [0, 1],
+  "seed": 57,
+  "note": "High order (10) stress test"
+}

@@ -1,0 +1,13 @@
+{
+  "model": "mlt",
+  "censoring": "right",
+  "n": 200,
+  "order": 6,
+  "support": [0, 5],
+  "seed": 55,
+  "regression": true,
+  "n_covariates": 2,
+  "beta_true": [0.5, -0.29999999999999999],
+  "cdf_at_X": [0, 0],
+  "censoring_pct": 0.53500000000000003
+}

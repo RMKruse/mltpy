@@ -1,0 +1,10 @@
+{
+  "model": "mlt",
+  "censoring": "interval",
+  "n": 200,
+  "order": 6,
+  "support": [0, 10],
+  "seed": 60,
+  "interval_half_width": 0.5,
+  "note": "Wide interval censoring stress test (width ~1.0)"
+}

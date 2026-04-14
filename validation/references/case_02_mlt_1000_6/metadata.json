@@ -1,0 +1,9 @@
+{
+  "model": "mlt",
+  "censoring": "right",
+  "n": 1000,
+  "order": 6,
+  "support": [0, 5],
+  "seed": 144,
+  "censoring_pct": 0.58499999999999996
+}

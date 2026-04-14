@@ -1,0 +1,10 @@
+{
+  "model": "coxph",
+  "censoring": "right",
+  "n": 200,
+  "order": 6,
+  "support": [0.01, 8],
+  "seed": 48,
+  "base_distribution": "min_extreme_value",
+  "censoring_pct": 0.54500000000000004
+}
