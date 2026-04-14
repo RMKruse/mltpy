@@ -73,3 +73,6 @@ select = ["E", "F", "W", "I"]
 [tool.coverage.run]
 source = ["pymlt"]
 omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+fail_under = 90
