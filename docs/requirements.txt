@@ -1,3 +1,10 @@
 sphinx>=7.0
 sphinx-autodoc-typehints>=1.24
-furo>=2024.1.29
+pydata-sphinx-theme>=0.15
+nbsphinx>=0.9
+myst-parser>=2.0
+ipykernel>=6.0
+jupyter>=1.0
+matplotlib>=3.5
+pandas>=2.0
+lifelines>=0.28
