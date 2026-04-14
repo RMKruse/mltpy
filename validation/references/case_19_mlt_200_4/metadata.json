@@ -1,0 +1,10 @@
+{
+  "model": "mlt",
+  "censoring": "right",
+  "n": 200,
+  "order": 4,
+  "support": [0, 5],
+  "seed": 61,
+  "censoring_pct": 0.96999999999999997,
+  "note": "Near-degenerate: ~95% censored stress test"
+}

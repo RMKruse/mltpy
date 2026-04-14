@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -53,7 +53,7 @@ class MonotonicityConstraint:
 
     def as_matrix(self) -> NDArray[np.float64]:
         """Return the (n_params-1, n_params) difference matrix D."""
-        return cast(NDArray[np.float64], self._D.copy())
+        return self._D.copy()
 
     def as_scipy_constraint(self) -> dict[str, Any]:
         """Return an SLSQP-compatible constraint dict.

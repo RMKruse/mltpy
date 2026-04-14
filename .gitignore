@@ -11,6 +11,9 @@ dist/
 .pytest_cache/
 .mypy_cache/
 
+# --- Sphinx docs (generated) ---
+docs/_build/
+
 # --- R ---
 .Rhistory
 .RData
@@ -33,9 +36,8 @@ Thumbs.db
 .env
 
 # --- Validation (generated from CSV, not committed) ---
-validation/references/
-validation/results/
-*.csv
+# validation/references/
+# validation/results/
 
 # --- dot files ---
 .hypothesis/

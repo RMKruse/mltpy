@@ -2,26 +2,23 @@
 from __future__ import annotations
 
 import pathlib
-import warnings
 
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
-import pymlt
 from pymlt.basis import BernsteinBasis
-from scipy.stats import logistic as _logistic, norm
-
 from pymlt.model import (
+    MLT,
     ConditionalTransformationModel,
     ConvergenceWarning,
-    MLT,
     NotFittedError,
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -141,6 +138,26 @@ class TestValidateInput:
         s = pd.Series(simple_y())
         model.fit(s)  # must not raise
         assert model.is_fitted_
+
+    def test_censored_upper_out_of_support_raises(self):
+        """Interval-censored upper bound above support triggers fin_hi branch."""
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(basis)
+        cd = CensoredData.interval_censored(
+            np.array([0.2, 0.4]), np.array([0.6, 1.5]),
+        )
+        with pytest.raises(ValueError, match="upper"):
+            model.fit(cd)
+
+    def test_x_1d_reshaped(self):
+        """A 1-D X array is promoted to a column vector; fit must succeed."""
+        model = make_ctm()
+        y = simple_y(n=20)
+        X = np.linspace(-1.0, 1.0, 20)  # shape (20,) — 1-D
+        model.fit(y, X=X)
+        assert model.is_fitted_
+        p = model.basis.order + 1
+        assert model.theta_.shape == (p + 1,)
 
 
 # ---------------------------------------------------------------------------
@@ -569,8 +586,8 @@ def test_integration_r_reference():
     model.fit(y_ref)
 
     # Log-likelihoods must agree (within tolerance from different optimisers)
-    from pymlt.likelihood import log_likelihood
     from pymlt.basis import BernsteinBasis
+    from pymlt.likelihood import log_likelihood
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_r = log_likelihood(theta_r, basis, y_ref)
     ll_py = model.score(y_ref)

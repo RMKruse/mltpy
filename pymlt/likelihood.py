@@ -126,7 +126,8 @@ def _log_diff_ndtr(
     b: NDArray[np.float64]
         Upper arguments. Must satisfy a <= b.
     dist: Any, default=scipy.stats.norm
-        Base distribution object (e.g., norm or logistic) providing ``logcdf`` and ``logpdf``.
+        Base distribution object (e.g., norm or logistic) providing
+        ``logcdf`` and ``logpdf``.
 
     Returns
     -------
@@ -135,14 +136,17 @@ def _log_diff_ndtr(
 
     Notes
     -----
-    Computing `log(F(b) - F(a))` directly can lead to catastrophic cancellation when `F(b) ≈ F(a)`,
-    resulting in `log(0) = -inf`. This function uses a piecewise approach:
+    Computing `log(F(b) - F(a))` directly can lead to catastrophic cancellation
+    when `F(b) ≈ F(a)`, resulting in `log(0) = -inf`. This function uses a
+    piecewise approach:
 
-    1. For **wide intervals** (`log(F(a)) - log(F(b)) < -1e-6`), it uses the logsumexp trick:
+    1. For **wide intervals** (`log(F(a)) - log(F(b)) < -1e-6`), it uses the
+       logsumexp trick:
        `log(F(b)) + log1p(-exp(log(F(a)) - log(F(b))))`
 
-    2. For **narrow intervals** (`log(F(a)) - log(F(b)) >= -1e-6`), it uses a first-order Taylor approximation
-       around the midpoint `mid = (a + b) / 2` to avoid evaluating identical CDFs:
+    2. For **narrow intervals** (`log(F(a)) - log(F(b)) >= -1e-6`), it uses a
+       first-order Taylor approximation around the midpoint `mid = (a + b) / 2`
+       to avoid evaluating identical CDFs:
        `F(b) - F(a) ≈ f(mid) * (b - a)`
        which in log-space becomes:
        `log(f(mid)) + log(b - a)`
@@ -178,7 +182,8 @@ def _log_diff_ndtr(
 def _split_theta(
     theta: NDArray[np.float64], p: int, X: NDArray[np.float64] | None
 ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
-    """Split the full parameter vector `theta` into basis coefficients and regression shifts.
+    """Split the full parameter vector `theta` into basis coefficients and
+    regression shifts.
 
     Parameters
     ----------
@@ -481,7 +486,7 @@ def _grad_none(
     if X is not None and beta is not None:
         grad_beta = X.T @ ns
         return cast(NDArray[np.float64], np.concatenate([grad_b, grad_beta]))
-    return cast(NDArray[np.float64], grad_b)
+    return grad_b
 
 
 def _grad_right(

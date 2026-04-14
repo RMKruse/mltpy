@@ -146,8 +146,8 @@ def _make_objective(
     Returns
     -------
     Callable[[NDArray[np.float64]], Any]
-        Objective function mapping a parameter vector ``theta`` to a scalar negative log-likelihood
-        (and optionally its gradient vector).
+        Objective function mapping a parameter vector ``theta`` to a scalar
+        negative log-likelihood (and optionally its gradient vector).
     """
     _BIG = 1e10
 
@@ -174,7 +174,8 @@ def _make_objective(
 
 
 def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
-    """Build the dictionary of configuration options passed directly to `scipy.optimize.minimize`.
+    """Build the dictionary of configuration options passed directly to
+    `scipy.optimize.minimize`.
 
     Parameters
     ----------
@@ -192,7 +193,8 @@ def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
 
 
 def _initial_theta(n_params: int, X: NDArray[np.float64] | None) -> NDArray[np.float64]:
-    """Default starting point: linearly spaced basis coefficients and zero beta components.
+    """Default starting point: linearly spaced basis coefficients and zero
+    beta components.
 
     Parameters
     ----------
@@ -225,8 +227,9 @@ def _perturb_and_project(
     """Perturb the current parameter vector randomly and re-project to a feasible state.
 
     This function adds random Gaussian noise to the Bernstein coefficients (theta_b),
-    in order to break out of poor local minima, while leaving the beta components (if any) unchanged.
-    The perturbed vector is then projected to preserve the monotonic non-decreasing constraints.
+    in order to break out of poor local minima, while leaving the beta
+    components (if any) unchanged. The perturbed vector is then projected to
+    preserve the monotonic non-decreasing constraints.
 
     Parameters
     ----------
@@ -296,7 +299,9 @@ def optimize(
 
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
-    constraints = build_constraints(n_params, solver=config.solver, total_params=total_params)
+    constraints = build_constraints(
+        n_params, solver=config.solver, total_params=total_params
+    )
     obj = _make_objective(basis, y, X, censoring, config.use_gradient,
                           base_distribution=base_distribution)
     jac = True if config.use_gradient else None
