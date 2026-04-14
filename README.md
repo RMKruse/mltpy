@@ -3,8 +3,6 @@
 [![CI](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml/badge.svg)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-latest-blue)](https://rmkruse.github.io/pymlt/)
 [![codecov](https://img.shields.io/badge/coverage-tracked-informational)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/pymlt.svg)](https://pypi.org/project/pymlt/)
-[![Python](https://img.shields.io/pypi/pyversions/pymlt.svg)](https://pypi.org/project/pymlt/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Fit flexible conditional distributions to continuous, censored, or covariate-dependent data using monotone Bernstein polynomial transformations.
