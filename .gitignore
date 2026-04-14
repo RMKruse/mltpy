@@ -33,9 +33,8 @@ Thumbs.db
 .env
 
 # --- Validation (generated from CSV, not committed) ---
-validation/references/
-validation/results/
-*.csv
+# validation/references/
+# validation/results/
 
 # --- dot files ---
 .hypothesis/
