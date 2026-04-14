@@ -57,7 +57,7 @@ python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["scipy.*"]
+module = ["scipy.*", "matplotlib.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
