@@ -28,10 +28,30 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/RMKruse/pymlt"
+Documentation = "https://rmkruse.github.io/pymlt/"
 
 [project.optional-dependencies]
 pandas = ["pandas>=2.0"]
 plots = ["matplotlib>=3.5"]
+examples = [
+    "matplotlib>=3.5",
+    "pandas>=2.0",
+    "lifelines>=0.28",
+    "ipykernel>=6.0",
+    "jupyter>=1.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints>=1.24",
+    "pydata-sphinx-theme>=0.15",
+    "nbsphinx>=0.9",
+    "myst-parser>=2.0",
+    "matplotlib>=3.5",
+    "pandas>=2.0",
+    "lifelines>=0.28",
+    "ipykernel>=6.0",
+    "jupyter>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

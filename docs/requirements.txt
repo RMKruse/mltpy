@@ -1,3 +1,0 @@
-sphinx>=7.0
-sphinx-autodoc-typehints>=1.24
-furo>=2024.1.29
