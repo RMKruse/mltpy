@@ -1,0 +1,5 @@
+n,order,censoring,rep,time_s,converged,n_iter
+100,4,NONE,0,0.009732962,1,NA
+100,4,NONE,1,0.003728867,1,NA
+100,4,RIGHT,0,0.014885902,1,NA
+100,4,RIGHT,1,0.008649111,1,NA

@@ -174,15 +174,11 @@ def run_benchmark() -> list[dict[str, object]]:
                     "censoring": censoring,
                     "rep": rep,
                     "time_s": f"{elapsed:.9f}",
-                    "converged": converged,
+                    "converged": int(converged),
                     "n_iter": n_iter,
                 }
             )
-        cell_times = [
-            float(r["time_s"])
-            for r in rows[-N_REPS:]
-            if r["converged"]  # type: ignore[truthy-bool]
-        ]
+        cell_times = [float(r["time_s"]) for r in rows[-N_REPS:] if r["converged"] == 1]
         median = float(np.median(cell_times)) if cell_times else float("nan")
         print(
             f"[{cell_idx:>2}/{total_cells}] "
