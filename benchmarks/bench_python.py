@@ -22,7 +22,7 @@ import time
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -182,7 +182,9 @@ def run_benchmark() -> list[dict[str, object]]:
                     "n_iter": n_iter,
                 }
             )
-        cell_times = [float(r["time_s"]) for r in rows[-N_REPS:] if r["converged"] == 1]
+        cell_times = [
+            float(cast(str, r["time_s"])) for r in rows[-N_REPS:] if r["converged"] == 1
+        ]
         median = float(np.median(cell_times)) if cell_times else float("nan")
         print(
             f"[{cell_idx:>2}/{total_cells}] "
