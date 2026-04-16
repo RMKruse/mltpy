@@ -40,6 +40,9 @@ Thumbs.db
 # validation/references/
 # validation/results/
 
+# --- Benchmarks (input data is regenerated each run) ---
+benchmarks/data/
+
 # --- dot files ---
 .hypothesis/
 .claude/
