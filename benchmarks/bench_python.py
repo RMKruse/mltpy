@@ -137,7 +137,11 @@ def _time_one_fit(model: pymlt.MLT, fit_input: object) -> tuple[float, bool, int
     try:
         t0 = time.perf_counter()
         with warnings.catch_warnings():
+            # ConvergenceWarning: recorded separately via result_.converged.
+            # RuntimeWarning: harmless boundary probes from the optimiser
+            #   (e.g. log of a non-monotone proposal during line search).
             warnings.simplefilter("ignore", ConvergenceWarning)
+            warnings.simplefilter("ignore", RuntimeWarning)
             model.fit(fit_input)  # type: ignore[arg-type]
         elapsed = time.perf_counter() - t0
     finally:
