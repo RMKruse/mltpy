@@ -70,6 +70,27 @@ print(f"Estimated median: {median:.1f}")
 
 ---
 
+## Performance
+
+`pymlt.MLT.fit()` is on geometric mean **1.77× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (10 reps each, median per cell). pymlt is the faster backend in 21 of the 24 cells. Representative numbers at `order = 6`:
+
+| n | Censoring | Python (median) | R (median) | Speedup |
+|---:|:---|---:|---:|---:|
+|  100 | none  | 2.9 ms  | 5.5 ms  | 1.9× |
+|  500 | none  | 7.2 ms  | 9.7 ms  | 1.4× |
+| 1000 | none  | 13.5 ms | 15.2 ms | 1.1× |
+| 5000 | none  | 62.5 ms | 68.0 ms | 1.1× |
+|  100 | right | 4.8 ms  | 11.9 ms | 2.5× |
+|  500 | right | 6.8 ms  | 18.9 ms | 2.8× |
+| 1000 | right | 15.5 ms | 41.9 ms | 2.7× |
+| 5000 | right | 75.2 ms | 62.3 ms | 0.8× |
+
+Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12 + numpy 2.4 + scipy 1.17. Numbers depend on hardware and R/Python versions; the speedup ratio is the meaningful comparison.
+
+**Reproduce:** `make benchmark` (requires R with `mlt`, `basefun`, `variables`, `survival` installed). The full grid, environment metadata, and IQR per cell live in [`benchmarks/results/benchmark_report.md`](benchmarks/results/benchmark_report.md).
+
+---
+
 ## Usage
 
 ### Survival analysis with right-censored data
