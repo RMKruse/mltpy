@@ -46,10 +46,28 @@ class ConvergenceWarning(UserWarning):
 # Valid predict targets
 # ---------------------------------------------------------------------------
 
-_VALID_WHAT = ("distribution", "density", "quantile", "hazard")
+_VALID_WHAT = (
+    "trafo",
+    "distribution",
+    "logdistribution",
+    "survivor",
+    "logsurvivor",
+    "density",
+    "logdensity",
+    "hazard",
+    "loghazard",
+    "cumhazard",
+    "logcumhazard",
+    "odds",
+    "logodds",
+    "quantile",
+)
 
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
+
+# Floor for log(h') to avoid log(0) at boundaries where monotonicity is marginal
+_LOG_HP_FLOOR = np.finfo(np.float64).tiny
 
 
 # ---------------------------------------------------------------------------
@@ -241,26 +259,50 @@ class ConditionalTransformationModel:
         self,
         y_new: NDArray[np.float64],
         X_new: NDArray[np.float64] | None = None,
-        what: Literal["distribution", "density", "quantile", "hazard"] = "distribution",
+        what: Literal[
+            "trafo",
+            "distribution",
+            "logdistribution",
+            "survivor",
+            "logsurvivor",
+            "density",
+            "logdensity",
+            "hazard",
+            "loghazard",
+            "cumhazard",
+            "logcumhazard",
+            "odds",
+            "logodds",
+            "quantile",
+        ] = "distribution",
     ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
 
         Parameters
         ----------
         y_new:
-            For ``what ∈ {"distribution", "density", "hazard"}``: response
-            values in ``basis.support``.
             For ``what="quantile"``: probabilities in ``(0, 1)``.
+            For all other ``what``: response values in ``basis.support``.
         X_new:
             Optional covariate matrix of shape ``(m, q)``.
         what:
-            Type of prediction:
+            Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
+            ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
 
-            * ``"distribution"`` — CDF: F(h(y|x))
-            * ``"density"``      — PDF: f(h(y|x)) · h'(y|x)
-            * ``"quantile"``     — Quantile via numerical inversion (brentq)
-            * ``"hazard"``       — Hazard: f(h)/F̄(h); only for
-              ``censoring=RIGHT``
+            * ``"trafo"``           — Transformation ``h(y|x)``
+            * ``"distribution"``    — CDF: ``F(h)``
+            * ``"logdistribution"`` — ``log F(h)``
+            * ``"survivor"``        — Survivor: ``S(h) = 1 − F(h)``
+            * ``"logsurvivor"``     — ``log S(h)``
+            * ``"density"``         — PDF: ``f(h) · h'``
+            * ``"logdensity"``      — ``log f(h) + log h'``
+            * ``"hazard"``          — Hazard: ``f(h) · h' / S(h)``
+            * ``"loghazard"``       — ``log f(h) + log h' − log S(h)``
+            * ``"cumhazard"``       — Cumulative hazard: ``−log S(h)``
+            * ``"logcumhazard"``    — ``log(−log S(h))``
+            * ``"odds"``            — ``F(h) / S(h)``
+            * ``"logodds"``         — ``log F(h) − log S(h)``
+            * ``"quantile"``        — Quantile via numerical inversion (brentq)
 
         Returns
         -------
@@ -272,8 +314,12 @@ class ConditionalTransformationModel:
             If called before :meth:`fit`.
         ValueError
             If ``what`` is not one of the valid options.
-        NotImplementedError
-            If ``what="hazard"`` and ``censoring`` is not ``RIGHT``.
+
+        Notes
+        -----
+        Log-scale variants use ``dist.logcdf``/``logsf``/``logpdf`` directly
+        and are numerically stable in the tails where the primal quantities
+        would under- or overflow.
 
         Examples
         --------
@@ -303,13 +349,6 @@ class ConditionalTransformationModel:
         if what == "quantile":
             return self._predict_quantile(y_arr, theta_b)
 
-        if what == "hazard":
-            if self.censoring is not CensoringType.RIGHT:
-                raise NotImplementedError(
-                    "what='hazard' ist nur für censoring=CensoringType.RIGHT "
-                    "implementiert."
-                )
-
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
         D = self.basis.derivative(y_arr, order=1)  # (m, p)
@@ -321,14 +360,38 @@ class ConditionalTransformationModel:
             h = h + X_arr @ beta
 
         dist = _get_dist(self.base_distribution)
+        hp_pos = np.maximum(hp, 0.0)
+        log_hp = np.log(np.maximum(hp, _LOG_HP_FLOOR))
+
+        if what == "trafo":
+            return h
         if what == "distribution":
             return cast(NDArray[np.float64], dist.cdf(h))
-        elif what == "density":
-            return cast(NDArray[np.float64], dist.pdf(h) * np.maximum(hp, 0.0))
-        else:  # hazard
+        if what == "logdistribution":
+            return cast(NDArray[np.float64], dist.logcdf(h))
+        if what == "survivor":
+            return cast(NDArray[np.float64], dist.sf(h))
+        if what == "logsurvivor":
+            return cast(NDArray[np.float64], dist.logsf(h))
+        if what == "density":
+            return cast(NDArray[np.float64], dist.pdf(h) * hp_pos)
+        if what == "logdensity":
+            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp)
+        if what == "hazard":
             return cast(
-                NDArray[np.float64], dist.pdf(h) / np.maximum(dist.sf(h), 1e-300)
+                NDArray[np.float64],
+                dist.pdf(h) * hp_pos / np.maximum(dist.sf(h), 1e-300),
             )
+        if what == "loghazard":
+            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp - dist.logsf(h))
+        if what == "cumhazard":
+            return cast(NDArray[np.float64], -dist.logsf(h))
+        if what == "logcumhazard":
+            return cast(NDArray[np.float64], np.log(-dist.logsf(h)))
+        if what == "odds":
+            return cast(NDArray[np.float64], np.exp(dist.logcdf(h) - dist.logsf(h)))
+        # logodds
+        return cast(NDArray[np.float64], dist.logcdf(h) - dist.logsf(h))
 
     def _predict_quantile(
         self, probs: NDArray[np.float64], theta_b: NDArray[np.float64]
