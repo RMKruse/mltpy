@@ -14,6 +14,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "validation"))
 
 from run_validation import (  # noqa: E402
+    _NEW_METRIC_SPEC,
+    _NEW_WHATS,
     FittedResult,
     ReferenceCase,
     ValidationResult,
@@ -38,13 +40,22 @@ def _make_ref(
     quantile_probs: np.ndarray | None = None,
     quantile_values: np.ndarray | None = None,
     hazard: np.ndarray | None = None,
+    **new_metrics: np.ndarray | None,
 ) -> ReferenceCase:
-    """Build a minimal ReferenceCase for comparison tests."""
+    """Build a minimal ReferenceCase for comparison tests.
+
+    Additional keyword arguments matching the 10 new metric names (e.g.
+    ``trafo``, ``logodds``) are accepted and routed to the corresponding
+    ``<what>_values_r`` field on the dataclass.
+    """
     if theta is None:
         theta = np.linspace(0, 1, 5)
     if cdf is None:
         cdf = np.linspace(0.1, 0.9, 10)
     cdf_grid = np.linspace(0.1, 0.9, len(cdf))
+    new_kwargs: dict[str, np.ndarray | None] = {
+        f"{w}_values_r": new_metrics.get(w) for w in _NEW_WHATS
+    }
     return ReferenceCase(
         case_id=case_id,
         model="mlt",
@@ -63,6 +74,7 @@ def _make_ref(
         quantile_values_r=quantile_values,
         hazard_grid=cdf_grid if hazard is not None else None,
         hazard_values_r=hazard,
+        **new_kwargs,
     )
 
 
@@ -75,8 +87,14 @@ def _make_fit(
     quantile_offset: float = 0.0,
     hazard_offset: float = 0.0,
     converged: bool = True,
+    **new_metric_offsets: float,
 ) -> FittedResult:
-    """Build a FittedResult near the reference with controlled deltas."""
+    """Build a FittedResult near the reference with controlled deltas.
+
+    For each of the 10 new metric names, a ``<what>_offset`` keyword adds a
+    uniform shift to the corresponding pymlt prediction (only when the
+    reference provides a value; otherwise the pymlt field stays ``None``).
+    """
     pdf_py = None
     if ref.pdf_values_r is not None:
         pdf_py = ref.pdf_values_r + pdf_offset
@@ -86,6 +104,13 @@ def _make_fit(
     hazard_py = None
     if ref.hazard_values_r is not None:
         hazard_py = ref.hazard_values_r + hazard_offset
+
+    new_py: dict[str, np.ndarray | None] = {}
+    for what in _NEW_WHATS:
+        ref_vals = getattr(ref, f"{what}_values_r", None)
+        offset = float(new_metric_offsets.get(f"{what}_offset", 0.0))
+        new_py[f"{what}_values_py"] = None if ref_vals is None else ref_vals + offset
+
     return FittedResult(
         theta_py=ref.theta_r + theta_offset,
         loglik_py=ref.loglik_r + loglik_offset,
@@ -95,6 +120,7 @@ def _make_fit(
         pdf_values_py=pdf_py,
         quantile_values_py=quantile_py,
         hazard_values_py=hazard_py,
+        **new_py,
     )
 
 
@@ -374,6 +400,55 @@ def test_print_report_contains_pass_fail(capsys: pytest.CaptureFixture[str]) -> 
 # ---------------------------------------------------------------------------
 # Integration test — runs the actual script on a known case
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# New-metric coverage — parametrized over all 10 new prediction types
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("what,_field,tol,_mask", _NEW_METRIC_SPEC)
+def test_new_metric_populated_when_reference_given(
+    what: str, _field: str, tol: float, _mask: object
+) -> None:
+    """When a new-metric reference is provided, the delta appears on ValidationResult."""
+    ref_vals = np.linspace(0.1, 0.9, 10)
+    ref = _make_ref(**{what: ref_vals})
+    fit = _make_fit(ref)
+    result = compare_results(ref, fit)
+    delta = getattr(result, f"max_delta_{what}")
+    assert delta is not None
+    assert delta == pytest.approx(0.0, abs=1e-12)
+
+
+@pytest.mark.parametrize("what,_field,_tol,_mask", _NEW_METRIC_SPEC)
+def test_new_metric_none_when_reference_absent(
+    what: str, _field: str, _tol: float, _mask: object
+) -> None:
+    """No reference for this metric → max_delta_* is None, case still PASS."""
+    ref = _make_ref()  # no new metrics populated
+    fit = _make_fit(ref)
+    result = compare_results(ref, fit)
+    assert getattr(result, f"max_delta_{what}") is None
+    assert result.passed is True
+
+
+@pytest.mark.parametrize("what,_field,tol,_mask", _NEW_METRIC_SPEC)
+def test_new_metric_exceedance_is_informational_when_cdf_loglik_ok(
+    what: str, _field: str, tol: float, _mask: object
+) -> None:
+    """Δ<metric> > tol but Δcdf/Δll tiny → non-identifiability demotion."""
+    ref_vals = np.linspace(0.1, 0.9, 10)
+    ref = _make_ref(**{what: ref_vals})
+    offset = tol * 5.0  # Well above tolerance, outside any tail mask
+    fit = _make_fit(ref, **{f"{what}_offset": offset})
+    result = compare_results(ref, fit)
+    assert result.passed is True, (
+        f"{what}: exceedance should be demoted when cdf+loglik agree; "
+        f"got failure_reason={result.failure_reason!r}"
+    )
+    assert result.failure_reason is not None
+    assert "non-identifiable" in result.failure_reason
 
 
 @pytest.mark.skipif(

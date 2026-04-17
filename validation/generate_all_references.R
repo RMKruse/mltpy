@@ -36,6 +36,16 @@ save_reference <- function(path,
                            quantile_values = NULL,
                            hazard_grid = NULL,
                            hazard_values = NULL,
+                           trafo_values = NULL,
+                           survivor_values = NULL,
+                           cumhazard_values = NULL,
+                           odds_values = NULL,
+                           logdistribution_values = NULL,
+                           logsurvivor_values = NULL,
+                           logdensity_values = NULL,
+                           loghazard_values = NULL,
+                           logcumhazard_values = NULL,
+                           logodds_values = NULL,
                            metadata) {
   # Validate inputs
   stopifnot(is.numeric(theta))
@@ -80,6 +90,18 @@ save_reference <- function(path,
   if (!is.null(hazard_grid))     write_vec(hazard_grid, "hazard_grid.csv")
   if (!is.null(hazard_values))   write_vec(hazard_values, "hazard_values.csv")
 
+  # Log-scale and derived functional outputs (all on cdf_grid)
+  if (!is.null(trafo_values))           write_vec(trafo_values, "trafo_values.csv")
+  if (!is.null(survivor_values))        write_vec(survivor_values, "survivor_values.csv")
+  if (!is.null(cumhazard_values))       write_vec(cumhazard_values, "cumhazard_values.csv")
+  if (!is.null(odds_values))            write_vec(odds_values, "odds_values.csv")
+  if (!is.null(logdistribution_values)) write_vec(logdistribution_values, "logdistribution_values.csv")
+  if (!is.null(logsurvivor_values))     write_vec(logsurvivor_values, "logsurvivor_values.csv")
+  if (!is.null(logdensity_values))      write_vec(logdensity_values, "logdensity_values.csv")
+  if (!is.null(loghazard_values))       write_vec(loghazard_values, "loghazard_values.csv")
+  if (!is.null(logcumhazard_values))    write_vec(logcumhazard_values, "logcumhazard_values.csv")
+  if (!is.null(logodds_values))         write_vec(logodds_values, "logodds_values.csv")
+
   # metadata.json
   write_json(metadata, path = file.path(path, "metadata.json"),
              auto_unbox = TRUE, digits = 17, pretty = TRUE)
@@ -113,6 +135,30 @@ predict_hazard_grid <- function(fit, var_name, grid) {
   pred <- predict(fit, q = grid, type = "hazard")
   if (is.matrix(pred)) pred <- pred[, 1]
   as.numeric(pred)
+}
+
+# Generic single-type predictor (used for the 10 new metric types)
+predict_type <- function(fit, grid, type, newdata = NULL) {
+  args <- list(fit, q = grid, type = type)
+  if (!is.null(newdata)) args$newdata <- newdata
+  pred <- do.call(predict, args)
+  if (is.matrix(pred)) pred <- pred[, 1]
+  as.numeric(pred)
+}
+
+# Return a named list of all 10 new predictions (all evaluated on `grid`).
+# Pass `newdata=nd_x` for regression fits; leave NULL otherwise.
+NEW_PREDICT_TYPES <- c(
+  "trafo", "survivor", "cumhazard", "odds",
+  "logdistribution", "logsurvivor", "logdensity",
+  "loghazard", "logcumhazard", "logodds"
+)
+
+compute_new_predictions <- function(fit, grid, newdata = NULL) {
+  out <- lapply(NEW_PREDICT_TYPES, function(t)
+    predict_type(fit, grid, t, newdata = newdata))
+  names(out) <- paste0(NEW_PREDICT_TYPES, "_values")
+  out
 }
 
 # Standard quantile probability levels for all cases
@@ -152,8 +198,9 @@ generate_case_01 <- function(base_path) {
       cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
       pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
       q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+      new_vals <- compute_new_predictions(fit, cdf_grid)
 
-      save_reference(
+      do.call(save_reference, c(list(
         path = file.path(base_path, tag),
         y = y, theta = theta, loglik = as.numeric(ll),
         cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -162,7 +209,7 @@ generate_case_01 <- function(base_path) {
         metadata = list(model = "mlt", censoring = "none",
                         n = cfg$n, order = ord,
                         support = sup, seed = cfg$seed)
-      )
+      ), new_vals))
 
       results[[tag]] <- list(converged = TRUE, loglik = as.numeric(ll))
       cat("OK\n")
@@ -219,8 +266,9 @@ generate_case_02 <- function(base_path) {
       pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
       q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
       haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+      new_vals <- compute_new_predictions(fit, cdf_grid)
 
-      save_reference(
+      do.call(save_reference, c(list(
         path = file.path(base_path, tag),
         y = y_obs, status = status,
         theta = theta, loglik = as.numeric(ll),
@@ -232,7 +280,7 @@ generate_case_02 <- function(base_path) {
                         n = cfg$n, order = ord,
                         support = sup, seed = cfg$seed,
                         censoring_pct = round(1 - mean(status), 3))
-      )
+      ), new_vals))
 
       results[[tag]] <- list(converged = TRUE, loglik = as.numeric(ll))
       cat("OK\n")
@@ -293,8 +341,9 @@ generate_case_03 <- function(base_path) {
     cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
     pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
     q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+    new_vals <- compute_new_predictions(fit, cdf_grid)
 
-    save_reference(
+    do.call(save_reference, c(list(
       path = file.path(base_path, tag),
       y = y_obs, status = status,
       theta = theta, loglik = as.numeric(ll),
@@ -305,7 +354,7 @@ generate_case_03 <- function(base_path) {
                       n = n, order = ord,
                       support = sup, seed = seed,
                       censoring_pct = round(mean(left_censored), 3))
-    )
+    ), new_vals))
 
     results[[tag]] <- list(converged = TRUE, loglik = as.numeric(ll))
     cat("OK\n")
@@ -354,8 +403,9 @@ generate_case_04 <- function(base_path) {
     cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
     pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
     q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+    new_vals <- compute_new_predictions(fit, cdf_grid)
 
-    save_reference(
+    do.call(save_reference, c(list(
       path = file.path(base_path, tag),
       y_lower = y_lower, y_upper = y_upper,
       theta = theta, loglik = as.numeric(ll),
@@ -366,7 +416,7 @@ generate_case_04 <- function(base_path) {
                       n = n, order = ord,
                       support = sup, seed = seed,
                       interval_half_width = half_width)
-    )
+    ), new_vals))
 
     results[[tag]] <- list(converged = TRUE, loglik = as.numeric(ll))
     cat("OK\n")
@@ -405,8 +455,9 @@ generate_case_05 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
   q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit_mlt, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -416,7 +467,7 @@ generate_case_05 <- function(base_path) {
                     n = n, order = ord,
                     support = sup, seed = seed,
                     base_distribution = "normal")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -461,8 +512,9 @@ generate_case_06 <- function(base_path) {
   pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
   q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
   haz_vals <- predict_hazard_grid(fit_mlt, "y", cdf_grid)
+  new_vals <- compute_new_predictions(fit_mlt, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -475,7 +527,7 @@ generate_case_06 <- function(base_path) {
                     support = sup, seed = seed,
                     base_distribution = "min_extreme_value",
                     censoring_pct = round(1 - mean(status), 3))
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -511,8 +563,9 @@ generate_case_07 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit_mlt, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit_mlt, "y", cdf_grid)
   q_vals <- predict_quantiles(fit_mlt, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit_mlt, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -522,7 +575,7 @@ generate_case_07 <- function(base_path) {
                     n = n, order = ord,
                     support = sup, seed = seed,
                     base_distribution = "logistic")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -566,8 +619,9 @@ generate_case_08 <- function(base_path) {
   cdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "distribution"))
   pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
   q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
+  new_vals <- compute_new_predictions(fit, cdf_grid, newdata = nd_x)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, X = X,
     theta = theta, loglik = as.numeric(ll),
@@ -581,7 +635,7 @@ generate_case_08 <- function(base_path) {
                     n_covariates = 2,
                     beta_true = beta_true,
                     cdf_at_X = c(0, 0))
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -614,8 +668,9 @@ generate_case_09 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -625,7 +680,7 @@ generate_case_09 <- function(base_path) {
                     n = n, order = ord,
                     support = sup, seed = seed,
                     note = "Small sample size — edge case for convergence")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -668,8 +723,9 @@ generate_case_10 <- function(base_path) {
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
   haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -682,7 +738,7 @@ generate_case_10 <- function(base_path) {
                     support = sup, seed = seed,
                     censoring_pct = round(1 - mean(status), 3),
                     note = "Small sample + right censoring")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -728,8 +784,9 @@ generate_case_11 <- function(base_path) {
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
   haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -742,7 +799,7 @@ generate_case_11 <- function(base_path) {
                     support = sup, seed = seed,
                     censoring_pct = actual_pct,
                     note = "Heavy censoring stress test (>50%)")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -778,8 +835,9 @@ generate_case_12 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -789,7 +847,7 @@ generate_case_12 <- function(base_path) {
                     n = n, order = ord,
                     support = sup, seed = seed,
                     base_distribution = "logistic")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -844,8 +902,9 @@ generate_case_13 <- function(base_path) {
   pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
   q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
   haz_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "hazard"))
+  new_vals <- compute_new_predictions(fit, cdf_grid, newdata = nd_x)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status, X = X,
     theta = theta, loglik = as.numeric(ll),
@@ -861,7 +920,7 @@ generate_case_13 <- function(base_path) {
                     beta_true = beta_true,
                     cdf_at_X = c(0, 0),
                     censoring_pct = actual_pct)
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -911,8 +970,9 @@ generate_case_14 <- function(base_path) {
   cdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "distribution"))
   pdf_vals <- as.numeric(predict(fit, newdata = nd_x, q = cdf_grid, type = "density"))
   q_vals <- as.numeric(predict(fit, newdata = nd_x, prob = QUANTILE_PROBS, type = "quantile"))
+  new_vals <- compute_new_predictions(fit, cdf_grid, newdata = nd_x)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y_lower = y_lower, y_upper = y_upper, X = X,
     theta = theta, loglik = as.numeric(ll),
@@ -927,7 +987,7 @@ generate_case_14 <- function(base_path) {
                     beta_true = beta_true,
                     cdf_at_X = c(0, 0),
                     interval_half_width = half_width)
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -961,8 +1021,9 @@ generate_case_15 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y, theta = theta, loglik = as.numeric(ll),
     cdf_grid = cdf_grid, cdf_values = cdf_vals,
@@ -972,7 +1033,7 @@ generate_case_15 <- function(base_path) {
                     n = n, order = ord,
                     support = sup, seed = seed,
                     note = "High order (10) stress test")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -1019,8 +1080,9 @@ generate_case_16 <- function(base_path) {
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
   haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -1033,7 +1095,7 @@ generate_case_16 <- function(base_path) {
                     support = sup, seed = seed,
                     censoring_pct = actual_pct,
                     note = "High order (12) + right censoring")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -1081,8 +1143,9 @@ generate_case_17 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -1094,7 +1157,7 @@ generate_case_17 <- function(base_path) {
                     support = sup, seed = seed,
                     censoring_pct = actual_pct,
                     note = "Heavy left censoring stress test (~70%)")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -1136,8 +1199,9 @@ generate_case_18 <- function(base_path) {
   cdf_vals <- predict_cdf_grid(fit, "y", cdf_grid)
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y_lower = y_lower, y_upper = y_upper,
     theta = theta, loglik = as.numeric(ll),
@@ -1149,7 +1213,7 @@ generate_case_18 <- function(base_path) {
                     support = sup, seed = seed,
                     interval_half_width = half_width,
                     note = "Wide interval censoring stress test (width ~1.0)")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))
@@ -1196,8 +1260,9 @@ generate_case_19 <- function(base_path) {
   pdf_vals <- predict_pdf_grid(fit, "y", cdf_grid)
   q_vals <- predict_quantiles(fit, "y", QUANTILE_PROBS)
   haz_vals <- predict_hazard_grid(fit, "y", cdf_grid)
+  new_vals <- compute_new_predictions(fit, cdf_grid)
 
-  save_reference(
+  do.call(save_reference, c(list(
     path = file.path(base_path, tag),
     y = y_obs, status = status,
     theta = theta, loglik = as.numeric(ll),
@@ -1210,7 +1275,7 @@ generate_case_19 <- function(base_path) {
                     support = sup, seed = seed,
                     censoring_pct = actual_pct,
                     note = "Near-degenerate: ~95% censored stress test")
-  )
+  ), new_vals))
 
   cat("OK\n")
   list(converged = TRUE, loglik = as.numeric(ll))

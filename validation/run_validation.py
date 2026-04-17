@@ -38,6 +38,40 @@ TOL_PDF = 0.05  # max absolute PDF difference at grid points
 TOL_QUANTILE = 0.05  # max absolute quantile difference
 TOL_HAZARD = 0.10  # max absolute hazard difference (compared only where CDF < 0.95)
 
+# Tolerances for the 10 new predict() types added in parity with R mlt.
+TOL_TRAFO = 0.05  # h(y|x) directly — tied to theta agreement
+TOL_SURVIVOR = 0.02  # S = 1 − F; same scale as CDF
+TOL_CUMHAZARD = 0.10  # −log S; right-tail sensitive (CDF < 0.95 only)
+TOL_ODDS = 0.10  # F / S; right-tail sensitive
+TOL_LOGDENSITY = 0.05  # logpdf(h) + log h'
+TOL_LOGHAZARD = 0.10  # logpdf(h) + log h' − log S
+TOL_LOG_TAIL = 0.05  # logdistribution, logsurvivor, logcumhazard, logodds
+
+# Spec table for the 10 new derived metrics. Each tuple is
+# (what_name, reference_field_basename, tolerance, mask_spec).
+# mask_spec encodes reliability filtering against fit.cdf_values_py:
+#   None                — compare on full grid
+#   ("hi", p)           — keep points where CDF < p  (right-tail filter)
+#   ("lo", p)           — keep points where CDF > p  (left-tail filter)
+#   ("both", lo, hi)    — keep points where lo < CDF < hi
+_NEW_METRIC_SPEC: tuple[
+    tuple[str, str, float, tuple[str, float] | tuple[str, float, float] | None], ...
+] = (
+    ("trafo", "trafo_values", TOL_TRAFO, None),
+    ("survivor", "survivor_values", TOL_SURVIVOR, None),
+    ("cumhazard", "cumhazard_values", TOL_CUMHAZARD, ("hi", 0.95)),
+    ("odds", "odds_values", TOL_ODDS, ("hi", 0.95)),
+    ("logdistribution", "logdistribution_values", TOL_LOG_TAIL, ("lo", 0.05)),
+    ("logsurvivor", "logsurvivor_values", TOL_LOG_TAIL, ("both", 0.05, 0.95)),
+    ("logdensity", "logdensity_values", TOL_LOGDENSITY, None),
+    ("loghazard", "loghazard_values", TOL_LOGHAZARD, ("hi", 0.95)),
+    ("logcumhazard", "logcumhazard_values", TOL_LOG_TAIL, ("both", 0.05, 0.95)),
+    ("logodds", "logodds_values", TOL_LOG_TAIL, ("both", 0.05, 0.95)),
+)
+
+# what-names of the 10 new predict() types, in report order.
+_NEW_WHATS: tuple[str, ...] = tuple(name for name, *_ in _NEW_METRIC_SPEC)
+
 # Cases known to fail for fundamental statistical reasons, not implementation
 # bugs. They still run and are reported as XFAIL, but do not cause the overall
 # validation run to exit non-zero. See validation/VALIDATION.md for per-case
@@ -77,6 +111,17 @@ class ReferenceCase:
     hazard_grid: NDArray[np.float64] | None = None
     hazard_values_r: NDArray[np.float64] | None = None
     base_distribution: str = "normal"
+    # 10 new R predict() types, all evaluated on ``cdf_grid``.
+    trafo_values_r: NDArray[np.float64] | None = None
+    survivor_values_r: NDArray[np.float64] | None = None
+    cumhazard_values_r: NDArray[np.float64] | None = None
+    odds_values_r: NDArray[np.float64] | None = None
+    logdistribution_values_r: NDArray[np.float64] | None = None
+    logsurvivor_values_r: NDArray[np.float64] | None = None
+    logdensity_values_r: NDArray[np.float64] | None = None
+    loghazard_values_r: NDArray[np.float64] | None = None
+    logcumhazard_values_r: NDArray[np.float64] | None = None
+    logodds_values_r: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -91,6 +136,17 @@ class FittedResult:
     pdf_values_py: NDArray[np.float64] | None = None
     quantile_values_py: NDArray[np.float64] | None = None
     hazard_values_py: NDArray[np.float64] | None = None
+    # 10 new predict() outputs, aligned with ``cdf_grid``.
+    trafo_values_py: NDArray[np.float64] | None = None
+    survivor_values_py: NDArray[np.float64] | None = None
+    cumhazard_values_py: NDArray[np.float64] | None = None
+    odds_values_py: NDArray[np.float64] | None = None
+    logdistribution_values_py: NDArray[np.float64] | None = None
+    logsurvivor_values_py: NDArray[np.float64] | None = None
+    logdensity_values_py: NDArray[np.float64] | None = None
+    loghazard_values_py: NDArray[np.float64] | None = None
+    logcumhazard_values_py: NDArray[np.float64] | None = None
+    logodds_values_py: NDArray[np.float64] | None = None
 
 
 @dataclass
@@ -112,6 +168,17 @@ class ValidationResult:
     max_delta_quantile: float | None = None
     max_delta_hazard: float | None = None
     expected_failure: bool = False
+    # Per-metric deltas for the 10 new predict() types.
+    max_delta_trafo: float | None = None
+    max_delta_survivor: float | None = None
+    max_delta_cumhazard: float | None = None
+    max_delta_odds: float | None = None
+    max_delta_logdistribution: float | None = None
+    max_delta_logsurvivor: float | None = None
+    max_delta_logdensity: float | None = None
+    max_delta_loghazard: float | None = None
+    max_delta_logcumhazard: float | None = None
+    max_delta_logodds: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,14 +248,20 @@ def load_reference(case_dir: Path) -> ReferenceCase:
         kwargs["base_distribution"] = meta["base_distribution"]
 
     # Functional output references (optional)
-    for name, field in [
+    loader_spec: list[tuple[str, str]] = [
         ("pdf_grid", "pdf_grid"),
         ("pdf_values", "pdf_values_r"),
         ("quantile_probs", "quantile_probs"),
         ("quantile_values", "quantile_values_r"),
         ("hazard_grid", "hazard_grid"),
         ("hazard_values", "hazard_values_r"),
-    ]:
+    ]
+    # The 10 new predict() types — each is stored under ``<name>_values.npy``
+    # and loaded into the matching ``ReferenceCase.<name>_values_r`` field.
+    for what in _NEW_WHATS:
+        loader_spec.append((f"{what}_values", f"{what}_values_r"))
+
+    for name, field in loader_spec:
         p = case_dir / f"{name}.npy"
         if p.exists():
             kwargs[field] = np.load(p)
@@ -315,9 +388,7 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
         # --- Quantiles ---
         quantile_py: NDArray[np.float64] | None = None
         if case.quantile_probs is not None:
-            quantile_py = model.predict(
-                case.quantile_probs, what="quantile"
-            )
+            quantile_py = model.predict(case.quantile_probs, what="quantile")
 
         # --- Hazard at grid points (right-censored only) ---
         hazard_py: NDArray[np.float64] | None = None
@@ -325,9 +396,21 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
             X_haz = None
             if case.regression:
                 X_haz = np.zeros((len(case.hazard_grid), case.n_covariates))
-            hazard_py = model.predict(
-                case.hazard_grid, X_new=X_haz, what="hazard"
-            )
+            hazard_py = model.predict(case.hazard_grid, X_new=X_haz, what="hazard")
+
+        # --- 10 new predict() outputs — all evaluated on ``cdf_grid`` ---
+        # Only compute when R has provided a reference on this case, so
+        # pymlt and R are always compared on the same grid points.
+        X_new_preds: NDArray[np.float64] | None = None
+        if case.regression:
+            X_new_preds = np.zeros((len(case.cdf_grid), case.n_covariates))
+        new_preds: dict[str, NDArray[np.float64] | None] = {}
+        for what in _NEW_WHATS:
+            ref_vals = getattr(case, f"{what}_values_r", None)
+            if ref_vals is None:
+                new_preds[what] = None
+                continue
+            new_preds[what] = model.predict(case.cdf_grid, X_new=X_new_preds, what=what)
 
         elapsed = time.perf_counter() - t0
         return FittedResult(
@@ -339,6 +422,7 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
             pdf_values_py=pdf_py,
             quantile_values_py=quantile_py,
             hazard_values_py=hazard_py,
+            **{f"{w}_values_py": new_preds[w] for w in _NEW_WHATS},
         )
 
     except Exception as e:
@@ -356,6 +440,49 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
 # ---------------------------------------------------------------------------
 # compare_results
 # ---------------------------------------------------------------------------
+
+
+def _masked_max_abs_delta(
+    py: NDArray[np.float64],
+    r: NDArray[np.float64],
+    cdf_py: NDArray[np.float64],
+    mask_spec: tuple[str, float] | tuple[str, float, float] | None,
+) -> float | None:
+    """Return ``max|py - r|`` over the reliability-masked, finite-valued grid.
+
+    Parameters
+    ----------
+    py, r:
+        Value arrays (same length). Non-finite entries in either are excluded.
+    cdf_py:
+        Python-computed CDF at the same grid points, used to define the
+        reliability mask.
+    mask_spec:
+        One of None, ``("hi", p)``, ``("lo", p)``, ``("both", lo, hi)``.
+
+    Returns
+    -------
+    float or None
+        ``None`` if no grid point survives masking (tolerance check skipped).
+    """
+    if len(py) != len(r) or len(py) != len(cdf_py):
+        return None
+
+    reliable: NDArray[np.bool_] = np.ones(len(py), dtype=bool)
+    if mask_spec is not None:
+        kind = mask_spec[0]
+        if kind == "hi":
+            reliable = cdf_py < mask_spec[1]
+        elif kind == "lo":
+            reliable = cdf_py > mask_spec[1]
+        elif kind == "both":
+            reliable = (cdf_py > mask_spec[1]) & (cdf_py < mask_spec[2])
+
+    finite = np.isfinite(py) & np.isfinite(r)
+    keep = reliable & finite
+    if not np.any(keep):
+        return None
+    return float(np.max(np.abs(py[keep] - r[keep])))
 
 
 def compare_results(
@@ -450,8 +577,7 @@ def compare_results(
             max_delta_hazard = float(
                 np.max(
                     np.abs(
-                        fit.hazard_values_py[reliable]
-                        - ref.hazard_values_r[reliable]
+                        fit.hazard_values_py[reliable] - ref.hazard_values_r[reliable]
                     )
                 )
             )
@@ -459,14 +585,33 @@ def compare_results(
             # All grid points in extreme tail — skip hazard comparison
             max_delta_hazard = None
 
+    # --- Deltas for the 10 new predict() types ---
+    # All share ``cdf_grid`` as their y-axis. The reliability mask is applied
+    # against ``fit.cdf_values_py`` (see _NEW_METRIC_SPEC docstring).
+    new_deltas: dict[str, float | None] = {w: None for w in _NEW_WHATS}
+    for what, _field, _tol, mask_spec in _NEW_METRIC_SPEC:
+        r_vals = getattr(ref, f"{what}_values_r", None)
+        py_vals = getattr(fit, f"{what}_values_py", None)
+        if (
+            r_vals is None
+            or py_vals is None
+            or cdf_length_mismatch
+            or len(fit.cdf_values_py) != len(r_vals)
+        ):
+            continue
+        new_deltas[what] = _masked_max_abs_delta(
+            py_vals, r_vals, fit.cdf_values_py, mask_spec
+        )
+
     # --- Build failure list ---
     # Primary metrics (loglik, CDF) are always blocking.
     # Theta is always informational (internal parameterization detail).
-    # PDF, quantile, and hazard are blocking UNLESS loglik+CDF both match,
-    # in which case they are downgraded to informational — because under
-    # non-identifiable theta (heavy censoring), the transformation derivative
-    # h'(y) can differ even when the distribution function F(h(y)) matches,
-    # causing downstream differences in derived quantities.
+    # PDF, quantile, hazard, and all 10 new derived metrics are blocking
+    # UNLESS loglik+CDF both match, in which case they are downgraded to
+    # informational — because under non-identifiable theta (heavy censoring),
+    # the transformation derivative h'(y) can differ even when the
+    # distribution function F(h(y)) matches, causing downstream differences
+    # in derived quantities.
     failures: list[str] = []
     info: list[str] = []
 
@@ -495,12 +640,13 @@ def compare_results(
         ("quantile", max_delta_quantile, TOL_QUANTILE),
         ("hazard", max_delta_hazard, TOL_HAZARD),
     ]
+    for what, _field, tol, _mask in _NEW_METRIC_SPEC:
+        _derived.append((what, new_deltas[what], tol))
     for name, delta, tol in _derived:
         if delta is not None and delta > tol:
             if loglik_ok and cdf_ok:
                 info.append(
-                    f"{name} ({delta:.4f} > {tol}; "
-                    f"non-identifiable — ll/cdf match)"
+                    f"{name} ({delta:.4f} > {tol}; non-identifiable — ll/cdf match)"
                 )
             else:
                 failures.append(f"{name} ({delta:.4f} > {tol})")
@@ -541,6 +687,7 @@ def compare_results(
         max_delta_quantile=max_delta_quantile,
         max_delta_hazard=max_delta_hazard,
         expected_failure=ref.case_id in EXPECTED_FAILURES,
+        **{f"max_delta_{w}": new_deltas[w] for w in _NEW_WHATS},
     )
 
 
@@ -678,14 +825,15 @@ def save_report(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Markdown ---
-    lines = [
-        "# pymlt Validation Report",
-        "",
-        "| Case | Model | n | Order | Status | Δθ | Δll | Δcdf"
-        " | Δpdf | Δquant | Δhaz |",
-        "|------|-------|---|-------|--------|-----|-----|------"
-        "|------|--------|------|",
-    ]
+    _existing_cols = ("Δθ", "Δll", "Δcdf", "Δpdf", "Δquant", "Δhaz")
+    _new_cols = tuple(f"Δ{w}" for w in _NEW_WHATS)
+    header = (
+        "| Case | Model | n | Order | Status | "
+        + " | ".join(_existing_cols + _new_cols)
+        + " |"
+    )
+    sep = "|" + "|".join(["------"] * (5 + len(_existing_cols) + len(_new_cols))) + "|"
+    lines = ["# pymlt Validation Report", "", header, sep]
 
     def _md(val: float | None) -> str:
         if val is None:
@@ -698,12 +846,19 @@ def save_report(
         else:
             status = "PASS" if r.passed else "FAIL"
 
+        existing_vals = [
+            _md(r.max_delta_theta),
+            _md(r.delta_loglik),
+            _md(r.max_delta_cdf),
+            _md(r.max_delta_pdf),
+            _md(r.max_delta_quantile),
+            _md(r.max_delta_hazard),
+        ]
+        new_vals = [_md(getattr(r, f"max_delta_{w}")) for w in _NEW_WHATS]
         lines.append(
-            f"| {r.case_id} | {r.model} | {r.n} | {r.order} "
-            f"| {status} | {_md(r.max_delta_theta)} "
-            f"| {_md(r.delta_loglik)} | {_md(r.max_delta_cdf)} "
-            f"| {_md(r.max_delta_pdf)} | {_md(r.max_delta_quantile)} "
-            f"| {_md(r.max_delta_hazard)} |"
+            f"| {r.case_id} | {r.model} | {r.n} | {r.order} | {status} | "
+            + " | ".join(existing_vals + new_vals)
+            + " |"
         )
 
     n_pass = sum(1 for r in results if r.passed)
@@ -727,27 +882,28 @@ def save_report(
             return None
         return None if np.isnan(val) else val
 
-    records = []
+    records: list[dict[str, object]] = []
     for r in results:
-        records.append(
-            {
-                "case_id": r.case_id,
-                "model": r.model,
-                "n": r.n,
-                "order": r.order,
-                "passed": r.passed,
-                "max_delta_theta": _json_float(r.max_delta_theta),
-                "delta_loglik": _json_float(r.delta_loglik),
-                "max_delta_cdf": _json_float(r.max_delta_cdf),
-                "max_delta_pdf": _json_float(r.max_delta_pdf),
-                "max_delta_quantile": _json_float(r.max_delta_quantile),
-                "max_delta_hazard": _json_float(r.max_delta_hazard),
-                "converged": r.converged,
-                "runtime_s": round(r.runtime_s, 4),
-                "failure_reason": r.failure_reason,
-                "expected_failure": r.expected_failure,
-            }
-        )
+        record: dict[str, object] = {
+            "case_id": r.case_id,
+            "model": r.model,
+            "n": r.n,
+            "order": r.order,
+            "passed": r.passed,
+            "max_delta_theta": _json_float(r.max_delta_theta),
+            "delta_loglik": _json_float(r.delta_loglik),
+            "max_delta_cdf": _json_float(r.max_delta_cdf),
+            "max_delta_pdf": _json_float(r.max_delta_pdf),
+            "max_delta_quantile": _json_float(r.max_delta_quantile),
+            "max_delta_hazard": _json_float(r.max_delta_hazard),
+        }
+        for w in _NEW_WHATS:
+            record[f"max_delta_{w}"] = _json_float(getattr(r, f"max_delta_{w}"))
+        record["converged"] = r.converged
+        record["runtime_s"] = round(r.runtime_s, 4)
+        record["failure_reason"] = r.failure_reason
+        record["expected_failure"] = r.expected_failure
+        records.append(record)
 
     (out_dir / "validation_report.json").write_text(
         json.dumps(records, indent=2) + "\n"

@@ -49,7 +49,7 @@ All data is generated with fixed random seeds for reproducibility.
 
 ## Metrics Compared
 
-Six metrics are compared for each case, organized into three tiers:
+Sixteen metrics are compared for each case, organized into three tiers:
 
 ### Primary metrics (always blocking)
 
@@ -69,6 +69,31 @@ These test outputs derived from the fitted transformation. They are blocking **o
 | PDF / density | max\|Dpdf\| <= 0.05 | Same 100-point grid as CDF | f(h(y)) * h'(y) |
 | Quantile | max\|Dquant\| <= 0.05 | p = {0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95} | Numerical inversion via brentq; extreme tails (p < 0.05, p > 0.95) excluded |
 | Hazard | max\|Dhaz\| <= 0.10 | Same 100-point grid, restricted to CDF < 0.95 | f(h)/S(h); only for right-censored models; compared only where S(t) > 0.05 |
+
+#### Extended predict-type checks (10 additional derived metrics)
+
+Every case also compares the ten non-primary `predict(what=...)` outputs that
+mirror R `mlt`'s `type=` options. All ten share the CDF grid, so no extra grid
+files are needed per case. Each metric has a tolerance and a reliability mask
+chosen to avoid inflating spurious failures at the distribution tails where
+the transform diverges. Like the pdf/quantile/hazard block above, these are
+conditionally blocking — informational when loglik+CDF agree, hard failures
+when a primary metric also fails.
+
+| Metric | Tolerance | Reliability mask (CDF range) | Rationale for mask |
+|--------|-----------|------------------------------|--------------------|
+| `trafo` (`h(y)`) | 0.05 | no mask | Defined and finite everywhere on the support. |
+| `survivor` (`1−F`) | 0.02 | no mask | Same scale as CDF; no special tail behavior. |
+| `cumhazard` (`−log S`) | 0.10 | CDF < 0.95 | Right-tail amplifies tiny CDF mismatch unboundedly as S → 0. |
+| `odds` (`F/S`) | 0.10 | CDF < 0.95 | `F/S` → ∞ as S → 0 — right-tail amplification. |
+| `logdistribution` (`log F`) | 0.05 | CDF > 0.05 | `log F` → −∞ at the left tail. |
+| `logsurvivor` (`log S`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | `log S` diverges at the right tail; we also mask the left for symmetric treatment with the other log-scale ratios. |
+| `logdensity` (`logpdf(h)+log h'`) | 0.05 | no mask | Log-density is generally well-behaved on the interior grid; any tolerance exceedance is informational anyway. |
+| `loghazard` | 0.10 | CDF < 0.95 | Same right-tail amplification as hazard itself. |
+| `logcumhazard` (`log(−log S)`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | Double log — diverges at both tails. |
+| `logodds` (`log(F/S)`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | `log(F/S)` ±∞ at both tails. |
+
+NaN/Inf values are filtered element-wise before computing `max |Δ|`, so a boundary blow-up on either side cannot cause a spurious failure.
 
 ### Informational metrics (never blocking)
 
@@ -137,6 +162,16 @@ Each case directory (`validation/references/case_*`) contains:
 | `X.npy` | float64 (n, q) | Covariate matrix (regression cases only) |
 | `hazard_grid.npy` | float64 (100,) | Grid for hazard (right-censored cases only) |
 | `hazard_values.npy` | float64 (100,) | R's hazard at grid points |
+| `trafo_values.npy` | float64 (100,) | R's `h(y)` on `cdf_grid` |
+| `survivor_values.npy` | float64 (100,) | R's survivor `1 − F` on `cdf_grid` |
+| `cumhazard_values.npy` | float64 (100,) | R's cumulative hazard `−log S` on `cdf_grid` |
+| `odds_values.npy` | float64 (100,) | R's odds `F / S` on `cdf_grid` |
+| `logdistribution_values.npy` | float64 (100,) | R's `log F` on `cdf_grid` |
+| `logsurvivor_values.npy` | float64 (100,) | R's `log S` on `cdf_grid` |
+| `logdensity_values.npy` | float64 (100,) | R's `log f = logpdf(h) + log h'` on `cdf_grid` |
+| `loghazard_values.npy` | float64 (100,) | R's `log hazard` on `cdf_grid` |
+| `logcumhazard_values.npy` | float64 (100,) | R's `log(−log S)` on `cdf_grid` |
+| `logodds_values.npy` | float64 (100,) | R's `log(F/S)` on `cdf_grid` |
 
 All numeric values are stored with 17 significant digits to preserve full double precision.
 
