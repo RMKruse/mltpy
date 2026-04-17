@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from hypothesis.extra.numpy import arrays
 from scipy.optimize import LinearConstraint, minimize
 
 from pymlt.constraints import (
@@ -13,7 +12,6 @@ from pymlt.constraints import (
     MonotonicityConstraint,
     build_constraints,
 )
-
 
 # ---------------------------------------------------------------------------
 # MonotonicityConstraint — matrix

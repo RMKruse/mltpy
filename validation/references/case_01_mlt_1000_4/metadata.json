@@ -1,0 +1,8 @@
+{
+  "model": "mlt",
+  "censoring": "none",
+  "n": 1000,
+  "order": 4,
+  "support": [0, 1],
+  "seed": 143
+}

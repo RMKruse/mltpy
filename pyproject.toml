@@ -8,14 +8,13 @@ version = "0.1.0"
 description = "Conditional Transformation Models — Python port of R mlt"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     {name = "René-Marcel Kruse", email = "rene.marcel.kruse@protonmail.com"},
 ]
 keywords = ["transformation model", "survival analysis", "censoring"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Mathematics",
@@ -29,9 +28,30 @@ dependencies = [
 
 [project.urls]
 Repository = "https://github.com/RMKruse/pymlt"
+Documentation = "https://rmkruse.github.io/pymlt/"
 
 [project.optional-dependencies]
 pandas = ["pandas>=2.0"]
+plots = ["matplotlib>=3.5"]
+examples = [
+    "matplotlib>=3.5",
+    "pandas>=2.0",
+    "lifelines>=0.28",
+    "ipykernel>=6.0",
+    "jupyter>=1.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints>=1.24",
+    "pydata-sphinx-theme>=0.15",
+    "nbsphinx>=0.9",
+    "myst-parser>=2.0",
+    "matplotlib>=3.5",
+    "pandas>=2.0",
+    "lifelines>=0.28",
+    "ipykernel>=6.0",
+    "jupyter>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -53,11 +73,11 @@ filterwarnings = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["scipy.*"]
+module = ["scipy.*", "matplotlib.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
@@ -72,3 +92,6 @@ select = ["E", "F", "W", "I"]
 [tool.coverage.run]
 source = ["pymlt"]
 omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+fail_under = 70

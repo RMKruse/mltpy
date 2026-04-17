@@ -1,12 +1,20 @@
 """pymlt — Conditional Transformation Models in Python."""
+
 from pymlt.model import (
+    MLT,
     ConditionalTransformationModel,
     ConvergenceWarning,
-    MLT,
     NotFittedError,
 )
 from pymlt.optimizer import OptimizerConfig
-from pymlt.variables import CensoredData, CensoringType, NumericVariable, OrderedVariable, SurvivalVariable
+from pymlt.tram import BoxCox, Colr, Coxph
+from pymlt.variables import (
+    CensoredData,
+    CensoringType,
+    NumericVariable,
+    OrderedVariable,
+    SurvivalVariable,
+)
 
 __version__ = "0.1.0"
 
@@ -14,6 +22,10 @@ __all__ = [
     # Models
     "ConditionalTransformationModel",
     "MLT",
+    # Tram convenience models
+    "BoxCox",
+    "Coxph",
+    "Colr",
     # Exceptions / warnings
     "NotFittedError",
     "ConvergenceWarning",

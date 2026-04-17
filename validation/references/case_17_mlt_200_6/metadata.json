@@ -1,0 +1,10 @@
+{
+  "model": "mlt",
+  "censoring": "left",
+  "n": 200,
+  "order": 6,
+  "support": [0, 6],
+  "seed": 59,
+  "censoring_pct": 0.69999999999999996,
+  "note": "Heavy left censoring stress test (~70%)"
+}

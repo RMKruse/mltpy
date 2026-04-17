@@ -5,8 +5,12 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from pymlt.variables import CensoredData, NumericVariable, OrderedVariable, SurvivalVariable
-
+from pymlt.variables import (
+    CensoredData,
+    NumericVariable,
+    OrderedVariable,
+    SurvivalVariable,
+)
 
 # ---------------------------------------------------------------------------
 # NumericVariable

@@ -1,10 +1,13 @@
 # pymlt — Conditional Transformation Models in Python
 
+[![CI](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml/badge.svg)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-latest-blue)](https://rmkruse.github.io/pymlt/)
+[![codecov](https://img.shields.io/badge/coverage-tracked-informational)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](tests/)
 
 Fit flexible conditional distributions to continuous, censored, or covariate-dependent data using monotone Bernstein polynomial transformations.
+
+**Documentation:** <https://rmkruse.github.io/pymlt/> · **Paper:** [Hothorn (2020), JSS 92(1)](https://doi.org/10.18637/jss.v092.i01)
 
 ---
 
@@ -22,13 +25,16 @@ The package supports exact, right-censored, left-censored, and interval-censored
 pip install pymlt
 ```
 
-Optional pandas support (for `pd.Series` inputs):
+Optional extras:
 
 ```bash
-pip install "pymlt[pandas]"
+pip install "pymlt[plots]"      # matplotlib-backed .plot() helpers
+pip install "pymlt[pandas]"     # pd.Series inputs
+pip install "pymlt[examples]"   # lifelines, jupyter, matplotlib — run the vignettes
+pip install "pymlt[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
 ```
 
-**Requirements:** Python ≥ 3.10, numpy ≥ 1.24, scipy ≥ 1.10.
+**Requirements:** Python ≥ 3.11, numpy ≥ 1.24, scipy ≥ 1.10.
 
 ---
 
@@ -61,6 +67,27 @@ print(f"Estimated median: {median:.1f}")
 - scikit-learn-compatible API: `fit` / `predict` / `score` / `simulate`
 - Lightweight: only numpy and scipy required
 - Numerically stable: log-space likelihood, h-clipping, Taylor fallback for narrow intervals
+
+---
+
+## Performance
+
+`pymlt.MLT.fit()` is on geometric mean **1.80× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (10 reps each, median per cell). pymlt is the faster backend in 21 of the 24 cells. Representative slice at **`order = 6`** (full grid in the report linked below):
+
+| n | Censoring | Python (median) | R (median) | Speedup |
+|---:|:---|---:|---:|---:|
+|  100 | none  | 2.70 ms  | 5.48 ms  | 2.03× |
+|  500 | none  | 5.78 ms  | 9.69 ms  | 1.68× |
+| 1000 | none  | 12.99 ms | 14.92 ms | 1.15× |
+| 5000 | none  | 64.86 ms | 67.18 ms | 1.04× |
+|  100 | right | 4.50 ms  | 11.78 ms | 2.62× |
+|  500 | right | 6.48 ms  | 17.94 ms | 2.77× |
+| 1000 | right | 14.84 ms | 40.48 ms | 2.73× |
+| 5000 | right | 76.63 ms | 60.04 ms | 0.78× |
+
+Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12 + numpy 2.4 + scipy 1.17. Numbers depend on hardware and R/Python versions; the speedup ratio is the meaningful comparison.
+
+**Reproduce:** `make benchmark` (requires R with `mlt`, `basefun`, `variables`, `survival` installed). The full grid, environment metadata, and IQR per cell live in [`benchmarks/results/benchmark_report.md`](benchmarks/results/benchmark_report.md).
 
 ---
 
@@ -202,14 +229,41 @@ trust-constr solvers with analytical gradients.
 ---
 
 ## Reference
-Hothorn, T., Kneib, T. and Bühlmann, P. (2014), Conditional transformation models. *Journal of
-the Royal Statistical Society: Series B (Statistical Methodology).*, 76: 3-27. https://doi.org/10.1111/rssb.12017
+Hothorn, T., Kneib, T. and Bühlmann, P. (2014), Conditional transformation models. 
+*Journal of the Royal Statistical Society: Series B (Statistical Methodology).*, 76: 3-27. 
+https://doi.org/10.1111/rssb.12017
+
 Hothorn, T. (2020). Most Likely Transformations: The mlt Package.
 *Journal of Statistical Software*, 92(1), 1–68.
 https://doi.org/10.18637/jss.v092.i01
+
+Hothorn, T., Möst, L., and Bühlmann, P. (2018) Most Likely Transformations. 
+*Scandinavian Journal of Statistics*, 45: 110–134. 
+https://doi.org/10.1111/sjos.12291
+
+
+---
+
+## Citation
+
+If you use pymlt in scientific work, please cite the package alongside
+the methodological papers above:
+
+```bibtex
+@software{pymlt,
+  author  = {Kruse, Ren{\'e}-Marcel},
+  title   = {pymlt: Conditional Transformation Models in Python},
+  year    = {2026},
+  url     = {https://github.com/RMKruse/pymlt},
+  version = {0.1.0}
+}
+```
+
+Full BibTeX entries for the underlying methodology live in the
+[documentation](https://rmkruse.github.io/pymlt/citation.html).
 
 ---
 
 ## License
 
-MIT © René-Marcel Kruse
+MIT © RMKruse

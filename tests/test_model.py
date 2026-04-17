@@ -2,24 +2,23 @@
 from __future__ import annotations
 
 import pathlib
-import warnings
 
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from scipy.stats import logistic as _logistic
+from scipy.stats import norm
 
-import pymlt
 from pymlt.basis import BernsteinBasis
 from pymlt.model import (
+    MLT,
     ConditionalTransformationModel,
     ConvergenceWarning,
-    MLT,
     NotFittedError,
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,6 +138,26 @@ class TestValidateInput:
         s = pd.Series(simple_y())
         model.fit(s)  # must not raise
         assert model.is_fitted_
+
+    def test_censored_upper_out_of_support_raises(self):
+        """Interval-censored upper bound above support triggers fin_hi branch."""
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(basis)
+        cd = CensoredData.interval_censored(
+            np.array([0.2, 0.4]), np.array([0.6, 1.5]),
+        )
+        with pytest.raises(ValueError, match="upper"):
+            model.fit(cd)
+
+    def test_x_1d_reshaped(self):
+        """A 1-D X array is promoted to a column vector; fit must succeed."""
+        model = make_ctm()
+        y = simple_y(n=20)
+        X = np.linspace(-1.0, 1.0, 20)  # shape (20,) — 1-D
+        model.fit(y, X=X)
+        assert model.is_fitted_
+        p = model.basis.order + 1
+        assert model.theta_.shape == (p + 1,)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +407,168 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
 # R reference integration test
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# base_distribution validation — invalid values raise at construction
+# ---------------------------------------------------------------------------
+
+class TestBaseDistributionValidation:
+    def test_ctm_invalid_raises(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            ConditionalTransformationModel(basis, base_distribution="cauchy")
+
+    def test_mlt_invalid_raises(self):
+        with pytest.raises(ValueError, match="base_distribution"):
+            MLT(order=4, support=(0.0, 1.0), base_distribution="student-t")
+
+    @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
+    def test_case_sensitive_and_aliases_rejected(self, bad):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            ConditionalTransformationModel(basis, base_distribution=bad)
+
+    def test_normal_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="normal")
+        assert m.base_distribution == "normal"
+
+    def test_logistic_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="logistic")
+        assert m.base_distribution == "logistic"
+
+    def test_error_raised_before_fit(self):
+        """ValueError must be raised at __init__, not lazily at fit()."""
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="base_distribution"):
+            # The exception must come from __init__, not from fit()
+            ConditionalTransformationModel(basis, base_distribution="bad")
+
+
+# ---------------------------------------------------------------------------
+# base_distribution="logistic" — predictions must use logistic, not normal
+# ---------------------------------------------------------------------------
+
+class TestPredictLogistic:
+    """Prediction output must reflect base_distribution="logistic"."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(7)
+        self.y = np.sort(rng.uniform(0.05, 0.95, 120))
+        self.model = MLT(order=5, support=(0.0, 1.0), base_distribution="logistic").fit(self.y)
+        self.grid = np.linspace(0.1, 0.9, 30)
+
+    def _h(self, y_vals: np.ndarray) -> np.ndarray:
+        """Compute transformation h = B @ theta_b for given y values."""
+        p = self.model.basis.order + 1
+        B = self.model.basis.evaluate(y_vals)
+        return B @ self.model.theta_[:p]
+
+    def test_cdf_matches_logistic_cdf(self):
+        """predict(distribution) must equal logistic.cdf(h), not norm.cdf(h)."""
+        h = self._h(self.grid)
+        expected = _logistic.cdf(h)
+        actual = self.model.predict(self.grid, what="distribution")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_cdf_differs_from_normal_cdf(self):
+        """Logistic CDF must not be equal to normal CDF for the same h."""
+        h = self._h(self.grid)
+        wrong = norm.cdf(h)
+        actual = self.model.predict(self.grid, what="distribution")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(distribution) returned norm.cdf values"
+        )
+
+    def test_density_matches_logistic_pdf(self):
+        """predict(density) must use logistic.pdf(h), not norm.pdf(h)."""
+        p = self.model.basis.order + 1
+        D = self.model.basis.derivative(self.grid, order=1)
+        hp = D @ self.model.theta_[:p]
+        h = self._h(self.grid)
+        expected = _logistic.pdf(h) * np.maximum(hp, 0.0)
+        actual = self.model.predict(self.grid, what="density")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_density_differs_from_normal_density(self):
+        p = self.model.basis.order + 1
+        D = self.model.basis.derivative(self.grid, order=1)
+        hp = D @ self.model.theta_[:p]
+        h = self._h(self.grid)
+        wrong = norm.pdf(h) * np.maximum(hp, 0.0)
+        actual = self.model.predict(self.grid, what="density")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(density) returned norm.pdf values"
+        )
+
+    def test_quantile_cdf_inverse(self):
+        """CDF(quantile(p)) ≈ p for logistic model."""
+        probs = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+        q = self.model.predict(probs, what="quantile")
+        cdf_back = self.model.predict(q, what="distribution")
+        np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
+
+    def test_quantile_in_support(self):
+        probs = np.linspace(0.05, 0.95, 20)
+        q = self.model.predict(probs, what="quantile")
+        assert np.all(q >= 0.0) and np.all(q <= 1.0)
+
+    def test_hazard_matches_logistic_ratio(self):
+        """predict(hazard) must use logistic pdf/sf, not normal."""
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, censoring=CensoringType.RIGHT, base_distribution="logistic"
+        )
+        rng = np.random.default_rng(3)
+        y = rng.uniform(0.05, 0.95, 80)
+        cd = CensoredData.right_censored(y, rng.random(80) < 0.3)
+        model.fit(cd)
+
+        grid = np.linspace(0.1, 0.9, 20)
+        p = model.basis.order + 1
+        B = model.basis.evaluate(grid)
+        h = B @ model.theta_[:p]
+
+        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        actual = model.predict(grid, what="hazard")
+        np.testing.assert_allclose(actual, expected)
+
+    def test_hazard_differs_from_normal_hazard(self):
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, censoring=CensoringType.RIGHT, base_distribution="logistic"
+        )
+        rng = np.random.default_rng(3)
+        y = rng.uniform(0.05, 0.95, 80)
+        cd = CensoredData.right_censored(y, rng.random(80) < 0.3)
+        model.fit(cd)
+
+        grid = np.linspace(0.1, 0.9, 20)
+        p = model.basis.order + 1
+        B = model.basis.evaluate(grid)
+        h = B @ model.theta_[:p]
+
+        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        actual = model.predict(grid, what="hazard")
+        assert not np.allclose(actual, wrong, atol=1e-6), (
+            "logistic model predict(hazard) returned norm-based values"
+        )
+
+    def test_normal_model_unchanged(self):
+        """Sanity: normal model still uses norm.cdf (default behaviour)."""
+        model_n = MLT(order=5, support=(0.0, 1.0), base_distribution="normal").fit(self.y)
+        p = model_n.basis.order + 1
+        B = model_n.basis.evaluate(self.grid)
+        h = B @ model_n.theta_[:p]
+        expected = norm.cdf(h)
+        actual = model_n.predict(self.grid, what="distribution")
+        np.testing.assert_allclose(actual, expected)
+
+
+# ---------------------------------------------------------------------------
+# R reference integration test
+# ---------------------------------------------------------------------------
+
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
 
@@ -405,8 +586,8 @@ def test_integration_r_reference():
     model.fit(y_ref)
 
     # Log-likelihoods must agree (within tolerance from different optimisers)
-    from pymlt.likelihood import log_likelihood
     from pymlt.basis import BernsteinBasis
+    from pymlt.likelihood import log_likelihood
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_r = log_likelihood(theta_r, basis, y_ref)
     ll_py = model.score(y_ref)

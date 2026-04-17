@@ -5,10 +5,8 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from hypothesis.extra.numpy import arrays
 
-from pymlt.basis import BernsteinBasis, _bernstein_matrix, monotone_trafo
-
+from pymlt.basis import BernsteinBasis, monotone_trafo
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -199,28 +197,28 @@ class TestIntegrate:
     def test_shape(self):
         b = make_basis(order=4)
         y = linspace_in(b, 20)
-        I = b.integrate(y)
-        assert I.shape == (20, 5)
+        integ = b.integrate(y)
+        assert integ.shape == (20, 5)
 
     def test_zero_at_lower_bound(self):
         b = make_basis(order=4, support=(1.0, 3.0))
-        I = b.integrate(np.array([1.0]))
-        np.testing.assert_allclose(I, 0.0, atol=1e-12)
+        integ = b.integrate(np.array([1.0]))
+        np.testing.assert_allclose(integ, 0.0, atol=1e-12)
 
     def test_full_domain_integral(self):
         """∫_a^b B_{i,k}(y) dy = (b−a)/(k+1) for all i."""
         b = make_basis(order=5, support=(0.5, 2.5))
         a, bval = b.support
-        I = b.integrate(np.array([bval]))  # shape (1, 6)
+        integ = b.integrate(np.array([bval]))  # shape (1, 6)
         expected = (bval - a) / (b.order + 1)
-        np.testing.assert_allclose(I[0], expected, atol=1e-12)
+        np.testing.assert_allclose(integ[0], expected, atol=1e-12)
 
     def test_integral_sum_equals_support_width(self):
         """Sum of column integrals over [a,b] = (b-a)."""
         b = make_basis(order=6, support=(-1.0, 3.0))
         a, bval = b.support
-        I = b.integrate(np.array([bval]))
-        np.testing.assert_allclose(I.sum(), bval - a, atol=1e-12)
+        integ = b.integrate(np.array([bval]))
+        np.testing.assert_allclose(integ.sum(), bval - a, atol=1e-12)
 
     def test_integrate_monotone_in_y(self):
         """Running integral of constant 1 (sum of all B_i) is monotone in y."""

@@ -9,15 +9,15 @@ import pytest
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import MonotonicityConstraint
 from pymlt.optimizer import (
-    OptimizerConfig,
     OptimizationResult,
+    OptimizerConfig,
     _initial_theta,
+    _make_objective,
     _perturb_and_project,
     _project_to_feasible,
     optimize,
 )
 from pymlt.variables import CensoredData, CensoringType
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -271,3 +271,103 @@ class TestOptimizeRestarts:
         result = optimize(make_basis(order=2), simple_data(n=50), config=cfg)
         if result.converged:
             assert result.n_restarts == 0
+
+
+# ---------------------------------------------------------------------------
+# base_distribution validation in optimize()
+# ---------------------------------------------------------------------------
+
+class TestBaseDistributionValidation:
+    def test_invalid_raises_value_error(self):
+        with pytest.raises(ValueError, match="base_distribution"):
+            optimize(make_basis(), simple_data(), base_distribution="cauchy")
+
+    @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
+    def test_case_sensitive_aliases_rejected(self, bad):
+        with pytest.raises(ValueError, match="base_distribution"):
+            optimize(make_basis(), simple_data(), base_distribution=bad)
+
+    def test_normal_accepted(self):
+        result = optimize(make_basis(), simple_data(), base_distribution="normal")
+        assert isinstance(result, OptimizationResult)
+
+    def test_logistic_accepted(self):
+        result = optimize(make_basis(), simple_data(), base_distribution="logistic")
+        assert isinstance(result, OptimizationResult)
+
+
+# ---------------------------------------------------------------------------
+# _make_objective — ValueError fallback penalty
+# ---------------------------------------------------------------------------
+
+class TestMakeObjectivePenalty:
+    """Infeasible theta (h' ≤ 0) must trigger the ValueError catch that
+    returns a large penalty instead of crashing the optimiser."""
+
+    def test_infeasible_theta_grad_returns_penalty(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        obj = _make_objective(
+            basis, y, None, CensoringType.NONE, use_gradient=True
+        )
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0])  # strictly decreasing
+        val, grad = obj(theta_bad)
+        assert val == 1e10
+        np.testing.assert_array_equal(grad, np.zeros_like(theta_bad))
+
+    def test_infeasible_theta_nograd_returns_penalty(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        obj = _make_objective(
+            basis, y, None, CensoringType.NONE, use_gradient=False
+        )
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
+        val = obj(theta_bad)
+        assert val == 1e10
+
+
+# ---------------------------------------------------------------------------
+# optimize() — scipy-exception / all-fail fallback
+# ---------------------------------------------------------------------------
+
+class TestOptimizeExceptionFallback:
+    def test_all_attempts_raise_returns_initial(self, monkeypatch):
+        """Every scipy call raises → fallback returns initial theta, unconverged."""
+        def boom(*args, **kwargs):
+            raise RuntimeError("scipy blew up")
+        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+
+        cfg = OptimizerConfig(max_restarts=2)
+        basis = make_basis(order=3)
+        result = optimize(basis, simple_data(), config=cfg)
+
+        assert not result.converged
+        assert result.n_iter == 0
+        assert "exception" in result.solver_message.lower()
+        np.testing.assert_allclose(
+            result.theta, np.linspace(0.0, 1.0, basis.order + 1)
+        )
+        assert np.isfinite(result.log_likelihood)
+
+    def test_exception_with_verbose_warns(self, monkeypatch):
+        """verbose=True → RuntimeWarning emitted from the except branch."""
+        def boom(*args, **kwargs):
+            raise RuntimeError("scipy blew up")
+        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+
+        cfg = OptimizerConfig(max_restarts=0, verbose=True)
+        with pytest.warns(RuntimeWarning, match="raised"):
+            optimize(make_basis(), simple_data(), config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# optimize() — verbose warning on genuine non-convergence
+# ---------------------------------------------------------------------------
+
+class TestOptimizeVerboseNonConvergence:
+    def test_verbose_warns_on_non_convergence(self):
+        """Tight iter budget → scipy returns success=False → verbose warning."""
+        cfg = OptimizerConfig(max_iter=1, max_restarts=3, verbose=True)
+        with pytest.warns(RuntimeWarning, match="did not converge"):
+            optimize(make_basis(order=3), simple_data(n=80), config=cfg)
+

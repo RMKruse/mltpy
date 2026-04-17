@@ -1,0 +1,9 @@
+{
+  "model": "mlt",
+  "censoring": "none",
+  "n": 200,
+  "order": 6,
+  "support": [-1, 5],
+  "seed": 54,
+  "base_distribution": "logistic"
+}
