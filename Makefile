@@ -12,4 +12,4 @@ validate:
 	python validation/run_validation.py
 
 docs:
-	sphinx-build docs/ docs/_build/
+	sphinx-build -b html -W --keep-going docs/ docs/_build/html
