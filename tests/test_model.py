@@ -1,4 +1,5 @@
 """Tests for pymlt.model — ConditionalTransformationModel and MLT."""
+
 from __future__ import annotations
 
 import pathlib
@@ -24,6 +25,7 @@ from pymlt.variables import CensoredData, CensoringType
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def simple_y(n: int = 80, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).uniform(0.05, 0.95, n)
 
@@ -36,6 +38,7 @@ def make_ctm(order: int = 3) -> ConditionalTransformationModel:
 # ---------------------------------------------------------------------------
 # NotFittedError
 # ---------------------------------------------------------------------------
+
 
 class TestNotFittedError:
     def test_predict_before_fit(self):
@@ -57,6 +60,7 @@ class TestNotFittedError:
 # ---------------------------------------------------------------------------
 # fit() / method chaining
 # ---------------------------------------------------------------------------
+
 
 class TestFit:
     def test_method_chaining(self):
@@ -104,6 +108,7 @@ class TestFit:
 # _validate_input
 # ---------------------------------------------------------------------------
 
+
 class TestValidateInput:
     def test_out_of_support_raises(self):
         model = make_ctm()
@@ -118,9 +123,7 @@ class TestValidateInput:
     def test_censored_out_of_support_raises(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         model = ConditionalTransformationModel(basis)
-        cd = CensoredData.right_censored(
-            np.array([0.5, 1.5]), np.array([False, False])
-        )
+        cd = CensoredData.right_censored(np.array([0.5, 1.5]), np.array([False, False]))
         with pytest.raises(ValueError, match="support"):
             model.fit(cd)
 
@@ -144,7 +147,8 @@ class TestValidateInput:
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         model = ConditionalTransformationModel(basis)
         cd = CensoredData.interval_censored(
-            np.array([0.2, 0.4]), np.array([0.6, 1.5]),
+            np.array([0.2, 0.4]),
+            np.array([0.6, 1.5]),
         )
         with pytest.raises(ValueError, match="upper"):
             model.fit(cd)
@@ -164,6 +168,7 @@ class TestValidateInput:
 # predict()
 # ---------------------------------------------------------------------------
 
+
 class TestPredict:
     def setup_method(self):
         self.model = make_ctm(order=4)
@@ -180,7 +185,9 @@ class TestPredict:
 
     def test_distribution_monotone(self):
         cdf = self.model.predict(self.y_grid, what="distribution")
-        assert np.all(np.diff(cdf) >= -1e-6), f"CDF not monotone: {np.diff(cdf).min():.2e}"
+        assert np.all(np.diff(cdf) >= -1e-6), (
+            f"CDF not monotone: {np.diff(cdf).min():.2e}"
+        )
 
     def test_density_non_negative(self):
         pdf = self.model.predict(self.y_grid, what="density")
@@ -207,9 +214,11 @@ class TestPredict:
         with pytest.raises(ValueError, match="ungültig"):
             self.model.predict(self.y_grid, what="banana")
 
-    def test_hazard_requires_right_censoring(self):
-        with pytest.raises(NotImplementedError):
-            self.model.predict(self.y_grid, what="hazard")
+    def test_hazard_any_censoring(self):
+        """Hazard is a pure functional of h; no censoring restriction."""
+        h = self.model.predict(self.y_grid, what="hazard")
+        assert h.shape == (30,)
+        assert np.all(h >= 0.0)
 
     def test_hazard_right_censored(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
@@ -226,6 +235,7 @@ class TestPredict:
 # ---------------------------------------------------------------------------
 # score()
 # ---------------------------------------------------------------------------
+
 
 class TestScore:
     def test_score_is_finite(self):
@@ -251,6 +261,7 @@ class TestScore:
 # ---------------------------------------------------------------------------
 # simulate()
 # ---------------------------------------------------------------------------
+
 
 class TestSimulate:
     def test_shape(self):
@@ -284,6 +295,7 @@ class TestSimulate:
 # __repr__
 # ---------------------------------------------------------------------------
 
+
 class TestRepr:
     def test_before_fit(self):
         model = make_ctm()
@@ -315,6 +327,7 @@ class TestRepr:
 # MLT convenience class
 # ---------------------------------------------------------------------------
 
+
 class TestMLT:
     def test_defaults(self):
         model = MLT()
@@ -340,6 +353,7 @@ class TestMLT:
 # End-to-end with covariates
 # ---------------------------------------------------------------------------
 
+
 class TestWithCovariates:
     def test_fit_predict_with_x(self):
         rng = np.random.default_rng(11)
@@ -359,6 +373,7 @@ class TestWithCovariates:
 # ---------------------------------------------------------------------------
 # End-to-end with censored data
 # ---------------------------------------------------------------------------
+
 
 class TestWithCensoredData:
     def test_right_censored(self):
@@ -386,6 +401,7 @@ class TestWithCensoredData:
 # Property-based: CDF monotonicity
 # ---------------------------------------------------------------------------
 
+
 @settings(max_examples=20, deadline=5000)
 @given(
     order=st.integers(min_value=2, max_value=5),
@@ -400,7 +416,9 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
     grid = np.linspace(0.05, 0.95, 50)
     cdf = model.predict(grid, what="distribution")
     diffs = np.diff(cdf)
-    assert np.all(diffs >= -1e-6), f"order={order}, seed={seed}: min diff={diffs.min():.2e}"
+    assert np.all(diffs >= -1e-6), (
+        f"order={order}, seed={seed}: min diff={diffs.min():.2e}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +428,7 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
 # ---------------------------------------------------------------------------
 # base_distribution validation — invalid values raise at construction
 # ---------------------------------------------------------------------------
+
 
 class TestBaseDistributionValidation:
     def test_ctm_invalid_raises(self):
@@ -449,13 +468,16 @@ class TestBaseDistributionValidation:
 # base_distribution="logistic" — predictions must use logistic, not normal
 # ---------------------------------------------------------------------------
 
+
 class TestPredictLogistic:
     """Prediction output must reflect base_distribution="logistic"."""
 
     def setup_method(self):
         rng = np.random.default_rng(7)
         self.y = np.sort(rng.uniform(0.05, 0.95, 120))
-        self.model = MLT(order=5, support=(0.0, 1.0), base_distribution="logistic").fit(self.y)
+        self.model = MLT(order=5, support=(0.0, 1.0), base_distribution="logistic").fit(
+            self.y
+        )
         self.grid = np.linspace(0.1, 0.9, 30)
 
     def _h(self, y_vals: np.ndarray) -> np.ndarray:
@@ -514,7 +536,7 @@ class TestPredictLogistic:
         assert np.all(q >= 0.0) and np.all(q <= 1.0)
 
     def test_hazard_matches_logistic_ratio(self):
-        """predict(hazard) must use logistic pdf/sf, not normal."""
+        """predict(hazard) must use logistic pdf/sf (with h' Jacobian), not normal."""
         basis = BernsteinBasis(order=4, support=(0.0, 1.0))
         model = ConditionalTransformationModel(
             basis, censoring=CensoringType.RIGHT, base_distribution="logistic"
@@ -527,9 +549,13 @@ class TestPredictLogistic:
         grid = np.linspace(0.1, 0.9, 20)
         p = model.basis.order + 1
         B = model.basis.evaluate(grid)
+        D = model.basis.derivative(grid, order=1)
         h = B @ model.theta_[:p]
+        hp = D @ model.theta_[:p]
 
-        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        expected = (
+            _logistic.pdf(h) * np.maximum(hp, 0.0) / np.maximum(_logistic.sf(h), 1e-300)
+        )
         actual = model.predict(grid, what="hazard")
         np.testing.assert_allclose(actual, expected)
 
@@ -546,9 +572,11 @@ class TestPredictLogistic:
         grid = np.linspace(0.1, 0.9, 20)
         p = model.basis.order + 1
         B = model.basis.evaluate(grid)
+        D = model.basis.derivative(grid, order=1)
         h = B @ model.theta_[:p]
+        hp = D @ model.theta_[:p]
 
-        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        wrong = norm.pdf(h) * np.maximum(hp, 0.0) / np.maximum(norm.sf(h), 1e-300)
         actual = model.predict(grid, what="hazard")
         assert not np.allclose(actual, wrong, atol=1e-6), (
             "logistic model predict(hazard) returned norm-based values"
@@ -556,13 +584,226 @@ class TestPredictLogistic:
 
     def test_normal_model_unchanged(self):
         """Sanity: normal model still uses norm.cdf (default behaviour)."""
-        model_n = MLT(order=5, support=(0.0, 1.0), base_distribution="normal").fit(self.y)
+        model_n = MLT(order=5, support=(0.0, 1.0), base_distribution="normal").fit(
+            self.y
+        )
         p = model_n.basis.order + 1
         B = model_n.basis.evaluate(self.grid)
         h = B @ model_n.theta_[:p]
         expected = norm.cdf(h)
         actual = model_n.predict(self.grid, what="distribution")
         np.testing.assert_allclose(actual, expected)
+
+
+# ---------------------------------------------------------------------------
+# All 14 predict(what=...) types — closed-form consistency against scipy
+# ---------------------------------------------------------------------------
+
+_NEW_WHATS = (
+    "trafo",
+    "logdistribution",
+    "survivor",
+    "logsurvivor",
+    "logdensity",
+    "loghazard",
+    "cumhazard",
+    "logcumhazard",
+    "odds",
+    "logodds",
+)
+
+
+class TestPredictAllWhats:
+    """Consistency tests for the 10 new predict() targets + regression guards."""
+
+    @pytest.fixture(params=["normal", "logistic"])
+    def fitted(self, request):
+        rng = np.random.default_rng(11)
+        y = np.sort(rng.uniform(0.05, 0.95, 150))
+        model = MLT(order=5, support=(0.0, 1.0), base_distribution=request.param).fit(y)
+        grid = np.linspace(0.1, 0.9, 40)
+        p = model.basis.order + 1
+        B = model.basis.evaluate(grid)
+        D = model.basis.derivative(grid, order=1)
+        h = B @ model.theta_[:p]
+        hp = D @ model.theta_[:p]
+        from pymlt.likelihood import _get_dist
+
+        dist = _get_dist(model.base_distribution)
+        return model, grid, h, hp, dist
+
+    def test_trafo_equals_h(self, fitted):
+        model, grid, h, _hp, _dist = fitted
+        np.testing.assert_allclose(model.predict(grid, what="trafo"), h)
+
+    def test_logdistribution_matches_dist_logcdf(self, fitted):
+        model, grid, h, _hp, dist = fitted
+        np.testing.assert_allclose(
+            model.predict(grid, what="logdistribution"), dist.logcdf(h)
+        )
+
+    def test_survivor_matches_dist_sf(self, fitted):
+        model, grid, h, _hp, dist = fitted
+        np.testing.assert_allclose(model.predict(grid, what="survivor"), dist.sf(h))
+
+    def test_logsurvivor_matches_dist_logsf(self, fitted):
+        model, grid, h, _hp, dist = fitted
+        np.testing.assert_allclose(
+            model.predict(grid, what="logsurvivor"), dist.logsf(h)
+        )
+
+    def test_logdensity_matches_logpdf_plus_log_hp(self, fitted):
+        model, grid, h, hp, dist = fitted
+        expected = dist.logpdf(h) + np.log(np.maximum(hp, np.finfo(np.float64).tiny))
+        np.testing.assert_allclose(model.predict(grid, what="logdensity"), expected)
+
+    def test_loghazard_equals_logdensity_minus_logsurvivor(self, fitted):
+        """Identity: loghazard ≡ logdensity − logsurvivor."""
+        model, grid, _h, _hp, _dist = fitted
+        lhzd = model.predict(grid, what="loghazard")
+        lden = model.predict(grid, what="logdensity")
+        lsurv = model.predict(grid, what="logsurvivor")
+        np.testing.assert_allclose(lhzd, lden - lsurv)
+
+    def test_cumhazard_equals_neg_log_survivor(self, fitted):
+        model, grid, _h, _hp, _dist = fitted
+        ch = model.predict(grid, what="cumhazard")
+        lsurv = model.predict(grid, what="logsurvivor")
+        np.testing.assert_allclose(ch, -lsurv)
+
+    def test_logcumhazard_matches_log_of_cumhazard(self, fitted):
+        model, grid, _h, _hp, _dist = fitted
+        lch = model.predict(grid, what="logcumhazard")
+        ch = model.predict(grid, what="cumhazard")
+        np.testing.assert_allclose(lch, np.log(ch))
+
+    def test_odds_matches_cdf_over_sf(self, fitted):
+        model, grid, h, _hp, dist = fitted
+        expected = dist.cdf(h) / dist.sf(h)
+        np.testing.assert_allclose(
+            model.predict(grid, what="odds"), expected, rtol=1e-10
+        )
+
+    def test_logodds_matches_logcdf_minus_logsf(self, fitted):
+        model, grid, h, _hp, dist = fitted
+        expected = dist.logcdf(h) - dist.logsf(h)
+        np.testing.assert_allclose(model.predict(grid, what="logodds"), expected)
+
+    def test_logodds_equals_log_of_odds(self, fitted):
+        """Identity: logodds ≡ log(odds) where odds > 0."""
+        model, grid, _h, _hp, _dist = fitted
+        lo = model.predict(grid, what="logodds")
+        o = model.predict(grid, what="odds")
+        np.testing.assert_allclose(lo, np.log(o), rtol=1e-10)
+
+    def test_hazard_equals_density_over_survivor(self, fitted):
+        """Identity (fixed formula): hazard ≡ density / survivor."""
+        model, grid, _h, _hp, _dist = fitted
+        hzd = model.predict(grid, what="hazard")
+        dens = model.predict(grid, what="density")
+        surv = model.predict(grid, what="survivor")
+        np.testing.assert_allclose(hzd, dens / np.maximum(surv, 1e-300))
+
+    def test_exp_loghazard_equals_hazard(self, fitted):
+        """Identity: exp(loghazard) ≡ hazard (lock hazard-family consistency)."""
+        model, grid, _h, _hp, _dist = fitted
+        hzd = model.predict(grid, what="hazard")
+        lhzd = model.predict(grid, what="loghazard")
+        np.testing.assert_allclose(np.exp(lhzd), hzd, rtol=1e-10)
+
+
+class TestPredictLogScaleTailStability:
+    """The numerical-stability justification for log-scale variants:
+    log(primal) can underflow to -inf, but predict(what='logX') stays finite."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(23)
+        y = np.sort(rng.uniform(0.05, 0.95, 200))
+        # Large support so the tails of h reach extreme z-values
+        self.model = MLT(order=6, support=(-5.0, 5.0), base_distribution="normal").fit(
+            rng.normal(0.0, 1.0, 200).clip(-4.9, 4.9)
+        )
+        del y
+
+    def test_logsurvivor_finite_where_survivor_underflows(self):
+        # Far-right point: S(h) underflows to 0, logS stays finite
+        y_tail = np.array([4.95])
+        surv = self.model.predict(y_tail, what="survivor")
+        lsurv = self.model.predict(y_tail, what="logsurvivor")
+        assert np.isfinite(lsurv).all()
+        # Either survivor underflowed to zero (→ log(0) = -inf, bad) OR
+        # it is nonzero and logsurvivor is more precise. Either way logsurvivor
+        # must be finite and equal to log(surv) when surv > 0.
+        if np.all(surv > 0):
+            np.testing.assert_allclose(lsurv, np.log(surv), rtol=1e-6)
+
+    def test_logdistribution_finite_where_cdf_underflows(self):
+        # Far-left point: F(h) underflows to 0, logF stays finite
+        y_tail = np.array([-4.95])
+        cdf = self.model.predict(y_tail, what="distribution")
+        lcdf = self.model.predict(y_tail, what="logdistribution")
+        assert np.isfinite(lcdf).all()
+        if np.all(cdf > 0):
+            np.testing.assert_allclose(lcdf, np.log(cdf), rtol=1e-6)
+
+    def test_log_variants_match_log_of_primal_in_bulk(self):
+        grid = np.linspace(-2.0, 2.0, 30)
+        for primal, log_variant in [
+            ("distribution", "logdistribution"),
+            ("survivor", "logsurvivor"),
+            ("density", "logdensity"),
+            ("cumhazard", "logcumhazard"),
+            ("odds", "logodds"),
+            ("hazard", "loghazard"),
+        ]:
+            p = self.model.predict(grid, what=primal)
+            lp = self.model.predict(grid, what=log_variant)
+            mask = p > 0
+            np.testing.assert_allclose(
+                lp[mask],
+                np.log(p[mask]),
+                rtol=1e-8,
+                err_msg=f"{log_variant} != log({primal}) in bulk",
+            )
+
+
+class TestPredictCovariateAware:
+    """Every new what must honour the covariate shift X @ beta."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(31)
+        n = 120
+        self.X = rng.normal(0.0, 1.0, (n, 2))
+        y = np.clip(0.5 + 0.1 * self.X[:, 0] + rng.normal(0.0, 0.1, n), 0.05, 0.95)
+        self.model = MLT(order=4, support=(0.0, 1.0), base_distribution="normal").fit(
+            y, X=self.X
+        )
+        self.grid = np.linspace(0.1, 0.9, 15)
+
+    @pytest.mark.parametrize("what", _NEW_WHATS + ("distribution", "density", "hazard"))
+    def test_prediction_shifts_with_X(self, what):
+        m = len(self.grid)
+        X0 = np.zeros((m, 2))
+        X1 = np.ones((m, 2))
+        v0 = self.model.predict(self.grid, X_new=X0, what=what)
+        v1 = self.model.predict(self.grid, X_new=X1, what=what)
+        # Shapes match the grid
+        assert v0.shape == (m,)
+        assert v1.shape == (m,)
+        # Non-trivial covariate impact (beta is fitted non-zero)
+        assert not np.allclose(v0, v1, atol=1e-8), (
+            f"what={what!r} appears not to use X (v0 == v1)"
+        )
+
+
+class TestInvalidWhatListsAll:
+    def test_error_mentions_new_types(self):
+        model = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
+        with pytest.raises(ValueError) as excinfo:
+            model.predict(np.array([0.5]), what="banana")
+        msg = str(excinfo.value)
+        for w in _NEW_WHATS + ("distribution", "density", "hazard", "quantile"):
+            assert w in msg, f"{w!r} missing from error message"
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +829,7 @@ def test_integration_r_reference():
     # Log-likelihoods must agree (within tolerance from different optimisers)
     from pymlt.basis import BernsteinBasis
     from pymlt.likelihood import log_likelihood
+
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_r = log_likelihood(theta_r, basis, y_ref)
     ll_py = model.score(y_ref)

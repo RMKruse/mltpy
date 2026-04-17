@@ -289,10 +289,17 @@ class TestLogisticHazard:
         p = self.model.basis.order + 1
         return self.model.basis.evaluate(y_vals) @ self.model.theta_[:p]
 
+    def _hp(self, y_vals: np.ndarray) -> np.ndarray:
+        p = self.model.basis.order + 1
+        return self.model.basis.derivative(y_vals, order=1) @ self.model.theta_[:p]
+
     def test_hazard_matches_logistic_ratio(self):
-        """predict(hazard) == logistic.pdf(h) / logistic.sf(h)."""
+        """predict(hazard) == logistic.pdf(h) * h' / logistic.sf(h)."""
         h = self._h(self.grid)
-        expected = _logistic.pdf(h) / np.maximum(_logistic.sf(h), 1e-300)
+        hp = self._hp(self.grid)
+        expected = (
+            _logistic.pdf(h) * np.maximum(hp, 0.0) / np.maximum(_logistic.sf(h), 1e-300)
+        )
         np.testing.assert_allclose(
             self.model.predict(self.grid, what="hazard"), expected
         )
@@ -300,7 +307,8 @@ class TestLogisticHazard:
     def test_hazard_not_norm_ratio(self):
         """Regression guard: hazard must not equal the normal-based ratio."""
         h = self._h(self.grid)
-        wrong = norm.pdf(h) / np.maximum(norm.sf(h), 1e-300)
+        hp = self._hp(self.grid)
+        wrong = norm.pdf(h) * np.maximum(hp, 0.0) / np.maximum(norm.sf(h), 1e-300)
         actual = self.model.predict(self.grid, what="hazard")
         assert not np.allclose(actual, wrong, atol=1e-6), (
             "logistic hazard returned norm-based values"
