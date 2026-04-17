@@ -32,6 +32,10 @@ Thumbs.db
 # --- Sensible Daten ---
 .env
 
+# --- Sphinx docs (generated) ---
+docs/_build/
+docs/**/.ipynb_checkpoints/
+
 # --- Benchmarks (input data is regenerated each run) ---
 benchmarks/data/
 
