@@ -204,5 +204,5 @@ for (n in N_LIST) {
 # Write CSV
 # ---------------------------------------------------------------------------
 
-write.csv(out, RESULTS_CSV, row.names = FALSE, quote = FALSE)
+write.csv(out, RESULTS_CSV, row.names = FALSE)
 cat(sprintf("\nWrote %d timing rows to %s\n", nrow(out), RESULTS_CSV))

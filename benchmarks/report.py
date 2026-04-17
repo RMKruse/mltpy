@@ -331,7 +331,13 @@ def _interpret(
         "Both backends are dominated by the optimiser's inner loop; "
         "absolute per-fit times of a few milliseconds at small `n` mean "
         "timing noise can shift individual cells by 10–30%, so treat "
-        "small-`n` ratios as indicative rather than precise.",
+        "small-`n` ratios as indicative rather than precise. "
+        "The two backends use different constrained solvers — pymlt uses "
+        "scipy SLSQP, R `mlt` uses `alabama::auglag` (augmented Lagrangian "
+        "with inner BFGS) — so iteration counts at the same precision can "
+        "differ by 2× without either being wrong; cells where pymlt is "
+        "slower are typically driven by extra SLSQP steps near the "
+        "constrained optimum, not by per-iteration cost.",
     ]
     return "".join(parts)
 

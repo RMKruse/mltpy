@@ -1,0 +1,982 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="./" data-theme="auto">
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Index &#8212; pymlt</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "auto";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "auto";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="_static/styles/theme.css?digest=7f76b32a3354e82990f2" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=7f76b32a3354e82990f2" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="_static/scripts/fontawesome.js?digest=7f76b32a3354e82990f2"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=7f76b32a3354e82990f2" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=7f76b32a3354e82990f2" />
+
+    <script src="_static/documentation_options.js?v=01f34227"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'genindex';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="index" title="Index" href="#" />
+    <link rel="search" title="Search" href="search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  
+    
+    <script src="_static/searchtools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="auto">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class=" navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="index.html">
+  
+  
+  
+  
+  
+  
+    <p class="title logo__title">pymlt</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class=" navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="installation.html">
+    Installation
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="quickstart.html">
+    Quick start
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/01_boxcox_regression.html">
+    Flexible normal-distribution regression with Box-Cox
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/02_survival_analysis.html">
+    Survival analysis with Coxph
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/03_regression_covariates.html">
+    Conditional transformation model with covariates
+  </a>
+</li>
+
+            <li class="nav-item dropdown">
+                <button class="btn dropdown-toggle nav-item" type="button"
+                data-bs-toggle="dropdown" aria-expanded="false"
+                aria-controls="pst-nav-more-links">
+                    More
+                </button>
+                <ul id="pst-nav-more-links" class="dropdown-menu">
+                    
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/variables.html">
+    variables
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/basis.html">
+    basis
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/constraints.html">
+    constraints
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/likelihood.html">
+    likelihood
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/optimizer.html">
+    optimizer
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/model.html">
+    model
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="api/tram.html">
+    tram
+  </a>
+</li>
+
+
+<li class=" ">
+  <a class="nav-link dropdown-item nav-internal" href="citation.html">
+    Citation
+  </a>
+</li>
+
+                </ul>
+            </li>
+            
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/RMKruse/pymlt" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/pymlt/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar hide-on-wide">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="installation.html">
+    Installation
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="quickstart.html">
+    Quick start
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/01_boxcox_regression.html">
+    Flexible normal-distribution regression with Box-Cox
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/02_survival_analysis.html">
+    Survival analysis with Coxph
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="examples/03_regression_covariates.html">
+    Conditional transformation model with covariates
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/variables.html">
+    variables
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/basis.html">
+    basis
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/constraints.html">
+    constraints
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/likelihood.html">
+    likelihood
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/optimizer.html">
+    optimizer
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/model.html">
+    model
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="api/tram.html">
+    tram
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="citation.html">
+    Citation
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/RMKruse/pymlt" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://pypi.org/project/pymlt/" title="PyPI" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-python fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">PyPI</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none"></div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+
+<h1 id="index">Index</h1>
+
+<div class="genindex-jumpbox">
+ <a href="#A"><strong>A</strong></a>
+ | <a href="#B"><strong>B</strong></a>
+ | <a href="#C"><strong>C</strong></a>
+ | <a href="#D"><strong>D</strong></a>
+ | <a href="#E"><strong>E</strong></a>
+ | <a href="#F"><strong>F</strong></a>
+ | <a href="#H"><strong>H</strong></a>
+ | <a href="#I"><strong>I</strong></a>
+ | <a href="#L"><strong>L</strong></a>
+ | <a href="#M"><strong>M</strong></a>
+ | <a href="#N"><strong>N</strong></a>
+ | <a href="#O"><strong>O</strong></a>
+ | <a href="#P"><strong>P</strong></a>
+ | <a href="#R"><strong>R</strong></a>
+ | <a href="#S"><strong>S</strong></a>
+ | <a href="#T"><strong>T</strong></a>
+ | <a href="#U"><strong>U</strong></a>
+ | <a href="#V"><strong>V</strong></a>
+ 
+</div>
+<h2 id="A">A</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint.as_LinearConstraint">as_LinearConstraint() (pymlt.constraints.BoundaryConstraint method)</a>
+
+      <ul>
+        <li><a href="api/constraints.html#pymlt.constraints.MonotonicityConstraint.as_LinearConstraint">(pymlt.constraints.MonotonicityConstraint method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/constraints.html#pymlt.constraints.MonotonicityConstraint.as_matrix">as_matrix() (pymlt.constraints.MonotonicityConstraint method)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint.as_scipy_constraint">as_scipy_constraint() (pymlt.constraints.BoundaryConstraint method)</a>
+
+      <ul>
+        <li><a href="api/constraints.html#pymlt.constraints.MonotonicityConstraint.as_scipy_constraint">(pymlt.constraints.MonotonicityConstraint method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="B">B</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis">BernsteinBasis (class in pymlt.basis)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint">BoundaryConstraint (class in pymlt.constraints)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.NumericVariable.bounds">bounds (pymlt.variables.NumericVariable attribute)</a>
+</li>
+      <li><a href="api/tram.html#pymlt.tram.BoxCox">BoxCox (class in pymlt.tram)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.build_constraints">build_constraints() (in module pymlt.constraints)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="C">C</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData">CensoredData (class in pymlt.variables)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoringType">CensoringType (class in pymlt.variables)</a>
+</li>
+      <li><a href="api/tram.html#pymlt.tram.Colr">Colr (class in pymlt.tram)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel">ConditionalTransformationModel (class in pymlt.model)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.converged">converged (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+      <li><a href="api/model.html#pymlt.model.ConvergenceWarning">ConvergenceWarning</a>
+</li>
+      <li><a href="api/tram.html#pymlt.tram.Coxph">Coxph (class in pymlt.tram)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="D">D</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis.derivative">derivative() (pymlt.basis.BernsteinBasis method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="E">E</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis.evaluate">evaluate() (pymlt.basis.BernsteinBasis method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.exact">exact (pymlt.variables.CensoredData attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="F">F</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.fit">fit() (pymlt.model.ConditionalTransformationModel method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/tram.html#pymlt.tram.BoxCox.fitted_transformation">fitted_transformation() (pymlt.tram.BoxCox method)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.from_exact">from_exact() (pymlt.variables.CensoredData class method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="H">H</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/tram.html#pymlt.tram.Coxph.hazard">hazard() (pymlt.tram.Coxph method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="I">I</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis.integrate">integrate() (pymlt.basis.BernsteinBasis method)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoringType.INTERVAL">INTERVAL (pymlt.variables.CensoringType attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.interval_censored">interval_censored() (pymlt.variables.CensoredData class method)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.is_exact_mask">is_exact_mask (pymlt.variables.CensoredData property)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.is_fitted_">is_fitted_ (pymlt.model.ConditionalTransformationModel attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.is_interval_censored_mask">is_interval_censored_mask (pymlt.variables.CensoredData property)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.is_left_censored_mask">is_left_censored_mask (pymlt.variables.CensoredData property)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.is_right_censored_mask">is_right_censored_mask (pymlt.variables.CensoredData property)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="L">L</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.CensoringType.LEFT">LEFT (pymlt.variables.CensoringType attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.left_censored">left_censored() (pymlt.variables.CensoredData class method)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.OrderedVariable.levels">levels (pymlt.variables.OrderedVariable attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.NumericVariable.log_first">log_first (pymlt.variables.NumericVariable attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.log_likelihood">log_likelihood (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+      <li><a href="api/likelihood.html#pymlt.likelihood.log_likelihood">log_likelihood() (in module pymlt.likelihood)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint.lower">lower (pymlt.constraints.BoundaryConstraint attribute)</a>
+
+      <ul>
+        <li><a href="api/variables.html#pymlt.variables.CensoredData.lower">(pymlt.variables.CensoredData attribute)</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="M">M</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.max_iter">max_iter (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.max_restarts">max_restarts (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+      <li><a href="api/model.html#pymlt.model.MLT">MLT (class in pymlt.model)</a>
+</li>
+      <li>
+    module
+
+      <ul>
+        <li><a href="api/basis.html#module-pymlt.basis">pymlt.basis</a>
+</li>
+        <li><a href="api/constraints.html#module-pymlt.constraints">pymlt.constraints</a>
+</li>
+        <li><a href="api/likelihood.html#module-pymlt.likelihood">pymlt.likelihood</a>
+</li>
+        <li><a href="api/model.html#module-pymlt.model">pymlt.model</a>
+</li>
+        <li><a href="api/optimizer.html#module-pymlt.optimizer">pymlt.optimizer</a>
+</li>
+        <li><a href="api/tram.html#module-pymlt.tram">pymlt.tram</a>
+</li>
+        <li><a href="api/variables.html#module-pymlt.variables">pymlt.variables</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.monotone_trafo">monotone_trafo() (in module pymlt.basis)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.MonotonicityConstraint">MonotonicityConstraint (class in pymlt.constraints)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="N">N</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.n">n (pymlt.variables.CensoredData property)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.n_censored">n_censored (pymlt.variables.CensoredData property)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.n_exact">n_exact (pymlt.variables.CensoredData property)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.n_iter">n_iter (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.OrderedVariable.n_levels">n_levels (pymlt.variables.OrderedVariable property)</a>
+</li>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint.n_params">n_params (pymlt.constraints.BoundaryConstraint attribute)</a>
+
+      <ul>
+        <li><a href="api/constraints.html#pymlt.constraints.MonotonicityConstraint.n_params">(pymlt.constraints.MonotonicityConstraint attribute)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.n_restarts">n_restarts (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.NumericVariable.name">name (pymlt.variables.NumericVariable attribute)</a>
+
+      <ul>
+        <li><a href="api/variables.html#pymlt.variables.OrderedVariable.name">(pymlt.variables.OrderedVariable attribute)</a>
+</li>
+        <li><a href="api/variables.html#pymlt.variables.SurvivalVariable.name">(pymlt.variables.SurvivalVariable attribute)</a>
+</li>
+      </ul></li>
+      <li><a href="api/likelihood.html#pymlt.likelihood.negative_log_likelihood">negative_log_likelihood() (in module pymlt.likelihood)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoringType.NONE">NONE (pymlt.variables.CensoringType attribute)</a>
+</li>
+      <li><a href="api/model.html#pymlt.model.NotFittedError">NotFittedError</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.NumericVariable">NumericVariable (class in pymlt.variables)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="O">O</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult">OptimizationResult (class in pymlt.optimizer)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.optimize">optimize() (in module pymlt.optimizer)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig">OptimizerConfig (class in pymlt.optimizer)</a>
+</li>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis.order">order (pymlt.basis.BernsteinBasis attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.OrderedVariable">OrderedVariable (class in pymlt.variables)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="P">P</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.predict">predict() (pymlt.model.ConditionalTransformationModel method)</a>
+</li>
+      <li>
+    pymlt.basis
+
+      <ul>
+        <li><a href="api/basis.html#module-pymlt.basis">module</a>
+</li>
+      </ul></li>
+      <li>
+    pymlt.constraints
+
+      <ul>
+        <li><a href="api/constraints.html#module-pymlt.constraints">module</a>
+</li>
+      </ul></li>
+      <li>
+    pymlt.likelihood
+
+      <ul>
+        <li><a href="api/likelihood.html#module-pymlt.likelihood">module</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    pymlt.model
+
+      <ul>
+        <li><a href="api/model.html#module-pymlt.model">module</a>
+</li>
+      </ul></li>
+      <li>
+    pymlt.optimizer
+
+      <ul>
+        <li><a href="api/optimizer.html#module-pymlt.optimizer">module</a>
+</li>
+      </ul></li>
+      <li>
+    pymlt.tram
+
+      <ul>
+        <li><a href="api/tram.html#module-pymlt.tram">module</a>
+</li>
+      </ul></li>
+      <li>
+    pymlt.variables
+
+      <ul>
+        <li><a href="api/variables.html#module-pymlt.variables">module</a>
+</li>
+      </ul></li>
+  </ul></td>
+</tr></table>
+
+<h2 id="R">R</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.result_">result_ (pymlt.model.ConditionalTransformationModel attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/variables.html#pymlt.variables.CensoringType.RIGHT">RIGHT (pymlt.variables.CensoringType attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.right_censored">right_censored() (pymlt.variables.CensoredData class method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="S">S</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.score">score() (pymlt.model.ConditionalTransformationModel method)</a>
+</li>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.simulate">simulate() (pymlt.model.ConditionalTransformationModel method)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.solver">solver (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.solver_message">solver_message (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/basis.html#pymlt.basis.BernsteinBasis.support">support (pymlt.basis.BernsteinBasis attribute)</a>
+
+      <ul>
+        <li><a href="api/variables.html#pymlt.variables.NumericVariable.support">(pymlt.variables.NumericVariable attribute)</a>
+</li>
+        <li><a href="api/variables.html#pymlt.variables.SurvivalVariable.support">(pymlt.variables.SurvivalVariable attribute)</a>
+</li>
+      </ul></li>
+      <li><a href="api/tram.html#pymlt.tram.Coxph.survival">survival() (pymlt.tram.Coxph method)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.SurvivalVariable">SurvivalVariable (class in pymlt.variables)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="T">T</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizationResult.theta">theta (pymlt.optimizer.OptimizationResult attribute)</a>
+</li>
+      <li><a href="api/model.html#pymlt.model.ConditionalTransformationModel.theta_">theta_ (pymlt.model.ConditionalTransformationModel attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.tol">tol (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.trunc_lower">trunc_lower (pymlt.variables.CensoredData attribute)</a>
+</li>
+      <li><a href="api/variables.html#pymlt.variables.CensoredData.trunc_upper">trunc_upper (pymlt.variables.CensoredData attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="U">U</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/constraints.html#pymlt.constraints.BoundaryConstraint.upper">upper (pymlt.constraints.BoundaryConstraint attribute)</a>
+
+      <ul>
+        <li><a href="api/variables.html#pymlt.variables.CensoredData.upper">(pymlt.variables.CensoredData attribute)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.use_gradient">use_gradient (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="V">V</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/optimizer.html#pymlt.optimizer.OptimizerConfig.verbose">verbose (pymlt.optimizer.OptimizerConfig attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+
+
+                </article>
+              
+              
+              
+              
+              
+            </div>
+            
+            
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="_static/scripts/bootstrap.js?digest=7f76b32a3354e82990f2"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=7f76b32a3354e82990f2"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2026, René-Marcel Kruse.
+      <br/>
+    
+  </p>
+</div>
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    <br/>
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.17.0.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

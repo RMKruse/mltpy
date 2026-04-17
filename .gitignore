@@ -11,10 +11,6 @@ dist/
 .pytest_cache/
 .mypy_cache/
 
-# --- Sphinx docs (generated) ---
-docs/_build/
-docs/**/.ipynb_checkpoints/
-
 # --- R ---
 .Rhistory
 .RData
@@ -35,10 +31,6 @@ Thumbs.db
 
 # --- Sensible Daten ---
 .env
-
-# --- Validation (generated from CSV, not committed) ---
-# validation/references/
-# validation/results/
 
 # --- Benchmarks (input data is regenerated each run) ---
 benchmarks/data/

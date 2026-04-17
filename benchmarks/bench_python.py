@@ -168,8 +168,8 @@ def run_benchmark() -> list[dict[str, object]]:
     for cell_idx, (n, order, censoring) in enumerate(_iter_cells(), start=1):
         y, status = generate_dataset(n, censoring)
         fit_input = _make_fit_input(y, status)
+        model = _build_model(order, censoring)
         for rep in range(N_REPS):
-            model = _build_model(order, censoring)
             elapsed, converged, n_iter = _time_one_fit(model, fit_input)
             rows.append(
                 {
