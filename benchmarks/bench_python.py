@@ -204,7 +204,9 @@ def write_results_csv(rows: list[dict[str, object]]) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     fieldnames = ["n", "order", "censoring", "rep", "time_s", "converged", "n_iter"]
     with RESULTS_CSV.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer = csv.DictWriter(
+            fh, fieldnames=fieldnames, lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
