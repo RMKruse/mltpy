@@ -198,7 +198,7 @@ def _fmt_seconds(x: float) -> str:
     if not np.isfinite(x):
         return "—"
     if x >= 1.0:
-        return f"{x:.3f}"
+        return f"{x:.3f} s"
     if x >= 0.001:
         return f"{x * 1000:.2f} ms"
     return f"{x * 1e6:.1f} µs"
