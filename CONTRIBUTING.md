@@ -25,6 +25,17 @@ pytest tests/          # full suite
 pytest --cov=pymlt     # with coverage report
 ```
 
+## Benchmarks
+
+```bash
+make benchmark         # times pymlt vs. R mlt across n × order × censoring
+```
+
+Requires R with the `mlt`, `basefun`, `variables`, and `survival` packages.
+See [`benchmarks/README.md`](benchmarks/README.md) for layout and CSV schema;
+the latest committed report is at
+[`benchmarks/results/benchmark_report.md`](benchmarks/results/benchmark_report.md).
+
 ## Code style
 
 | Tool | Command | Notes |

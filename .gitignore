@@ -39,6 +39,12 @@ Thumbs.db
 # --- Validation (generated from CSV, not committed) ---
 # validation/references/
 # validation/results/
+# --- Sphinx docs (generated) ---
+docs/_build/
+docs/**/.ipynb_checkpoints/
+
+# --- Benchmarks (input data is regenerated each run) ---
+benchmarks/data/
 
 # --- dot files ---
 .hypothesis/
