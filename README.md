@@ -60,7 +60,7 @@ print(f"Estimated median: {median:.1f}")
 
 ## Features
 
-- Four prediction types from one fitted model: CDF, PDF, quantile, hazard rate
+- Fourteen prediction types from one fitted model: transformation, CDF, PDF, survivor, hazard, cumulative hazard, odds, quantile, and log-scale variants of each
 - Full censoring support: exact, right-, left-, and interval-censored observations
 - Conditional distributions via optional covariate matrix `X`
 - Analytical gradients for fast, stable MLE with automatic restarts on non-convergence
@@ -188,12 +188,29 @@ model = pymlt.MLT(order=6, support=(0, 1), optimizer_config=cfg)
 
 ### Prediction modes
 
+`predict(y_new, X_new=None, what=...)` exposes fourteen output types from
+a single fit. Let `h = h(y|x)`, `h' = ∂h/∂y`, and let `F`, `S`, `f`
+denote the base distribution's CDF, survivor, and PDF.
+
 | `what=` | Input | Output |
 |---|---|---|
-| `"distribution"` | y values in support | CDF: Φ(h(y\|x)) ∈ [0, 1] |
-| `"density"` | y values in support | PDF: φ(h(y\|x)) · h′(y\|x) ≥ 0 |
-| `"quantile"` | probabilities p ∈ (0, 1) | y such that P(Y ≤ y) = p |
-| `"hazard"` | y values in support | φ(h) / (1 − Φ(h)) — RIGHT censoring only |
+| `"trafo"` | y values in support | Transformation `h(y\|x)` |
+| `"distribution"` | y values in support | CDF: `F(h)` ∈ [0, 1] |
+| `"logdistribution"` | y values in support | `log F(h)` |
+| `"survivor"` | y values in support | `S(h) = 1 − F(h)` |
+| `"logsurvivor"` | y values in support | `log S(h)` |
+| `"density"` | y values in support | PDF: `f(h) · h'` ≥ 0 |
+| `"logdensity"` | y values in support | `log f(h) + log h'` |
+| `"hazard"` | y values in support | `f(h) · h' / S(h)` |
+| `"loghazard"` | y values in support | `log f(h) + log h' − log S(h)` |
+| `"cumhazard"` | y values in support | Cumulative hazard: `−log S(h)` |
+| `"logcumhazard"` | y values in support | `log(−log S(h))` |
+| `"odds"` | y values in support | `F(h) / S(h)` |
+| `"logodds"` | y values in support | `log F(h) − log S(h)` |
+| `"quantile"` | probabilities p ∈ (0, 1) | y such that P(Y ≤ y) = p (numerical inversion) |
+
+Log-scale variants use `dist.logcdf`/`logsf`/`logpdf` directly and stay
+finite in tails where the primal quantities would under- or overflow.
 
 ---
 

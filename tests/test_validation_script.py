@@ -395,6 +395,39 @@ def test_print_report_contains_pass_fail(capsys: pytest.CaptureFixture[str]) -> 
     assert "PASS" in captured
     assert "FAIL" in captured
     assert "1/2 passed" in captured
+    # No new-metric deltas were set, so the extended block must not render.
+    assert "Extended predict-type" not in captured
+
+
+def test_print_report_renders_extended_table_when_new_metrics_present(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Extended predict-type table must render once any new-metric delta is set."""
+    new_kwargs = {f"max_delta_{w}": 0.001 for w in _NEW_WHATS}
+    results = [
+        ValidationResult(
+            case_id="case_ext",
+            model="mlt",
+            n=200,
+            order=4,
+            passed=True,
+            max_delta_theta=0.01,
+            delta_loglik=0.001,
+            max_delta_cdf=0.001,
+            converged=True,
+            runtime_s=0.1,
+            **new_kwargs,
+        ),
+    ]
+    print_report(results)
+    out = capsys.readouterr().out
+    assert "Extended predict-type" in out
+    assert "legend:" in out
+    # Every short label from _NEW_TERMINAL_COLS must appear in the extended header.
+    from run_validation import _NEW_TERMINAL_COLS
+
+    for label, _, _ in _NEW_TERMINAL_COLS:
+        assert label in out
 
 
 # ---------------------------------------------------------------------------

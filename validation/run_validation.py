@@ -72,6 +72,22 @@ _NEW_METRIC_SPEC: tuple[
 # what-names of the 10 new predict() types, in report order.
 _NEW_WHATS: tuple[str, ...] = tuple(name for name, *_ in _NEW_METRIC_SPEC)
 
+# Terminal display spec for the 10 new metrics: (short_label, what_name,
+# legend_rhs). Short labels keep the extended table under ~120 cols; the
+# legend is printed once above the table so abbreviations are unambiguous.
+_NEW_TERMINAL_COLS: tuple[tuple[str, str, str], ...] = (
+    ("Δtrafo", "trafo", "h(y|x)"),
+    ("Δsrv", "survivor", "1−F"),
+    ("Δchz", "cumhazard", "−log S"),
+    ("Δodds", "odds", "F/S"),
+    ("ΔlogF", "logdistribution", "log F"),
+    ("ΔlogS", "logsurvivor", "log S"),
+    ("Δlogf", "logdensity", "log f"),
+    ("Δlogh", "loghazard", "log haz"),
+    ("ΔlogH", "logcumhazard", "log cumhaz"),
+    ("Δlogo", "logodds", "log odds"),
+)
+
 # Cases known to fail for fundamental statistical reasons, not implementation
 # bugs. They still run and are reported as XFAIL, but do not cause the overall
 # validation run to exit non-zero. See validation/VALIDATION.md for per-case
@@ -807,6 +823,30 @@ def print_report(results: list[ValidationResult]) -> None:
     suffix = f", {', '.join(extras)}" if extras else ""
     print(f"Total: {n_pass}/{n_total} passed{suffix} ({pct:.1f}%)")
     print()
+
+    # --- Extended predict-type deltas ---
+    # Only print when at least one case actually populated a new-type delta
+    # (otherwise the section adds noise for users running on old references).
+    has_extended = any(
+        getattr(r, f"max_delta_{w}") is not None for r in results for w in _NEW_WHATS
+    )
+    if has_extended:
+        print("Extended predict-type Δ (derived; reliability-masked per metric)")
+        legend = "  ".join(f"{lbl}={rhs}" for lbl, _, rhs in _NEW_TERMINAL_COLS)
+        print(f"legend: {legend}")
+        print("=" * 118)
+        ext_header = f"{'Case':<28}│ " + " │ ".join(
+            f"{lbl:>6}" for lbl, _, _ in _NEW_TERMINAL_COLS
+        )
+        print(ext_header)
+        print("─" * 118)
+        for r in results:
+            cells = " │ ".join(
+                _fmt(getattr(r, f"max_delta_{w}"), 6) for _, w, _ in _NEW_TERMINAL_COLS
+            )
+            print(f"{r.case_id:<28}│ {cells}")
+        print("─" * 118)
+        print()
 
 
 def save_report(

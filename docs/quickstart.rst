@@ -3,8 +3,10 @@ Quick start
 
 pymlt fits a monotone transformation ``h(y|x)`` such that ``h(Y|X)`` follows
 a known reference distribution (standard normal by default). Once fitted,
-the model answers distributional queries — CDF, density, quantile, hazard —
-through a single ``predict`` call.
+the model answers distributional queries — CDF, density, quantile, hazard,
+survivor, cumulative hazard, odds, the transformation itself, and the
+numerically-stable log-scale variants of each — through a single
+``predict`` call.
 
 The snippet below fits the unconditional model to synthetic log-normal data
 and prints the estimated median.
@@ -30,6 +32,9 @@ three canonical use cases from the Hothorn papers: flexible Box-Cox
 regression, survival analysis under right-censoring, and conditional
 regression with covariates.
 
-For the full list of prediction modes (``distribution``, ``density``,
-``quantile``, ``hazard``) and the ``CensoredData`` container, see the
-:doc:`API reference <api/model>`.
+``predict`` accepts fourteen ``what=`` options:
+``"trafo"``, ``"distribution"``, ``"logdistribution"``, ``"survivor"``,
+``"logsurvivor"``, ``"density"``, ``"logdensity"``, ``"hazard"``,
+``"loghazard"``, ``"cumhazard"``, ``"logcumhazard"``, ``"odds"``,
+``"logodds"``, and ``"quantile"``. For the full table of formulas and
+the ``CensoredData`` container, see the :doc:`API reference <api/model>`.
