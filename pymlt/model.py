@@ -17,12 +17,15 @@ MLT
 
 from __future__ import annotations
 
+import math
 import warnings
+from dataclasses import dataclass
 from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
+from scipy.stats import chi2
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import BaseDistribution, _get_dist, log_likelihood
@@ -103,6 +106,16 @@ class ConditionalTransformationModel:
         :meth:`fit`.
     is_fitted_ : bool
         Whether :meth:`fit` has been called successfully.
+    n_obs_ : int or None
+        Number of observations used in :meth:`fit`.  For
+        :class:`~pymlt.variables.CensoredData`, this is ``y.n``; otherwise
+        ``len(y)``.  ``None`` before :meth:`fit`.
+    n_free_params_ : int or None
+        Number of free parameters in the fitted model — equal to
+        ``len(theta_)`` (Bernstein coefficients plus optional regression
+        coefficients).  The monotonicity constraint ``D @ theta_b >= 0`` is
+        an inequality and does not reduce the parameter count.  ``None``
+        before :meth:`fit`.
     """
 
     def __init__(
@@ -122,6 +135,8 @@ class ConditionalTransformationModel:
         self.theta_: NDArray[np.float64] | None = None
         self.result_: OptimizationResult | None = None
         self.is_fitted_: bool = False
+        self.n_obs_: int | None = None
+        self.n_free_params_: int | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -253,6 +268,10 @@ class ConditionalTransformationModel:
         self.theta_ = result.theta
         self.result_ = result
         self.is_fitted_ = True
+        self.n_obs_ = (
+            int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
+        )
+        self.n_free_params_ = int(result.theta.size)
         return self
 
     def predict(
@@ -473,6 +492,72 @@ class ConditionalTransformationModel:
             base_distribution=self.base_distribution,
         )
 
+    def aic(self) -> float:
+        """Akaike Information Criterion of the fitted model.
+
+        Returns
+        -------
+        float
+            ``AIC = -2 · loglik + 2 · k`` where ``k`` is the number of free
+            parameters (``n_free_params_``) and ``loglik`` is the maximised
+            log-likelihood.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+
+        Notes
+        -----
+        Lower is better.  The monotonicity inequality ``D @ theta_b >= 0``
+        is not counted as a binding equality constraint, so ``k`` equals the
+        full length of ``theta_`` — matching R ``mlt::AIC.mlt``, which uses
+        ``length(coef(fit))``.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1)).fit(y)
+        >>> model.aic()
+        """
+        self._check_is_fitted()
+        if self.result_ is None or self.n_free_params_ is None:
+            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+        return -2.0 * self.result_.log_likelihood + 2.0 * self.n_free_params_
+
+    def bic(self) -> float:
+        """Bayesian Information Criterion of the fitted model.
+
+        Returns
+        -------
+        float
+            ``BIC = -2 · loglik + log(n) · k`` where ``n`` is the number of
+            observations (``n_obs_``), ``k`` the number of free parameters
+            (``n_free_params_``), and ``loglik`` the maximised log-likelihood.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+
+        Notes
+        -----
+        Lower is better.  Penalises additional parameters more heavily than
+        :meth:`aic` for ``n > 7``.  Matches R ``mlt::BIC.mlt`` which uses
+        ``length(coef(fit))`` for ``k``.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1)).fit(y)
+        >>> model.bic()
+        """
+        self._check_is_fitted()
+        if self.result_ is None or self.n_free_params_ is None or self.n_obs_ is None:
+            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+        return (
+            -2.0 * self.result_.log_likelihood
+            + math.log(self.n_obs_) * self.n_free_params_
+        )
+
     def simulate(
         self,
         n: int,
@@ -594,3 +679,157 @@ class MLT(ConditionalTransformationModel):
             f"MLT(order={self._order}, support={self._support}, "
             f"censoring={censoring}, fitted=False)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Likelihood-ratio test (anova)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnovaResult:
+    """Result of a likelihood-ratio test comparing nested models.
+
+    Models are sorted by ``n_params`` ascending (reduced → full).  For each
+    model after the first, the entry at the same index gives the LR
+    statistic comparing it to the *previous* model in the sequence.
+
+    Parameters
+    ----------
+    model_names : tuple[str, ...]
+        Display names of the compared models, in the same order as the rows.
+    n_params : tuple[int, ...]
+        Number of free parameters per model.
+    log_lik : tuple[float, ...]
+        Maximised log-likelihood per model.
+    df : tuple[int | None, ...]
+        Degrees of freedom for each pairwise test (``None`` for the first
+        row, which has no predecessor).
+    deviance : tuple[float | None, ...]
+        Likelihood-ratio statistic ``D = 2·(loglik_full − loglik_reduced)``
+        for each pairwise test (``None`` for the first row).
+    p_value : tuple[float | None, ...]
+        Right-tail probability of the chi-squared distribution with the
+        corresponding degrees of freedom (``None`` for the first row).
+    """
+
+    model_names: tuple[str, ...]
+    n_params: tuple[int, ...]
+    log_lik: tuple[float, ...]
+    df: tuple[int | None, ...]
+    deviance: tuple[float | None, ...]
+    p_value: tuple[float | None, ...]
+
+    def __repr__(self) -> str:
+        header = (
+            f"{'Model':<24} {'n_par':>5} {'logLik':>12} "
+            f"{'df':>4} {'Deviance':>12} {'Pr(>Chisq)':>12}"
+        )
+        rows = [header, "-" * len(header)]
+        for i in range(len(self.model_names)):
+            df_str = "" if self.df[i] is None else str(self.df[i])
+            dev_str = "" if self.deviance[i] is None else f"{self.deviance[i]:>12.4f}"
+            p_str = "" if self.p_value[i] is None else f"{self.p_value[i]:>12.4g}"
+            rows.append(
+                f"{self.model_names[i]:<24} "
+                f"{self.n_params[i]:>5} "
+                f"{self.log_lik[i]:>12.4f} "
+                f"{df_str:>4} "
+                f"{dev_str:>12} "
+                f"{p_str:>12}"
+            )
+        return "\n".join(rows)
+
+
+def anova(*models: ConditionalTransformationModel) -> AnovaResult:
+    """Likelihood-ratio test for a sequence of nested transformation models.
+
+    Models are sorted internally by their number of free parameters
+    (``n_free_params_``) in ascending order, and pairwise LR statistics are
+    computed against the immediately smaller model.  The user is responsible
+    for ensuring the models are *actually* nested (fitted on the same data
+    with the smaller's parameter space contained in the larger's).  Sample
+    size is checked; structural nesting is not.
+
+    Parameters
+    ----------
+    *models:
+        Two or more fitted :class:`ConditionalTransformationModel` instances.
+
+    Returns
+    -------
+    AnovaResult
+        See :class:`AnovaResult` for the column layout.
+
+    Raises
+    ------
+    ValueError
+        If fewer than two models are passed; if any model is not fitted; if
+        the models were fitted on different sample sizes; or if two
+        consecutive models (after sorting) have the same number of free
+        parameters (cannot be nested).
+
+    Notes
+    -----
+    The test statistic is ``D = 2·(loglik_full − loglik_reduced)``, which is
+    asymptotically ``χ²_df`` with ``df = k_full − k_reduced`` under the null
+    hypothesis that the reduced model is correct.  Mirrors R's
+    ``anova.mlt``.
+
+    Examples
+    --------
+    >>> small = MLT(order=3, support=(0, 1)).fit(y)
+    >>> large = MLT(order=6, support=(0, 1)).fit(y)
+    >>> print(anova(small, large))
+    """
+    if len(models) < 2:
+        raise ValueError(
+            f"anova() benötigt mindestens 2 Modelle, erhalten: {len(models)}."
+        )
+    for i, m in enumerate(models):
+        if not m.is_fitted_:
+            raise ValueError(
+                f"Modell #{i} ist nicht gefittet. Rufe fit() vor anova() auf."
+            )
+
+    n_obs_ref = models[0].n_obs_
+    for i, m in enumerate(models):
+        if m.n_obs_ != n_obs_ref:
+            raise ValueError(
+                f"Modelle müssen auf derselben Stichprobengröße gefittet sein. "
+                f"Modell #0 hat n={n_obs_ref}, Modell #{i} hat n={m.n_obs_}."
+            )
+
+    ordered = sorted(models, key=lambda m: cast(int, m.n_free_params_))
+
+    names = tuple(f"{type(m).__name__}#{i}" for i, m in enumerate(ordered))
+    n_params = tuple(cast(int, m.n_free_params_) for m in ordered)
+    log_lik = tuple(cast(OptimizationResult, m.result_).log_likelihood for m in ordered)
+
+    df: list[int | None] = [None]
+    deviance: list[float | None] = [None]
+    p_value: list[float | None] = [None]
+    for i in range(1, len(ordered)):
+        ddf = n_params[i] - n_params[i - 1]
+        if ddf <= 0:
+            raise ValueError(
+                "Aufeinanderfolgende Modelle müssen eine echt unterschiedliche "
+                f"Parameterzahl haben (Modell {i - 1}: k={n_params[i - 1]}, "
+                f"Modell {i}: k={n_params[i]})."
+            )
+        d = 2.0 * (log_lik[i] - log_lik[i - 1])
+        # Negative deviance can occur if the larger model failed to converge
+        # to a strictly higher likelihood; clamp at 0 for the chi2 tail.
+        d_clamped = max(d, 0.0)
+        df.append(ddf)
+        deviance.append(d)
+        p_value.append(float(chi2.sf(d_clamped, ddf)))
+
+    return AnovaResult(
+        model_names=names,
+        n_params=n_params,
+        log_lik=log_lik,
+        df=tuple(df),
+        deviance=tuple(deviance),
+        p_value=tuple(p_value),
+    )

@@ -2,9 +2,11 @@
 
 from pymlt.model import (
     MLT,
+    AnovaResult,
     ConditionalTransformationModel,
     ConvergenceWarning,
     NotFittedError,
+    anova,
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.tram import BoxCox, Colr, Coxph
@@ -26,6 +28,9 @@ __all__ = [
     "BoxCox",
     "Coxph",
     "Colr",
+    # Inference
+    "anova",
+    "AnovaResult",
     # Exceptions / warnings
     "NotFittedError",
     "ConvergenceWarning",

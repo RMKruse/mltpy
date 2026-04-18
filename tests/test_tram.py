@@ -330,6 +330,8 @@ class TestSummary:
         model = BoxCox(support=(0.0, 1.0)).fit(simple_y())
         s = model.summary()
         assert "Log-lik" in s
+        assert "AIC:" in s
+        assert "BIC:" in s
         assert "Fitted:       Yes" in s
         assert "Converged" in s
 

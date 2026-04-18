@@ -80,6 +80,8 @@ class _TramModel(MLT):
                 raise RuntimeError("Unexpected None result_ for fitted model")
             lines += [
                 f"Log-lik:      {self.result_.log_likelihood:.4f}",
+                f"AIC:          {self.aic():.4f}",
+                f"BIC:          {self.bic():.4f}",
                 f"Converged:    {'Yes' if self.result_.converged else 'No'}",
                 f"n_restarts:   {self.result_.n_restarts}",
             ]
