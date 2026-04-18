@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- GitHub Actions workflows are temporarily deactivated while the repository is
+  private. Workflow files were moved from `.github/workflows/` to
+  `.github/workflows-disabled/`. Move them back to re-enable Actions.
+
 ## [0.3.0] — 2026-04-17
 
 ### Added
