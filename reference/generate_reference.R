@@ -13,6 +13,16 @@ suppressPackageStartupMessages({
   library(basefun)
 })
 
+# Resolve the directory of this script so output paths are portable across
+# checkouts and CI runners (no hard-coded /Users/... paths).
+script_args <- commandArgs(trailingOnly = FALSE)
+file_arg <- sub("^--file=", "", grep("^--file=", script_args, value = TRUE)[1])
+if (is.na(file_arg) || file_arg == "") {
+  # Fallback when sourced interactively rather than via Rscript
+  file_arg <- "reference/generate_reference.R"
+}
+out_dir <- normalizePath(dirname(file_arg), mustWork = TRUE)
+
 set.seed(42)
 n <- 200
 y <- runif(n, 0.02, 0.98)
@@ -27,8 +37,8 @@ fit <- mlt(ctm, data = data.frame(y = y))
 
 theta_hat <- coef(fit)
 
-writeLines(format(theta_hat, digits = 15), con = file.path("/Users/entropy/Git/pymlt/reference", "mlt_normal_theta.txt"))
-writeLines(format(y,         digits = 15), con = file.path("/Users/entropy/Git/pymlt/reference", "mlt_normal_y.txt"))
+writeLines(format(theta_hat, digits = 15), con = file.path(out_dir, "mlt_normal_theta.txt"))
+writeLines(format(y,         digits = 15), con = file.path(out_dir, "mlt_normal_y.txt"))
 
 cat(sprintf("Wrote %d theta values and %d observations.\n", length(theta_hat), n))
 cat("theta =", paste(round(theta_hat, 6), collapse = ", "), "\n")
@@ -59,7 +69,7 @@ writeLines(
     format(aic_large, digits = 15),
     format(bic_large, digits = 15)
   ),
-  con = file.path("/Users/entropy/Git/pymlt/reference", "mlt_aic_bic.txt")
+  con = file.path(out_dir, "mlt_aic_bic.txt")
 )
 
 # anova(reduced, full) → row 2 has the LRT statistics
@@ -74,7 +84,7 @@ writeLines(
     format(df_lrt, digits = 15),
     format(p_val,  digits = 15)
   ),
-  con = file.path("/Users/entropy/Git/pymlt/reference", "mlt_anova.txt")
+  con = file.path(out_dir, "mlt_anova.txt")
 )
 
 cat(sprintf("AIC small=%.4f, BIC small=%.4f\n", aic_small, bic_small))
