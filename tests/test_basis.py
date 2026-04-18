@@ -284,22 +284,23 @@ class TestMonotoneTrafo:
 # ---------------------------------------------------------------------------
 
 def test_reference_npy(tmp_path):
-    """Compare evaluate() against R reference values.
+    """Compare evaluate() against R basefun::Bernstein_basis reference values.
 
-    TODO: Generate reference/bernstein_reference.npy from R:
-      library(basefun)
-      y <- seq(0, 1, length.out = 11)
-      B <- Bernstein_basis(numeric_var("y", support = c(0, 1)), order = 4)
-      M <- model.matrix(B, data = data.frame(y = y))
-      # Save as numpy array (column order: ascending)
-      # np.save("reference/bernstein_reference.npy", M)
+    Reference is produced by reference/generate_reference.R and stored as
+    a plain-text 11x5 matrix in reference/bernstein_reference.txt (ascending
+    column order, matching pymlt's convention).
     """
     import pathlib
-    ref_path = pathlib.Path(__file__).parent.parent / "reference" / "bernstein_reference.npy"
+    ref_path = (
+        pathlib.Path(__file__).parent.parent / "reference" / "bernstein_reference.txt"
+    )
     if not ref_path.exists():
-        pytest.skip("reference/bernstein_reference.npy not yet generated — run generate_reference.R")
+        pytest.skip(
+            "reference/bernstein_reference.txt not yet generated — "
+            "run Rscript reference/generate_reference.R"
+        )
 
-    ref = np.load(ref_path)
+    ref = np.loadtxt(ref_path)
     y = np.linspace(0.0, 1.0, ref.shape[0])
     b = BernsteinBasis(order=ref.shape[1] - 1, support=(0.0, 1.0))
     M = b.evaluate(y)

@@ -14,9 +14,11 @@ from scipy.stats import norm
 from pymlt.basis import BernsteinBasis
 from pymlt.model import (
     MLT,
+    AnovaResult,
     ConditionalTransformationModel,
     ConvergenceWarning,
     NotFittedError,
+    anova,
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoredData, CensoringType
@@ -55,6 +57,16 @@ class TestNotFittedError:
         model = make_ctm()
         with pytest.raises(NotFittedError):
             model.simulate(10)
+
+    def test_aic_before_fit(self):
+        model = make_ctm()
+        with pytest.raises(NotFittedError):
+            model.aic()
+
+    def test_bic_before_fit(self):
+        model = make_ctm()
+        with pytest.raises(NotFittedError):
+            model.bic()
 
 
 # ---------------------------------------------------------------------------
@@ -807,6 +819,197 @@ class TestInvalidWhatListsAll:
 
 
 # ---------------------------------------------------------------------------
+# AIC / BIC / anova
+# ---------------------------------------------------------------------------
+
+
+class TestModelSelectionAttributes:
+    def test_n_obs_and_n_free_params_after_fit(self):
+        y = simple_y(n=80)
+        model = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        assert model.n_obs_ == 80
+        assert model.n_free_params_ == 5  # order + 1
+
+    def test_n_obs_with_covariates(self):
+        rng = np.random.default_rng(7)
+        n, q = 60, 2
+        y = rng.uniform(0.05, 0.95, n)
+        X = rng.standard_normal((n, q))
+        model = MLT(order=3, support=(0.0, 1.0)).fit(y, X=X)
+        assert model.n_obs_ == n
+        assert model.n_free_params_ == 4 + q
+
+    def test_n_obs_uses_censored_data_n(self):
+        rng = np.random.default_rng(5)
+        n = 50
+        y = rng.uniform(0.05, 0.95, n)
+        cd = CensoredData.right_censored(y, rng.random(n) < 0.3)
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, censoring=CensoringType.RIGHT
+        ).fit(cd)
+        assert model.n_obs_ == n
+        assert model.n_obs_ == cd.n
+
+    def test_attrs_none_before_fit(self):
+        model = make_ctm()
+        assert model.n_obs_ is None
+        assert model.n_free_params_ is None
+
+
+class TestAIC:
+    def test_formula(self):
+        y = simple_y(n=80)
+        model = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        expected = -2.0 * model.result_.log_likelihood + 2.0 * model.n_free_params_
+        assert model.aic() == pytest.approx(expected)
+
+    def test_returns_float(self):
+        model = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
+        assert isinstance(model.aic(), float)
+
+    def test_aic_finite(self):
+        model = MLT(order=4, support=(0.0, 1.0)).fit(simple_y())
+        assert np.isfinite(model.aic())
+
+
+class TestBIC:
+    def test_formula(self):
+        y = simple_y(n=80)
+        model = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        expected = (
+            -2.0 * model.result_.log_likelihood
+            + np.log(model.n_obs_) * model.n_free_params_
+        )
+        assert model.bic() == pytest.approx(expected)
+
+    def test_returns_float(self):
+        model = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
+        assert isinstance(model.bic(), float)
+
+    def test_bic_penalises_more_than_aic_for_n_gt_7(self):
+        y = simple_y(n=80)
+        model = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        assert model.bic() > model.aic()
+
+
+class TestAnova:
+    def _two_nested(self, n: int = 100, seed: int = 0):
+        y = np.random.default_rng(seed).uniform(0.05, 0.95, n)
+        small = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        large = MLT(order=6, support=(0.0, 1.0)).fit(y)
+        return small, large
+
+    def test_returns_anova_result(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        assert isinstance(result, AnovaResult)
+
+    def test_columns_have_correct_length(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        for col in (
+            result.model_names,
+            result.n_params,
+            result.log_lik,
+            result.df,
+            result.deviance,
+            result.p_value,
+        ):
+            assert len(col) == 2
+
+    def test_first_row_test_columns_are_none(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        assert result.df[0] is None
+        assert result.deviance[0] is None
+        assert result.p_value[0] is None
+
+    def test_models_sorted_ascending_by_n_params(self):
+        small, large = self._two_nested()
+        # Pass in reverse to confirm internal sort
+        result = anova(large, small)
+        assert result.n_params == (4, 7)  # order+1 for 3 and 6
+
+    def test_model_names_preserve_caller_input_order(self):
+        """Labels must reflect the caller's argument position, not the
+        post-sort row index — otherwise multi-model tables are easy to misread."""
+        small, large = self._two_nested()
+        # Caller passes large first (#0), small second (#1)
+        result = anova(large, small)
+        # After sort: row 0 is small (caller arg #1), row 1 is large (caller arg #0)
+        assert result.model_names[0].endswith("#1")
+        assert result.model_names[1].endswith("#0")
+
+    def test_df_equals_param_diff(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        assert result.df[1] == 3  # 7 − 4
+
+    def test_deviance_non_negative_for_nested_fit(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        # Larger model should fit at least as well; deviance ≥ 0 modulo solver noise
+        assert result.deviance[1] >= -1e-6
+
+    def test_p_value_in_unit_interval(self):
+        small, large = self._two_nested()
+        result = anova(small, large)
+        assert 0.0 <= result.p_value[1] <= 1.0
+
+    def test_p_value_matches_chi2_sf(self):
+        from scipy.stats import chi2
+
+        small, large = self._two_nested()
+        result = anova(small, large)
+        d = max(result.deviance[1], 0.0)
+        expected = float(chi2.sf(d, result.df[1]))
+        assert result.p_value[1] == pytest.approx(expected)
+
+    def test_three_models_chain(self):
+        y = simple_y(n=120)
+        m3 = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        m5 = MLT(order=5, support=(0.0, 1.0)).fit(y)
+        m7 = MLT(order=7, support=(0.0, 1.0)).fit(y)
+        result = anova(m3, m5, m7)
+        assert result.n_params == (4, 6, 8)
+        assert result.df == (None, 2, 2)
+        assert result.df[1] == 2 and result.df[2] == 2
+
+    def test_repr_is_string(self):
+        small, large = self._two_nested()
+        s = repr(anova(small, large))
+        assert isinstance(s, str)
+        assert "Pr(>Chisq)" in s
+
+    def test_too_few_models_raises(self):
+        model = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
+        with pytest.raises(ValueError, match="mindestens 2"):
+            anova(model)
+
+    def test_unfitted_model_raises(self):
+        small = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
+        unfit = MLT(order=5, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="nicht gefittet"):
+            anova(small, unfit)
+
+    def test_different_n_obs_raises(self):
+        y1 = simple_y(n=60, seed=1)
+        y2 = simple_y(n=80, seed=2)
+        m1 = MLT(order=3, support=(0.0, 1.0)).fit(y1)
+        m2 = MLT(order=5, support=(0.0, 1.0)).fit(y2)
+        with pytest.raises(ValueError, match="Stichprobengröße"):
+            anova(m1, m2)
+
+    def test_equal_n_params_raises(self):
+        y = simple_y(n=80)
+        m1 = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        m2 = MLT(order=4, support=(0.0, 1.0)).fit(y)
+        with pytest.raises(ValueError, match="Parameterzahl"):
+            anova(m1, m2)
+
+
+# ---------------------------------------------------------------------------
 # R reference integration test
 # ---------------------------------------------------------------------------
 
@@ -814,9 +1017,53 @@ REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
 
 @pytest.mark.skipif(
-    not (REF_DIR / "mlt_normal_theta.txt").exists(),
-    reason="R reference files not generated yet",
+    not (REF_DIR / "mlt_aic_bic.txt").exists(),
+    reason="R AIC/BIC reference file not generated yet",
 )
+def test_integration_r_reference_aic_bic():
+    """AIC and BIC for both reference models match R's mlt::AIC / BIC.
+
+    The reference models (order 3 and order 6) are fit on the same data
+    written to reference/mlt_normal_y.txt so that AIC/BIC are directly
+    comparable. Tolerance accounts for cross-solver differences in the
+    optimum (the LL differs by < 0.5 nats per the existing reference test).
+    """
+    aic_s_r, bic_s_r, aic_l_r, bic_l_r = np.loadtxt(REF_DIR / "mlt_aic_bic.txt")
+    y_ref = np.loadtxt(REF_DIR / "mlt_normal_y.txt")
+
+    fit_small = MLT(order=3, support=(0.0, 1.0)).fit(y_ref)
+    fit_large = MLT(order=6, support=(0.0, 1.0)).fit(y_ref)
+
+    # AIC = -2*ll + 2*k → LL agreement within 0.5 nats translates to AIC
+    # agreement within 1.0 (and identical k means the penalty terms match
+    # exactly).
+    assert abs(fit_small.aic() - aic_s_r) < 1.0
+    assert abs(fit_small.bic() - bic_s_r) < 1.0
+    assert abs(fit_large.aic() - aic_l_r) < 1.0
+    assert abs(fit_large.bic() - bic_l_r) < 1.0
+
+
+@pytest.mark.skipif(
+    not (REF_DIR / "mlt_anova.txt").exists(),
+    reason="R anova reference file not generated yet",
+)
+def test_integration_r_reference_anova():
+    """anova(small, large) Chisq, df, and p-value match R's anova.mlt."""
+    chisq_r, df_r, p_r = np.loadtxt(REF_DIR / "mlt_anova.txt")
+    y_ref = np.loadtxt(REF_DIR / "mlt_normal_y.txt")
+
+    fit_small = MLT(order=3, support=(0.0, 1.0)).fit(y_ref)
+    fit_large = MLT(order=6, support=(0.0, 1.0)).fit(y_ref)
+    result = anova(fit_small, fit_large)
+
+    assert result.df[1] == int(df_r)
+    # Deviance is 2 * (ll_large - ll_small); each LL agrees with R within
+    # 0.5 nats, so deviance agrees within 2 nats.
+    assert abs(result.deviance[1] - chisq_r) < 2.0
+    # p-values can shift visibly when chisq shifts; bound loosely
+    assert abs(result.p_value[1] - p_r) < 0.05
+
+
 def test_integration_r_reference():
     """Fitted theta is close to R's mlt() output."""
     theta_r = np.loadtxt(REF_DIR / "mlt_normal_theta.txt")
