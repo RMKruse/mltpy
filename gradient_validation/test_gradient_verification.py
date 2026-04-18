@@ -9,7 +9,8 @@ validation would miss if both implementations share the same error.
 The test matrix is the full cross-product of:
 
 * censoring type: ``none``, ``right``, ``left``, ``interval``
-* base distribution: ``normal``, ``logistic``
+* base distribution: ``normal``, ``logistic``, ``min_extreme_value``,
+  ``max_extreme_value``, ``exponential``
 * theta position: ``initial``, ``perturbed``, ``converged``
 * covariate mode: without ``X``, with ``X`` (2 covariates)
 
@@ -74,6 +75,15 @@ INTERVAL_HALF_WIDTH = 0.04
 # ---------------------------------------------------------------------------
 
 
+BaseDistName = Literal[
+    "normal",
+    "logistic",
+    "min_extreme_value",
+    "max_extreme_value",
+    "exponential",
+]
+
+
 @dataclass
 class GradCase:
     """Bundle of data and metadata for a single parametrized test."""
@@ -81,7 +91,7 @@ class GradCase:
     y: NDArray[np.float64] | CensoredData
     X: NDArray[np.float64] | None
     censoring: CensoringType
-    base_distribution: Literal["normal", "logistic", "min_extreme_value"]
+    base_distribution: BaseDistName
     n_covariates: int
 
 
@@ -146,7 +156,7 @@ def _converged_theta(
     y_or_cd: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
+    base_distribution: BaseDistName,
 ) -> NDArray[np.float64]:
     """Fit an MLT model and return the converged parameter vector."""
     model = MLT(
@@ -162,7 +172,7 @@ def _converged_theta(
 
 def _make_test_case(
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
+    base_distribution: BaseDistName,
     with_covariates: bool,
     seed: int,
 ) -> GradCase:
@@ -210,8 +220,28 @@ def _build_theta(
     if case.n_covariates > 0:
         rng = np.random.default_rng(seed + 2000)
         beta = 0.2 * rng.standard_normal(case.n_covariates)
-        return np.concatenate([theta_b, beta])
-    return theta_b
+        theta = np.concatenate([theta_b, beta])
+    else:
+        theta = theta_b
+
+    # Exponential support is [0, ∞): h(y|x_i) = B(y)·theta_b + X_i·beta must be
+    # ≥ 0. Under Bernstein monotonicity min_y B(y)·theta_b = theta_b[0], so the
+    # per-observation minimum is theta_b[0] + min_i X_i·beta. Shift theta_b by a
+    # uniform constant when needed to restore feasibility with a small margin.
+    # Applied only to non-converged positions; converged theta is feasible by
+    # construction (MLT.fit enforces the nonneg_lower constraint).
+    if case.base_distribution == "exponential":
+        if case.X is not None and case.n_covariates > 0:
+            beta_part = theta[P:]
+            shift = float(np.min(case.X @ beta_part))
+        else:
+            shift = 0.0
+        margin = 1e-2
+        deficit = margin - (theta[0] + shift)
+        if deficit > 0:
+            theta = theta.copy()
+            theta[:P] += deficit
+    return theta
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +336,17 @@ BASE_DISTRIBUTIONS = [
     pytest.param("normal", id="normal"),
     pytest.param("logistic", id="logistic"),
     pytest.param("min_extreme_value", id="min_extreme_value"),
+    pytest.param("max_extreme_value", id="max_extreme_value"),
+    pytest.param("exponential", id="exponential"),
 ]
+
+_DIST_SEED_OFFSET: dict[str, int] = {
+    "normal": 0,
+    "logistic": 300,
+    "min_extreme_value": 500,
+    "max_extreme_value": 700,
+    "exponential": 900,
+}
 
 THETA_POSITIONS = [
     pytest.param("initial", id="initial"),
@@ -326,14 +366,14 @@ COVARIATE_MODES = [
 @pytest.mark.parametrize("with_covariates", COVARIATE_MODES)
 def test_analytical_gradient_matches_finite_difference(
     censoring: CensoringType,
-    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
+    base_distribution: BaseDistName,
     theta_position: Literal["initial", "perturbed", "converged"],
     with_covariates: bool,
 ) -> None:
     """Analytical gradient should agree with central finite differences.
 
-    Runs for the full cross-product of 4 censoring types x 3 base distributions
-    x 3 theta positions x 2 covariate modes = 72 configurations.
+    Runs for the full cross-product of 4 censoring types x 5 base distributions
+    x 3 theta positions x 2 covariate modes = 120 configurations.
     """
     # Deterministic seed derived from the parameters so failures are
     # reproducible. ``hash`` of strings is PYTHONHASHSEED-dependent, so we
@@ -341,7 +381,7 @@ def test_analytical_gradient_matches_finite_difference(
     seed = (
         10_000
         + int(censoring.value) * 1000
-        + (0 if base_distribution == "normal" else 500)
+        + _DIST_SEED_OFFSET[base_distribution]
         + {"initial": 0, "perturbed": 100, "converged": 200}[theta_position]
         + (0 if not with_covariates else 50)
     )
@@ -370,7 +410,7 @@ def test_analytical_gradient_matches_finite_difference(
 
 @pytest.mark.parametrize("base_distribution", BASE_DISTRIBUTIONS)
 def test_narrow_interval_triggers_taylor_branch(
-    base_distribution: Literal["normal", "logistic", "min_extreme_value"],
+    base_distribution: BaseDistName,
 ) -> None:
     """Narrow intervals exercise the Taylor fallback in ``_log_diff_ndtr``.
 
@@ -402,10 +442,19 @@ def test_narrow_interval_triggers_taylor_branch(
         n_covariates=0,
     )
     theta = _perturbed_theta_b(seed=99)
+    # Keep theta feasible for exponential support (theta_b[0] >= margin).
+    if base_distribution == "exponential":
+        margin = 1e-2
+        deficit = margin - theta[0]
+        if deficit > 0:
+            theta = theta + deficit
 
     analytical, finite_diff = _compare_gradients(theta, case)
+    # Exponential's constant score amplifies Taylor-vs-wide drift on
+    # small-magnitude components — widen the absolute floor for that link.
+    atol = 1e-1 if base_distribution == "exponential" else 1e-4
     np.testing.assert_allclose(
-        analytical, finite_diff, rtol=5e-2, atol=1e-4
+        analytical, finite_diff, rtol=5e-2, atol=atol
     )
 
 

@@ -305,13 +305,16 @@ def optimize(
 
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
-    # Exponential has support [0, ∞); enforce h(y_min) = theta_b[0] >= 0.
+    # Exponential has support [0, ∞); enforce h(y|x) >= 0.  Without covariates
+    # this reduces to theta_b[0] >= 0; with covariates we add one linear
+    # inequality per training row: theta_b[0] + X_i @ beta >= 0.
     nonneg_lower = base_distribution == "exponential"
     constraints = build_constraints(
         n_params,
         solver=config.solver,
         total_params=total_params,
         nonneg_lower=nonneg_lower,
+        X=X if nonneg_lower else None,
     )
     obj = _make_objective(basis, y, X, censoring, config.use_gradient,
                           base_distribution=base_distribution)

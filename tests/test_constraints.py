@@ -285,6 +285,108 @@ class TestBuildConstraints:
 
 
 # ---------------------------------------------------------------------------
+# nonneg_lower support for exponential base distribution
+# ---------------------------------------------------------------------------
+
+class TestNonnegLower:
+    def test_no_covariates_single_row(self):
+        """Without X, nonneg_lower adds one inequality theta[0] >= 0."""
+        result = build_constraints(4, solver="slsqp", nonneg_lower=True)
+        # monotonicity + single nonneg row
+        assert len(result) == 2
+        theta_feasible = np.array([0.0, 1.0, 2.0, 3.0])
+        theta_infeasible = np.array([-0.1, 1.0, 2.0, 3.0])
+        # Second constraint row is the support row
+        support = result[1]
+        assert np.all(support["fun"](theta_feasible) >= 0)
+        assert np.any(support["fun"](theta_infeasible) < 0)
+
+    def test_covariates_one_row_per_observation(self):
+        """With X, nonneg_lower adds one row per observation.
+
+        Row i encodes theta_b[0] + X_i @ beta >= 0.
+        """
+        n_params = 4
+        X = np.array([
+            [ 1.0, -0.5],
+            [-2.0,  0.3],
+            [ 0.5,  1.0],
+        ])
+        total = n_params + X.shape[1]
+        result = build_constraints(
+            n_params, solver="slsqp", total_params=total,
+            nonneg_lower=True, X=X,
+        )
+        assert len(result) == 2  # monotonicity + support
+        support = result[1]
+
+        # theta = [theta_b | beta]
+        theta_b = np.array([0.5, 1.0, 2.0, 3.0])  # theta_b[0] = 0.5
+        beta = np.array([0.0, 0.0])
+        theta = np.concatenate([theta_b, beta])
+        # With beta = 0, each row evaluates to theta_b[0] = 0.5 >= 0
+        np.testing.assert_allclose(support["fun"](theta), [0.5, 0.5, 0.5])
+
+        # Now beta that makes row 1 infeasible:
+        # theta_b[0] + X_1 @ beta = 0.5 + (-2)*1 + 0.3*0 = -1.5 < 0
+        beta = np.array([1.0, 0.0])
+        theta = np.concatenate([theta_b, beta])
+        vals = support["fun"](theta)
+        assert vals[0] == pytest.approx(0.5 + 1.0 * 1.0 + (-0.5) * 0.0)
+        assert vals[1] == pytest.approx(0.5 + (-2.0) * 1.0 + 0.3 * 0.0)
+        assert vals[2] == pytest.approx(0.5 + 0.5 * 1.0 + 1.0 * 0.0)
+
+    def test_covariates_jacobian_matches_support_matrix(self):
+        n_params = 3
+        X = np.array([[0.7, -1.2], [0.1, 2.0]])
+        total = n_params + X.shape[1]
+        result = build_constraints(
+            n_params, solver="slsqp", total_params=total,
+            nonneg_lower=True, X=X,
+        )
+        support = result[1]
+        theta = np.zeros(total)
+        jac = support["jac"](theta)
+        # Expected: [1, 0, 0 | X_i] per row
+        expected = np.zeros((X.shape[0], total))
+        expected[:, 0] = 1.0
+        expected[:, n_params:] = X
+        np.testing.assert_array_equal(jac, expected)
+
+    def test_trust_constr_covariates(self):
+        """trust-constr path emits a LinearConstraint with n_obs rows."""
+        n_params = 3
+        X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, -1.0]])
+        total = n_params + X.shape[1]
+        result = build_constraints(
+            n_params, solver="trust-constr", total_params=total,
+            nonneg_lower=True, X=X,
+        )
+        # monotonicity + support
+        assert len(result) == 2
+        support = result[1]
+        assert isinstance(support, LinearConstraint)
+        assert support.A.shape == (X.shape[0], total)
+        np.testing.assert_array_equal(support.A[:, 0], 1.0)
+        np.testing.assert_array_equal(support.A[:, n_params:], X)
+
+    def test_wrong_X_shape_raises(self):
+        with pytest.raises(ValueError, match="X must be 2-D"):
+            build_constraints(
+                3, solver="slsqp", total_params=5,
+                nonneg_lower=True, X=np.array([1.0, 2.0, 3.0]),
+            )
+
+    def test_wrong_X_columns_raises(self):
+        with pytest.raises(ValueError, match="columns"):
+            build_constraints(
+                3, solver="slsqp", total_params=5,
+                nonneg_lower=True,
+                X=np.zeros((4, 3)),  # 3 cols vs expected 5-3=2
+            )
+
+
+# ---------------------------------------------------------------------------
 # Property-based tests
 # ---------------------------------------------------------------------------
 

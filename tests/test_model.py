@@ -1108,6 +1108,61 @@ def test_integration_r_reference():
 # reaches at least that log-likelihood.
 # ---------------------------------------------------------------------------
 
+class TestExponentialWithCovariates:
+    """Exponential support ([0, ∞)) must hold per observation when covariates
+    are present: ``h(y_i|x_i) >= 0`` for every training row ``i``.
+
+    This reduces to ``theta_b[0] + X_i @ beta >= 0`` since h is monotone in y
+    and ``min_y B_k(y) · theta_b = theta_b[0]``.
+    """
+
+    def _fit(self, seed: int = 31, n: int = 100, q: int = 2):
+        from pymlt.basis import BernsteinBasis
+
+        rng = np.random.default_rng(seed)
+        y = rng.uniform(0.05, 0.95, n)
+        X = rng.normal(0.0, 0.5, (n, q))
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        model = ConditionalTransformationModel(
+            basis, base_distribution="exponential"
+        )
+        model.fit(y, X=X)
+        return model, basis, y, X
+
+    def test_fit_converges(self):
+        model, *_ = self._fit()
+        assert model.result_.converged
+
+    def test_fitted_h_is_nonnegative_at_training_rows(self):
+        """At the fitted parameters, h(y_i|x_i) >= 0 for every training row."""
+        model, basis, y, X = self._fit()
+        p = basis.order + 1
+        theta_b = model.theta_[:p]
+        beta = model.theta_[p:]
+        h = basis.evaluate(y) @ theta_b + X @ beta
+        # Feasibility within SLSQP tolerance
+        assert h.min() >= -1e-6, f"min h(y|x) = {h.min():.3e}"
+
+    def test_fitted_h_nonnegative_at_y_min_per_row(self):
+        """Tightest feasibility point: min_y h(y|x_i) = theta_b[0] + X_i @ beta.
+
+        This value must also be >= 0 — the actual constraint the optimiser
+        imposes.
+        """
+        model, basis, _, X = self._fit()
+        p = basis.order + 1
+        theta_b0 = model.theta_[0]
+        beta = model.theta_[p:]
+        min_h_per_row = theta_b0 + X @ beta
+        assert min_h_per_row.min() >= -1e-6
+
+    def test_ll_finite_with_covariates(self):
+        """Exponential + covariates produces a finite LL at the fitted theta."""
+        model, _, y, X = self._fit()
+        assert np.isfinite(model.result_.log_likelihood)
+        assert np.isfinite(model.score(y, X=X))
+
+
 @pytest.mark.parametrize(
     ("name", "theta_file", "y_file", "ll_file"),
     [

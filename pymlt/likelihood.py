@@ -704,7 +704,8 @@ def log_likelihood(
     censoring:
         Censoring regime.  Only used when ``y`` is a ``CensoredData`` object.
     base_distribution:
-        ``"normal"`` (default) or ``"logistic"``.  Selects the target
+        One of ``"normal"`` (default), ``"logistic"``, ``"min_extreme_value"``,
+        ``"max_extreme_value"``, or ``"exponential"``.  Selects the target
         distribution Z such that h(Y|X) ~ Z.
 
     Returns
@@ -762,7 +763,8 @@ def negative_log_likelihood(
         analytical gradient of the *negative* log-likelihood w.r.t. ``theta``.
         Computed analytically — no finite-difference approximation.
     base_distribution:
-        ``"normal"`` (default) or ``"logistic"``.
+        One of ``"normal"`` (default), ``"logistic"``, ``"min_extreme_value"``,
+        ``"max_extreme_value"``, or ``"exponential"``.
 
     Returns
     -------

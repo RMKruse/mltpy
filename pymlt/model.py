@@ -414,7 +414,8 @@ class ConditionalTransformationModel:
         """Numerically invert h(q) = F⁻¹(p) via brentq for each p.
 
         F⁻¹ is the quantile function (``dist.ppf``) of the base distribution
-        (normal or logistic depending on ``self.base_distribution``).
+        selected by ``self.base_distribution`` (see ``likelihood._get_dist``
+        for the full list of supported distributions).
 
         Parameters
         ----------
