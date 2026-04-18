@@ -95,27 +95,6 @@ class ConditionalTransformationModel:
     optimizer_config:
         Optimisation settings.  If ``None``, defaults from
         :class:`~pymlt.optimizer.OptimizerConfig` are used.
-
-    Attributes
-    ----------
-    theta_ : NDArray or None
-        Fitted parameter vector ``[theta_basis | beta]``.  ``None`` before
-        :meth:`fit`.
-    result_ : OptimizationResult or None
-        Full result object from the last :meth:`fit` call.  ``None`` before
-        :meth:`fit`.
-    is_fitted_ : bool
-        Whether :meth:`fit` has been called successfully.
-    n_obs_ : int or None
-        Number of observations used in :meth:`fit`.  For
-        :class:`~pymlt.variables.CensoredData`, this is ``y.n``; otherwise
-        ``len(y)``.  ``None`` before :meth:`fit`.
-    n_free_params_ : int or None
-        Number of free parameters in the fitted model — equal to
-        ``len(theta_)`` (Bernstein coefficients plus optional regression
-        coefficients).  The monotonicity constraint ``D @ theta_b >= 0`` is
-        an inequality and does not reduce the parameter count.  ``None``
-        before :meth:`fit`.
     """
 
     def __init__(
@@ -133,10 +112,27 @@ class ConditionalTransformationModel:
 
         # State — set by fit()
         self.theta_: NDArray[np.float64] | None = None
+        """Fitted parameter vector ``[theta_basis | beta]``.  ``None`` before
+        :meth:`fit`."""
+
         self.result_: OptimizationResult | None = None
+        """Full result object from the last :meth:`fit` call.  ``None`` before
+        :meth:`fit`."""
+
         self.is_fitted_: bool = False
+        """Whether :meth:`fit` has been called successfully."""
+
         self.n_obs_: int | None = None
+        """Number of observations used in :meth:`fit`.  For
+        :class:`~pymlt.variables.CensoredData`, this is ``y.n``; otherwise
+        ``len(y)``.  ``None`` before :meth:`fit`."""
+
         self.n_free_params_: int | None = None
+        """Number of free parameters in the fitted model — equal to
+        ``len(theta_)`` (Bernstein coefficients plus optional regression
+        coefficients).  The monotonicity constraint ``D @ theta_b >= 0`` is
+        an inequality and does not reduce the parameter count.  ``None``
+        before :meth:`fit`."""
 
     # ------------------------------------------------------------------
     # Private helpers
