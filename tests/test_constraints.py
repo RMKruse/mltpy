@@ -377,6 +377,14 @@ class TestNonnegLower:
                 nonneg_lower=True, X=np.array([1.0, 2.0, 3.0]),
             )
 
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_missing_total_params_with_covariates_raises(self, solver):
+        with pytest.raises(ValueError, match="total_params must be provided"):
+            build_constraints(
+                3, solver=solver,
+                nonneg_lower=True, X=np.zeros((4, 2)),
+            )
+
     def test_wrong_X_columns_raises(self):
         with pytest.raises(ValueError, match="columns"):
             build_constraints(

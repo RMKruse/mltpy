@@ -211,7 +211,9 @@ def build_constraints(
         Total length of the parameter vector passed to the optimiser, including
         any regression coefficients (``beta``).  When ``total_params > n_params``
         the constraint matrix is padded with zero columns so that it maps the
-        full ``theta`` vector.  Defaults to ``n_params`` (no beta).
+        full ``theta`` vector.  Defaults to ``n_params`` (no beta).  If
+        ``nonneg_lower=True`` and ``X`` is passed, this must be provided as the
+        full parameter length ``n_params + X.shape[1]``.
     nonneg_lower:
         If ``True``, require ``h(y|x) >= 0``.  Used for
         ``base_distribution="exponential"``, whose support is ``[0, ∞)``.
@@ -234,6 +236,13 @@ def build_constraints(
         ``nonneg_lower=True`` — see above.  ``q`` must equal
         ``total_params - n_params``.
 
+    Raises
+    ------
+    ValueError
+        If ``X`` has invalid shape, if ``X`` columns do not match
+        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted.
+
     Returns
     -------
     list[dict] for ``solver="slsqp"``, list[LinearConstraint] for
@@ -252,7 +261,7 @@ def build_constraints(
     # With covariates: n rows [1, 0, ..., 0 | X_i].
     support_rows: NDArray[np.float64] | None = None
     if nonneg_lower:
-        if X is None or total == n_params:
+        if X is None:
             support_rows = np.zeros((1, total))
             support_rows[0, 0] = 1.0
         else:
@@ -261,15 +270,25 @@ def build_constraints(
                 raise ValueError(
                     f"X must be 2-D, got shape {X_arr.shape}"
                 )
+            if total_params is None:
+                raise ValueError(
+                    "total_params must be provided when nonneg_lower=True and "
+                    "X is passed. Expected full parameter length "
+                    "n_params + X.shape[1]."
+                )
             if X_arr.shape[1] != total - n_params:
                 raise ValueError(
                     f"X has {X_arr.shape[1]} columns but total_params - "
                     f"n_params = {total - n_params}"
                 )
-            n_obs = X_arr.shape[0]
-            support_rows = np.zeros((n_obs, total))
-            support_rows[:, 0] = 1.0
-            support_rows[:, n_params:] = X_arr
+            if X_arr.shape[1] == 0:
+                support_rows = np.zeros((1, total))
+                support_rows[0, 0] = 1.0
+            else:
+                n_obs = X_arr.shape[0]
+                support_rows = np.zeros((n_obs, total))
+                support_rows[:, 0] = 1.0
+                support_rows[:, n_params:] = X_arr
 
     if solver == "slsqp":
         result: list[dict[str, Any]] = [

@@ -21,9 +21,13 @@ The target distribution Z follows one of:
                              the Lehmann / reverse-time proportional-hazards
                              model: ``-log F(t) = h(t) + x'β``.
 * ``"exponential"``        — standard exponential with rate 1.  Support is
-                             ``[0, ∞)``, enforced during optimisation by the
-                             constraint ``theta_b[0] >= 0`` (monotonicity then
-                             gives ``h(y) >= 0`` for all ``y``).
+                             ``[0, ∞)``, enforced during optimisation by
+                             requiring ``h(y|x) >= 0``.  Without covariates
+                             this reduces to ``theta_b[0] >= 0``; with
+                             covariates a per-row inequality
+                             ``theta_b[0] + X_i · β >= 0`` is added for each
+                             training observation (see
+                             :func:`pymlt.constraints.build_constraints`).
 
 Log-likelihood formulae
 -----------------------
@@ -99,8 +103,9 @@ def _get_dist(base_distribution: str) -> Any:
       if ``h(T) ~ MaxExtrVal`` then ``-log F(t) = h(t) + x'beta``.
     * ``"exponential"``        — :data:`scipy.stats.expon`, the standard
       exponential (rate 1).  Support is ``[0, ∞)``; the optimiser enforces
-      this by constraining ``theta_b[0] >= 0`` (monotonicity of the
-      coefficients then gives ``h(y) >= 0`` for all ``y``).
+      ``h(y|x) >= 0`` via :func:`pymlt.constraints.build_constraints`.  With
+      no covariates this collapses to ``theta_b[0] >= 0``; with covariates,
+      one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row.
 
     Raises
     ------
