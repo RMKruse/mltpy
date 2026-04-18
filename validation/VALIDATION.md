@@ -49,7 +49,7 @@ All data is generated with fixed random seeds for reproducibility.
 
 ## Metrics Compared
 
-Six metrics are compared for each case, organized into three tiers:
+Sixteen metrics are compared for each case, organized into three tiers:
 
 ### Primary metrics (always blocking)
 
@@ -69,6 +69,31 @@ These test outputs derived from the fitted transformation. They are blocking **o
 | PDF / density | max\|Dpdf\| <= 0.05 | Same 100-point grid as CDF | f(h(y)) * h'(y) |
 | Quantile | max\|Dquant\| <= 0.05 | p = {0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95} | Numerical inversion via brentq; extreme tails (p < 0.05, p > 0.95) excluded |
 | Hazard | max\|Dhaz\| <= 0.10 | Same 100-point grid, restricted to CDF < 0.95 | f(h)/S(h); only for right-censored models; compared only where S(t) > 0.05 |
+
+#### Extended predict-type checks (10 additional derived metrics)
+
+Every case also compares the ten non-primary `predict(what=...)` outputs that
+mirror R `mlt`'s `type=` options. All ten share the CDF grid, so no extra grid
+files are needed per case. Each metric has a tolerance and a reliability mask
+chosen to avoid inflating spurious failures at the distribution tails where
+the transform diverges. Like the pdf/quantile/hazard block above, these are
+conditionally blocking — informational when loglik+CDF agree, hard failures
+when a primary metric also fails.
+
+| Metric | Tolerance | Reliability mask (CDF range) | Rationale for mask |
+|--------|-----------|------------------------------|--------------------|
+| `trafo` (`h(y)`) | 0.05 | no mask | Defined and finite everywhere on the support. |
+| `survivor` (`1−F`) | 0.02 | no mask | Same scale as CDF; no special tail behavior. |
+| `cumhazard` (`−log S`) | 0.10 | CDF < 0.95 | Right-tail amplifies tiny CDF mismatch unboundedly as S → 0. |
+| `odds` (`F/S`) | 0.10 | CDF < 0.95 | `F/S` → ∞ as S → 0 — right-tail amplification. |
+| `logdistribution` (`log F`) | 0.05 | CDF > 0.05 | `log F` → −∞ at the left tail. |
+| `logsurvivor` (`log S`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | `log S` diverges at the right tail; we also mask the left for symmetric treatment with the other log-scale ratios. |
+| `logdensity` (`logpdf(h)+log h'`) | 0.05 | no mask | Log-density is generally well-behaved on the interior grid; any tolerance exceedance is informational anyway. |
+| `loghazard` | 0.10 | CDF < 0.95 | Same right-tail amplification as hazard itself. |
+| `logcumhazard` (`log(−log S)`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | Double log — diverges at both tails. |
+| `logodds` (`log(F/S)`) | 0.05 | 0.05 ≤ CDF ≤ 0.95 | `log(F/S)` ±∞ at both tails. |
+
+NaN/Inf values are filtered element-wise before computing `max |Δ|`, so a boundary blow-up on either side cannot cause a spurious failure.
 
 ### Informational metrics (never blocking)
 
@@ -137,6 +162,16 @@ Each case directory (`validation/references/case_*`) contains:
 | `X.npy` | float64 (n, q) | Covariate matrix (regression cases only) |
 | `hazard_grid.npy` | float64 (100,) | Grid for hazard (right-censored cases only) |
 | `hazard_values.npy` | float64 (100,) | R's hazard at grid points |
+| `trafo_values.npy` | float64 (100,) | R's `h(y)` on `cdf_grid` |
+| `survivor_values.npy` | float64 (100,) | R's survivor `1 − F` on `cdf_grid` |
+| `cumhazard_values.npy` | float64 (100,) | R's cumulative hazard `−log S` on `cdf_grid` |
+| `odds_values.npy` | float64 (100,) | R's odds `F / S` on `cdf_grid` |
+| `logdistribution_values.npy` | float64 (100,) | R's `log F` on `cdf_grid` |
+| `logsurvivor_values.npy` | float64 (100,) | R's `log S` on `cdf_grid` |
+| `logdensity_values.npy` | float64 (100,) | R's `log f = logpdf(h) + log h'` on `cdf_grid` |
+| `loghazard_values.npy` | float64 (100,) | R's `log hazard` on `cdf_grid` |
+| `logcumhazard_values.npy` | float64 (100,) | R's `log(−log S)` on `cdf_grid` |
+| `logodds_values.npy` | float64 (100,) | R's `log(F/S)` on `cdf_grid` |
 
 All numeric values are stored with 17 significant digits to preserve full double precision.
 
@@ -181,77 +216,79 @@ Reference values were generated with:
 4. **case_19 (near-degenerate)**: With ~95% censoring, this extreme stress test may show large derived-metric differences or convergence issues due to the very flat likelihood surface. Currently passes cleanly.
 
 
-## Results of Validation (10.04.2026 - 15:13h MEZ)
+## Results of Validation (2026-04-18 — 16-metric pipeline, 29 cases)
 
-```
-pymlt validation — R reference comparison
-==============================================================================================================
-Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll  │   Δcdf│   Δpdf │   Δqnt │   Δhaz
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────
-case_01_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
-case_01_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
-case_01_mlt_1000_8          │ mlt    │  1000 │   8 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0000 │    —
-case_01_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
-case_01_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
-case_01_mlt_200_8           │ mlt    │   200 │   8 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
-case_02_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0013 │ 0.0000  │ 0.0001│ 0.0004 │ 0.0361 │ 3.8888
-case_02_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0781 │ 0.0000  │ 0.0002│ 0.0004 │ 0.0348 │ 2.7085
-case_02_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0001 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0345 │ 3.9716
-case_02_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1747 │ 0.0000  │ 0.0005│ 0.0003 │ 0.0285 │ 2.7364
-case_03_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0017 │    —
-case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0689 │    —
-case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0002 │    —
-case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000  │ 0.0001│ 0.0001 │ 0.0004 │    —
-case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
-case_06_coxph_200_6         │ coxph  │   200 │   6 │ PASS  │ 1.9375 │ 0.0001  │ 0.0000│ 0.0000 │ 0.0387 │ 2.1027
-case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0003 │    —
-case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0007 │    —
-case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000  │ 0.0000│ 0.0000 │ 0.0001 │    —
-case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003  │ 0.0004│ 0.0017 │ 0.0366 │ 5.0434
-case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000  │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Total: 21/21 passed (100.0%)
-```
-
-## Results of Validation (10.04.2026 - 29 cases)
+Terminal summary (first 6 Δ-columns only; full 16-metric table in
+`validation/results/validation_report.md`):
 
 ```
 pymlt validation — R reference comparison
 ==============================================================================================================
 Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll │   Δcdf│   Δpdf │   Δqnt │   Δhaz
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-case_01_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
-case_01_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
-case_01_mlt_1000_8          │ mlt    │  1000 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —  
-case_01_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
-case_01_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
-case_01_mlt_200_8           │ mlt    │   200 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
-case_02_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0013 │ 0.0000 │ 0.0001│ 0.0004 │ 0.0361 │ 3.8888
-case_02_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0781 │ 0.0000 │ 0.0002│ 0.0004 │ 0.0348 │ 2.7085
-case_02_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0345 │ 3.9716
-case_02_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1747 │ 0.0000 │ 0.0005│ 0.0003 │ 0.0285 │ 2.7364
-case_03_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0017 │    —  
-case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0689 │    —  
-case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0002 │    —  
-case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0004 │    —  
-case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
-case_06_coxph_200_6         │ coxph  │   200 │   6 │ PASS  │ 1.9375 │ 0.0001 │ 0.0000│ 0.0000 │ 0.0387 │ 2.1027
-case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0003 │    —  
-case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —  
-case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —  
-case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003 │ 0.0004│ 0.0017 │ 0.0366 │ 5.0434
-case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0063 │ 8.6737
-case_12_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0008 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —  
-case_13_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │72.6470 │ 0.0068 │ 0.0019│ 0.0015 │ 0.0093 │ 2.7390
-case_14_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0009 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0006 │    —  
-case_15_mlt_500_10          │ mlt    │   500 │  10 │ PASS  │ 0.0018 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0001 │    —  
-case_16_mlt_500_12          │ mlt    │   500 │  12 │ FAIL  │1913.2026│ 0.0343 │ 0.0219│ 0.0642 │ 0.0423 │ 3.2912
-case_17_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1479 │ 0.0000 │ 0.0003│ 0.0010 │ 0.0013 │    —  
-case_18_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —  
-case_19_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0229 │ 0.0000 │ 0.0000│ 0.0004 │ 0.0169 │    —  
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Total: 28/29 passed (96.6%)
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+case_01_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_1000_8          │ mlt    │  1000 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0000 │    —
+case_01_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_01_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_01_mlt_200_8           │ mlt    │   200 │   8 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_02_mlt_1000_4          │ mlt    │  1000 │   4 │ PASS  │ 0.0013 │ 0.0000 │ 0.0001│ 0.0004 │ 0.0361 │ 0.0028
+case_02_mlt_1000_6          │ mlt    │  1000 │   6 │ PASS  │ 0.0781 │ 0.0000 │ 0.0002│ 0.0004 │ 0.0348 │ 0.0016
+case_02_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0345 │ 0.0002
+case_02_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1747 │ 0.0000 │ 0.0005│ 0.0003 │ 0.0285 │ 0.0003
+case_03_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0017 │    —
+case_03_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0689 │    —
+case_04_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0002 │    —
+case_04_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0006 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0004 │    —
+case_05_boxcox_200_6        │ boxcox │   200 │   6 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —
+case_06_coxph_200_6         │ coxph  │   200 │   6 │ PASS  │ 1.9375 │ 0.0001 │ 0.0000│ 0.0000 │ 0.0387 │ 0.0002
+case_07_colr_200_6          │ colr   │   200 │   6 │ PASS  │ 0.0002 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0003 │    —
+case_08_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0056 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0007 │    —
+case_09_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.0000 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0001 │    —
+case_10_mlt_30_4            │ mlt    │    30 │   4 │ PASS  │ 0.7009 │ 0.0003 │ 0.0004│ 0.0017 │ 0.0366 │ 0.0149
+case_11_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.3076 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0063 │ 0.0005
+case_12_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0008 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —
+case_13_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │72.6470 │ 0.0068 │ 0.0019│ 0.0015 │ 0.0093 │ 0.0582
+case_14_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0009 │ 0.0000 │ 0.0001│ 0.0001 │ 0.0006 │    —
+case_15_mlt_500_10          │ mlt    │   500 │  10 │ PASS  │ 0.0018 │ 0.0000 │ 0.0000│ 0.0001 │ 0.0001 │    —
+case_16_mlt_500_12          │ mlt    │   500 │  12 │ XFAIL │1913.2026│ 0.0343 │ 0.0219│ 0.0642 │ 0.0423 │ 0.2759
+case_17_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.1479 │ 0.0000 │ 0.0003│ 0.0010 │ 0.0013 │    —
+case_18_mlt_200_6           │ mlt    │   200 │   6 │ PASS  │ 0.0001 │ 0.0000 │ 0.0000│ 0.0000 │ 0.0004 │    —
+case_19_mlt_200_4           │ mlt    │   200 │   4 │ PASS  │ 0.0229 │ 0.0000 │ 0.0000│ 0.0004 │ 0.0169 │    —
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Total: 28/29 passed, 1 xfail (96.6%)
 ```
+
+### Extended per-type Δ columns (from `validation_report.md`)
+
+Selected rows — the 10 new prediction-type deltas for the cases where
+the non-identifiability of censored fits makes them non-zero. All
+remaining cases (case_01/03/04/05/07/09/12/14/15/18) had every new
+metric at ≤ 1e-4. `—` marks entries masked out by the reliability
+filter (the full-tail mask yielded no usable points; these are the
+small-n censored cases like case_19 where the interior grid leaves
+almost nothing after masking the upper and/or lower tails).
+
+| Case | Δtrafo | Δsurv | Δcumhaz | Δodds | ΔlogF | ΔlogS | Δlogdens | Δloghaz | ΔlogcumH | Δlogodds |
+|------|--------|-------|---------|-------|-------|-------|----------|---------|----------|----------|
+| case_02_mlt_1000_4 | 0.0013 | 0.0001 | 0.0011 | 0.0170 | 0.0002 | 0.0011 | 0.0059 | 0.0005 | 0.0004 | 0.0012 |
+| case_02_mlt_1000_6 | 0.0582 | 0.0002 | 0.0010 | 0.0200 | 0.0002 | 0.0010 | 10.43 | 0.0004 | 0.0003 | 0.0011 |
+| case_02_mlt_200_6  | 0.1357 | 0.0005 | 0.0002 | 0.0030 | 0.0005 | 0.0002 | 1.79 | 0.0001 | 0.0001 | 0.0002 |
+| case_06_coxph_200_6| 1.4237 | 0.0000 | 0.0001 | 0.0012 | 0.0000 | 0.0001 | 57.66 | 0.0000 | 0.0000 | 0.0001 |
+| case_08_mlt_200_6  | 0.0037 | 0.0000 | 0.0001 | 0.0017 | 0.0001 | 0.0001 | 0.0211 | 0.0211 | 0.0001 | 0.0001 |
+| case_10_mlt_30_4   | 0.5719 | 0.0004 | 0.0040 | 0.0603 | 0.0005 | 0.0040 | 3.30 | 0.0021 | 0.0015 | 0.0043 |
+| case_11_mlt_200_6  | 0.2824 | 0.0000 | 0.0001 | 0.0023 | 0.0000 | 0.0001 | 0.9487 | 0.0001 | 0.0001 | 0.0001 |
+| case_13_mlt_200_6  | 53.40 | 0.0019 | 0.0082 | 0.1636 | 0.0019 | 0.0082 | 1567.80 | 0.0140 | 0.0027 | 0.0086 |
+| case_16_mlt_500_12 (XFAIL) | 1057.32 | 0.0219 | 0.1604 | 2.3811 | 0.0277 | 0.1604 | 5.9e5 | 0.1386 | 0.0720 | 0.1771 |
+| case_17_mlt_200_6  | 0.1082 | 0.0003 | 0.0013 | 0.0247 | 0.0037 | 0.0013 | 9.14 | 9.14 | 0.0038 | 0.0039 |
+| case_19_mlt_200_4  | 0.0142 | 0.0000 | — | — | 0.0000 | — | 0.6048 | — | — | — |
+
+Large `Δlogdensity` and `Δtrafo` values on censored cases are exactly
+the non-identifiability signature the two-tier pass/fail logic is
+designed for: Δcdf and Δll are tiny (both far below tolerance), so the
+underlying distribution function matches between R and pymlt — only
+the internal parameterisation `h(y)` differs, which makes `log f(y)`
+differ in a predictable way wherever pdf → 0. All such rows PASS.
 
 ### Failure Analysis
 
