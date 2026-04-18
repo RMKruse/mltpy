@@ -800,9 +800,15 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
                 f"Modell #0 hat n={n_obs_ref}, Modell #{i} hat n={m.n_obs_}."
             )
 
-    ordered = sorted(models, key=lambda m: cast(int, m.n_free_params_))
+    # Label each model by its caller-input position *before* sorting, so that
+    # row labels in the output table point back to the argument the user
+    # actually passed. Without this, anova(large, small) would print the
+    # smaller model as "#1" because sort moves it to row 0.
+    indexed = list(enumerate(models))
+    ordered_indexed = sorted(indexed, key=lambda im: cast(int, im[1].n_free_params_))
+    ordered = [m for _, m in ordered_indexed]
 
-    names = tuple(f"{type(m).__name__}#{i}" for i, m in enumerate(ordered))
+    names = tuple(f"{type(m).__name__}#{i}" for i, m in ordered_indexed)
     n_params = tuple(cast(int, m.n_free_params_) for m in ordered)
     log_lik = tuple(cast(OptimizationResult, m.result_).log_likelihood for m in ordered)
 

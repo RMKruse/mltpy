@@ -931,6 +931,16 @@ class TestAnova:
         result = anova(large, small)
         assert result.n_params == (4, 7)  # order+1 for 3 and 6
 
+    def test_model_names_preserve_caller_input_order(self):
+        """Labels must reflect the caller's argument position, not the
+        post-sort row index — otherwise multi-model tables are easy to misread."""
+        small, large = self._two_nested()
+        # Caller passes large first (#0), small second (#1)
+        result = anova(large, small)
+        # After sort: row 0 is small (caller arg #1), row 1 is large (caller arg #0)
+        assert result.model_names[0].endswith("#1")
+        assert result.model_names[1].endswith("#0")
+
     def test_df_equals_param_diff(self):
         small, large = self._two_nested()
         result = anova(small, large)
