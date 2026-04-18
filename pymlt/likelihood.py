@@ -12,11 +12,18 @@ Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1):
 
 The target distribution Z follows one of:
 
-* ``"normal"``            — N(0, 1)
+* ``"normal"``             — N(0, 1)
 * ``"logistic"``           — Logistic(0, 1)
 * ``"min_extreme_value"``  — standard minimum extreme value (reversed Gumbel),
                              the link that gives the Cox proportional hazards
                              model, since ``log[-log S(t)] = h(t)``.
+* ``"max_extreme_value"``  — standard (right) Gumbel, the link that realises
+                             the Lehmann / reverse-time proportional-hazards
+                             model: ``-log F(t) = h(t) + x'β``.
+* ``"exponential"``        — standard exponential with rate 1.  Support is
+                             ``[0, ∞)``, enforced during optimisation by the
+                             constraint ``theta_b[0] >= 0`` (monotonicity then
+                             gives ``h(y) >= 0`` for all ``y``).
 
 Log-likelihood formulae
 -----------------------
@@ -50,15 +57,29 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import log_ndtr
+from scipy.stats import expon as _expon
 from scipy.stats import gumbel_l as _mev
+from scipy.stats import gumbel_r as _maxev
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
 from pymlt.basis import BernsteinBasis
 from pymlt.variables import CensoredData, CensoringType
 
-BaseDistribution = Literal["normal", "logistic", "min_extreme_value"]
-_VALID_BASE_DISTRIBUTIONS = ("normal", "logistic", "min_extreme_value")
+BaseDistribution = Literal[
+    "normal",
+    "logistic",
+    "min_extreme_value",
+    "max_extreme_value",
+    "exponential",
+]
+_VALID_BASE_DISTRIBUTIONS = (
+    "normal",
+    "logistic",
+    "min_extreme_value",
+    "max_extreme_value",
+    "exponential",
+)
 
 
 def _get_dist(base_distribution: str) -> Any:
@@ -66,12 +87,20 @@ def _get_dist(base_distribution: str) -> Any:
 
     The supported choices are:
 
-    * ``"normal"``            — :data:`scipy.stats.norm`
+    * ``"normal"``             — :data:`scipy.stats.norm`
     * ``"logistic"``           — :data:`scipy.stats.logistic`
     * ``"min_extreme_value"``  — :data:`scipy.stats.gumbel_l`, the standard
       minimum extreme value (reversed Gumbel) distribution.  This is the
       inverse link that realises the Cox proportional hazards model:
       if ``h(T) ~ MinExtrVal`` then ``log[-log S(t)] = h(t) + x'beta``.
+    * ``"max_extreme_value"``  — :data:`scipy.stats.gumbel_r`, the standard
+      (right) Gumbel distribution.  The link that realises the Lehmann /
+      reverse-time proportional-hazards model:
+      if ``h(T) ~ MaxExtrVal`` then ``-log F(t) = h(t) + x'beta``.
+    * ``"exponential"``        — :data:`scipy.stats.expon`, the standard
+      exponential (rate 1).  Support is ``[0, ∞)``; the optimiser enforces
+      this by constraining ``theta_b[0] >= 0`` (monotonicity of the
+      coefficients then gives ``h(y) >= 0`` for all ``y``).
 
     Raises
     ------
@@ -85,6 +114,10 @@ def _get_dist(base_distribution: str) -> Any:
         return _logistic
     if base_distribution == "min_extreme_value":
         return _mev
+    if base_distribution == "max_extreme_value":
+        return _maxev
+    if base_distribution == "exponential":
+        return _expon
     raise ValueError(
         f"base_distribution={base_distribution!r} is not supported. "
         f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
@@ -240,20 +273,29 @@ def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     h : NDArray[np.float64]
         Values of the transformation function.
     dist : Any
-        scipy.stats distribution object (norm, logistic, or gumbel_l).
+        scipy.stats distribution object (``norm``, ``logistic``, ``gumbel_l``,
+        ``gumbel_r``, or ``expon``).
 
     Returns
     -------
     NDArray[np.float64]
         The negative derivative of the log-density.
-        For normal: ``h``
-        For logistic: ``2 F(h) - 1``
-        For min_extreme_value: ``exp(h) - 1``
+
+        * normal (N(0,1)):            ``h``
+        * logistic:                   ``2 F(h) - 1``
+        * min_extreme_value (gumbel_l): ``exp(h) - 1``
+        * max_extreme_value (gumbel_r): ``1 - exp(-h)``
+        * exponential:                ``1`` (constant)
     """
     if dist is norm:
         return h
     if dist is _mev:
         return np.exp(h) - 1.0
+    if dist is _maxev:
+        return 1.0 - np.exp(-h)
+    if dist is _expon:
+        return np.ones_like(h)
+    # logistic (remaining case)
     return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
 
 

@@ -159,3 +159,61 @@ cat(sprintf(
   "Right-censored: n=%d, observed=%d, ll=%.6f\n",
   n_rc, sum(event_rc == 1), ll_rc
 ))
+
+# ---------------------------------------------------------------------------
+# max_extreme_value (standard Gumbel, right) reference
+#
+# Fit mlt with todistr = "MaxExtrVal" on uncensored data, then write:
+#   mlt_maxextrval_theta.txt — Bernstein coefficients (order=4, 5 values)
+#   mlt_maxextrval_y.txt     — 200 observations on (0, 1)
+#   mlt_maxextrval_ll.txt    — scalar log-likelihood
+# ---------------------------------------------------------------------------
+
+set.seed(11)
+y_mev  <- runif(200, 0.02, 0.98)
+b_mev  <- Bernstein_basis(m, order = 4, ui = "increasing")
+ctm_mev <- ctm(b_mev, todistr = "MaxExtrVal")
+fit_mev <- mlt(ctm_mev, data = data.frame(y = y_mev))
+
+theta_mev <- coef(fit_mev)
+ll_mev    <- as.numeric(logLik(fit_mev))
+
+writeLines(format(theta_mev, digits = 15),
+           con = file.path(out_dir, "mlt_maxextrval_theta.txt"))
+writeLines(format(y_mev, digits = 15),
+           con = file.path(out_dir, "mlt_maxextrval_y.txt"))
+writeLines(format(ll_mev, digits = 15),
+           con = file.path(out_dir, "mlt_maxextrval_ll.txt"))
+
+cat(sprintf("MaxExtrVal: n=%d, ll=%.6f\n", length(y_mev), ll_mev))
+
+# ---------------------------------------------------------------------------
+# exponential reference
+#
+# Fit mlt with todistr = "Exponential" on uncensored data, then write:
+#   mlt_exponential_theta.txt — Bernstein coefficients (order=4, 5 values)
+#   mlt_exponential_y.txt     — 200 observations on (0, 1)
+#   mlt_exponential_ll.txt    — scalar log-likelihood
+# ---------------------------------------------------------------------------
+
+set.seed(13)
+y_exp  <- runif(200, 0.02, 0.98)
+b_exp  <- Bernstein_basis(m, order = 4, ui = "increasing")
+ctm_exp <- ctm(b_exp, todistr = "Exponential")
+# mlt's default starting theta can be infeasible for Exponential (support
+# [0, ∞)), producing h < 0 and -Inf log-likelihood. Supply a non-negative
+# monotone starting vector so the initial evaluation is finite.
+theta_init_exp <- seq(0.1, 5.0, length.out = 5)
+fit_exp <- mlt(ctm_exp, data = data.frame(y = y_exp), theta = theta_init_exp)
+
+theta_exp <- coef(fit_exp)
+ll_exp    <- as.numeric(logLik(fit_exp))
+
+writeLines(format(theta_exp, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_theta.txt"))
+writeLines(format(y_exp, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_y.txt"))
+writeLines(format(ll_exp, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_ll.txt"))
+
+cat(sprintf("Exponential: n=%d, ll=%.6f\n", length(y_exp), ll_exp))

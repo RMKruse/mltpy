@@ -223,6 +223,7 @@ def _perturb_and_project(
     n_params: int,
     rng: np.random.Generator,
     scale: float = 0.1,
+    nonneg_lower: bool = False,
 ) -> NDArray[np.float64]:
     """Perturb the current parameter vector randomly and re-project to a feasible state.
 
@@ -241,6 +242,9 @@ def _perturb_and_project(
         Initialized NumPy random number generator for normal sampling.
     scale : float, default=0.1
         Scale (standard deviation) of the normal noise added.
+    nonneg_lower : bool, default=False
+        If True, shift the projected coefficients so ``theta_b[0] >= 0``
+        (needed when ``base_distribution="exponential"``).
 
     Returns
     -------
@@ -249,6 +253,8 @@ def _perturb_and_project(
     """
     theta_b = theta[:n_params] + rng.normal(0.0, scale, size=n_params)
     theta_b = _project_to_feasible(theta_b)
+    if nonneg_lower and theta_b[0] < 0.0:
+        theta_b = theta_b - theta_b[0]
     if len(theta) > n_params:
         return cast(NDArray[np.float64], np.concatenate([theta_b, theta[n_params:]]))
     return theta_b
@@ -299,8 +305,13 @@ def optimize(
 
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
+    # Exponential has support [0, ∞); enforce h(y_min) = theta_b[0] >= 0.
+    nonneg_lower = base_distribution == "exponential"
     constraints = build_constraints(
-        n_params, solver=config.solver, total_params=total_params
+        n_params,
+        solver=config.solver,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
     )
     obj = _make_objective(basis, y, X, censoring, config.use_gradient,
                           base_distribution=base_distribution)
@@ -319,7 +330,9 @@ def optimize(
             theta_try = theta_init.copy()
         else:
             n_restarts_used = attempt
-            theta_try = _perturb_and_project(theta_init, n_params, rng)
+            theta_try = _perturb_and_project(
+                theta_init, n_params, rng, nonneg_lower=nonneg_lower,
+            )
 
         try:
             scipy_result = minimize(

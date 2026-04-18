@@ -181,12 +181,14 @@ def build_constraints(
     upper: float | None = None,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
     total_params: int | None = None,
+    nonneg_lower: bool = False,
 ) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
     Always includes the monotonicity constraint (non-decreasing ``theta``).
     Optionally adds boundary equality constraints when ``lower`` or ``upper``
-    are specified.
+    are specified, and an inequality ``theta[0] >= 0`` when ``nonneg_lower``
+    is set.
 
     ``optimizer.py`` calls this function — it does **not** instantiate the
     constraint classes directly.
@@ -209,6 +211,12 @@ def build_constraints(
         any regression coefficients (``beta``).  When ``total_params > n_params``
         the constraint matrix is padded with zero columns so that it maps the
         full ``theta`` vector.  Defaults to ``n_params`` (no beta).
+    nonneg_lower:
+        If ``True``, add the inequality ``theta[0] >= 0``.  Used for
+        ``base_distribution="exponential"``, whose support is ``[0, ∞)``:
+        combined with the monotonicity constraint this guarantees
+        ``h(y) = B_k(y) · theta >= 0`` for all ``y``.  Kept distinct from
+        ``lower`` because ``lower`` is an *equality* that pins ``theta[0]``.
 
     Returns
     -------
@@ -223,6 +231,10 @@ def build_constraints(
     if total > n_params:
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
+    # Row selecting theta[0] (padded to full parameter length)
+    e0 = np.zeros((1, total))
+    e0[0, 0] = 1.0
+
     if solver == "slsqp":
         result: list[dict[str, Any]] = [
             {
@@ -231,6 +243,14 @@ def build_constraints(
                 "jac": lambda theta, _D=D: _D,
             }
         ]
+        if nonneg_lower:
+            result.append(
+                {
+                    "type": "ineq",
+                    "fun": lambda theta, _e=e0: _e @ theta,
+                    "jac": lambda theta, _e=e0: _e,
+                }
+            )
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
             result.extend(bc.as_scipy_constraint())
@@ -238,6 +258,8 @@ def build_constraints(
 
     else:  # trust-constr
         lcs: list[LinearConstraint] = [LinearConstraint(D, lb=0.0, ub=np.inf)]
+        if nonneg_lower:
+            lcs.append(LinearConstraint(e0, lb=0.0, ub=np.inf))
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
             lcs.append(bc.as_LinearConstraint())

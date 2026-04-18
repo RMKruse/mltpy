@@ -468,6 +468,21 @@ class TestBaseDistributionValidation:
         m = ConditionalTransformationModel(basis, base_distribution="logistic")
         assert m.base_distribution == "logistic"
 
+    def test_min_extreme_value_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="min_extreme_value")
+        assert m.base_distribution == "min_extreme_value"
+
+    def test_max_extreme_value_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="max_extreme_value")
+        assert m.base_distribution == "max_extreme_value"
+
+    def test_exponential_accepted(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        m = ConditionalTransformationModel(basis, base_distribution="exponential")
+        assert m.base_distribution == "exponential"
+
     def test_error_raised_before_fit(self):
         """ValueError must be raised at __init__, not lazily at fit()."""
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
@@ -1083,3 +1098,63 @@ def test_integration_r_reference():
     assert ll_py >= ll_r - 0.5, (
         f"Python LL={ll_py:.4f} worse than R LL={ll_r:.4f} by more than 0.5 nats"
     )
+
+
+# ---------------------------------------------------------------------------
+# R reference: max_extreme_value and exponential base distributions
+#
+# Validates that pymlt.log_likelihood agrees with R's mlt::logLik at R's
+# fitted theta for the new base distributions, and that pymlt's own fit
+# reaches at least that log-likelihood.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("name", "theta_file", "y_file", "ll_file"),
+    [
+        (
+            "max_extreme_value",
+            "mlt_maxextrval_theta.txt",
+            "mlt_maxextrval_y.txt",
+            "mlt_maxextrval_ll.txt",
+        ),
+        (
+            "exponential",
+            "mlt_exponential_theta.txt",
+            "mlt_exponential_y.txt",
+            "mlt_exponential_ll.txt",
+        ),
+    ],
+)
+def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_file):
+    """LL at R's theta matches R; pymlt fit reaches ≥ R's LL minus 0.5 nats."""
+    required = [REF_DIR / f for f in (theta_file, y_file, ll_file)]
+    if not all(p.exists() for p in required):
+        pytest.skip(
+            f"{name} reference files not yet generated — "
+            "run Rscript reference/generate_reference.R"
+        )
+
+    theta_r = np.loadtxt(required[0])
+    y_ref = np.loadtxt(required[1])
+    ll_r = float(np.loadtxt(required[2]))
+
+    order = len(theta_r) - 1
+    from pymlt.basis import BernsteinBasis
+    from pymlt.likelihood import log_likelihood
+
+    basis = BernsteinBasis(order=order, support=(0.0, 1.0))
+    ll_py_at_theta_r = log_likelihood(
+        theta_r, basis, y_ref, base_distribution=name
+    )
+    # Same formula, same data, same theta → exact agreement with R mlt
+    np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-8)
+
+    # pymlt's own fit should reach at least R's LL (minus optimiser slack)
+    model = MLT(order=order, support=(0.0, 1.0), base_distribution=name).fit(y_ref)
+    ll_py = model.score(y_ref)
+    assert ll_py >= ll_r - 0.5, (
+        f"{name}: Python LL={ll_py:.4f} worse than R LL={ll_r:.4f}"
+    )
+    if name == "exponential":
+        # Feasibility: theta_b[0] >= 0 ensures h(y) >= 0 across support
+        assert model.theta_[0] >= -1e-6
