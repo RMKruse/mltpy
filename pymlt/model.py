@@ -28,7 +28,17 @@ from scipy.optimize import brentq
 from scipy.stats import chi2
 
 from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import BaseDistribution, _get_dist, log_likelihood
+from pymlt.likelihood import (
+    BaseDistribution,
+    _get_dist,
+    log_likelihood,
+)
+from pymlt.likelihood import (
+    hessian as _hessian,
+)
+from pymlt.likelihood import (
+    score_matrix as _score_matrix,
+)
 from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
 from pymlt.variables import CensoredData, CensoringType
 
@@ -71,6 +81,21 @@ _BRENTQ_EPS = 1e-10
 
 # Floor for log(h') to avoid log(0) at boundaries where monotonicity is marginal
 _LOG_HP_FLOOR = np.finfo(np.float64).tiny
+
+
+def _extract_feature_names(X: object) -> list[str] | None:
+    """Extract column names from a pandas DataFrame, else ``None``.
+
+    Kept as a free function so no pandas import is required at module load
+    time — we only touch pandas attributes by duck-typing.
+    """
+    columns = getattr(X, "columns", None)
+    if columns is None:
+        return None
+    try:
+        return [str(c) for c in columns]
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +158,21 @@ class ConditionalTransformationModel:
         coefficients).  The monotonicity constraint ``D @ theta_b >= 0`` is
         an inequality and does not reduce the parameter count.  ``None``
         before :meth:`fit`."""
+
+        self.hessian_: NDArray[np.float64] | None = None
+        """Observed information matrix — analytical Hessian of the *negative*
+        log-likelihood evaluated at :attr:`theta_`.  Shape ``(p+q, p+q)``.
+        Computed eagerly at the end of :meth:`fit`.  ``None`` before
+        :meth:`fit`."""
+
+        self.feature_names_in_: list[str] | None = None
+        """Names of the covariate columns supplied to :meth:`fit`, if any.
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.  ``None`` when the model was fit
+        without covariates."""
+
+        # Score matrix — computed eagerly at the end of fit().
+        self._estfun_cache_: NDArray[np.float64] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -240,6 +280,7 @@ class ConditionalTransformationModel:
         ValueError
             If ``y`` contains values outside ``basis.support``.
         """
+        feature_names = _extract_feature_names(X)
         y_clean, X_clean = self._validate_input(y, X)
 
         result = optimize(
@@ -268,6 +309,37 @@ class ConditionalTransformationModel:
             int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         )
         self.n_free_params_ = int(result.theta.size)
+
+        # Feature names for the covariate block of theta_.
+        if X_clean is not None:
+            q = X_clean.shape[1]
+            if feature_names is None or len(feature_names) != q:
+                feature_names = [f"X{j + 1}" for j in range(q)]
+            self.feature_names_in_ = feature_names
+        else:
+            self.feature_names_in_ = None
+
+        # Observed information and score matrix — computed eagerly so that
+        # later mutations of the caller's ``y``/``X`` cannot affect
+        # ``vcov()`` or ``estfun()`` results.  Failures here indicate a real
+        # modelling problem (degenerate basis, constraint-binding fit);
+        # surface them.
+        self.hessian_ = _hessian(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            self.censoring,
+            base_distribution=self.base_distribution,
+        )
+        self._estfun_cache_ = _score_matrix(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            self.censoring,
+            base_distribution=self.base_distribution,
+        )
         return self
 
     def predict(
@@ -488,6 +560,97 @@ class ConditionalTransformationModel:
             self.censoring,
             base_distribution=self.base_distribution,
         )
+
+    def vcov(self) -> NDArray[np.float64]:
+        """Asymptotic variance–covariance matrix of :attr:`theta_`.
+
+        Returns the inverse of the observed information matrix
+        :attr:`hessian_` (Hessian of the *negative* log-likelihood at the
+        MLE).  Under standard regularity conditions, this is a consistent
+        estimator of the asymptotic covariance of the maximum-likelihood
+        estimator.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Symmetric ``(p+q, p+q)`` matrix.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            If the Hessian is singular or not positive definite (e.g. a
+            constraint is active at the MLE, or the basis is degenerate for
+            the given data).  ``np.linalg.LinAlgError`` is wrapped so callers
+            do not have to special-case the linalg module.
+        """
+        self._check_is_fitted()
+        if self.hessian_ is None:
+            raise RuntimeError(
+                "hessian_ fehlt unerwartet nach dem Fitten. "
+                "Bitte fit(y) erneut aufrufen."
+            )
+        try:
+            return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "vcov() konnte nicht berechnet werden: die Hesse-Matrix ist "
+                "singulär oder schlecht konditioniert.  Mögliche Ursachen: "
+                "aktive Monotonie-Constraint am MLE, zu hoher Basis-Grad im "
+                "Verhältnis zur Stichprobengröße, oder kollineare Kovariaten."
+            ) from exc
+
+    def estfun(self) -> NDArray[np.float64]:
+        """Per-observation score contributions, ``(n, p+q)``.
+
+        Equivalent to R's ``sandwich::estfun(mlt_fit)``: row ``i`` is
+        ``∂ℓ_i/∂θ`` evaluated at :attr:`theta_`.  At the MLE the column sums
+        are zero up to optimiser tolerance.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Matrix of shape ``(n_obs_, p+q)``.  Computed eagerly in
+            :meth:`fit` and cached; subsequent mutations of the original
+            ``y``/``X`` cannot affect the returned matrix.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        self._check_is_fitted()
+        assert self._estfun_cache_ is not None  # guaranteed by fit()
+        return self._estfun_cache_
+
+    # R/sandwich-style alias.  Kept as a method (not a bare attribute) so it
+    # dispatches on subclass overrides if any.
+    def score_contributions(self) -> NDArray[np.float64]:
+        """Alias for :meth:`estfun`.  See that method for details."""
+        return self.estfun()
+
+    def standard_errors(self) -> NDArray[np.float64]:
+        """Vector of asymptotic standard errors for :attr:`theta_`.
+
+        Computed as ``sqrt(diag(vcov()))``.  Length equals ``len(theta_)``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            Propagated from :meth:`vcov` if the Hessian is singular.
+        """
+        diag = np.diag(self.vcov())
+        if np.any(diag < 0):
+            raise RuntimeError(
+                "vcov() enthält negative Diagonaleinträge — die Hesse-Matrix "
+                "ist nicht positiv definit.  Das Modell ist möglicherweise "
+                "nicht identifiziert oder die Optimierung ist an einem "
+                "Sattelpunkt stehen geblieben."
+            )
+        return cast(NDArray[np.float64], np.sqrt(diag))
 
     def aic(self) -> float:
         """Akaike Information Criterion of the fitted model.

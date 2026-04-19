@@ -1,4 +1,5 @@
 """Tests for pymlt.basis — Bernstein basis, derivatives, and integration."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -12,6 +13,7 @@ from pymlt.basis import BernsteinBasis, monotone_trafo
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
+
 def make_basis(order: int = 4, support: tuple = (0.0, 1.0)) -> BernsteinBasis:
     return BernsteinBasis(order=order, support=support)
 
@@ -24,6 +26,7 @@ def linspace_in(basis: BernsteinBasis, n: int = 50) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Construction validation
 # ---------------------------------------------------------------------------
+
 
 class TestBernsteinBasisConstruction:
     def test_valid(self):
@@ -51,6 +54,7 @@ class TestBernsteinBasisConstruction:
 # ---------------------------------------------------------------------------
 # evaluate() — shape, partition of unity, boundary, non-negativity
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluate:
     def test_shape(self):
@@ -113,6 +117,7 @@ class TestEvaluate:
 # ---------------------------------------------------------------------------
 # derivative() — shape, analytical vs finite difference, edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestDerivative:
     def test_shape_order1(self):
@@ -193,6 +198,7 @@ class TestDerivative:
 # integrate() — shape, value at full domain, monotonicity
 # ---------------------------------------------------------------------------
 
+
 class TestIntegrate:
     def test_shape(self):
         b = make_basis(order=4)
@@ -254,6 +260,7 @@ class TestIntegrate:
 # monotone_trafo
 # ---------------------------------------------------------------------------
 
+
 class TestMonotoneTrafo:
     def test_basic(self):
         b = make_basis(order=3)
@@ -283,6 +290,7 @@ class TestMonotoneTrafo:
 # Reference .npy comparison (skip if file absent)
 # ---------------------------------------------------------------------------
 
+
 def test_reference_npy(tmp_path):
     """Compare evaluate() against R basefun::Bernstein_basis reference values.
 
@@ -291,6 +299,7 @@ def test_reference_npy(tmp_path):
     column order, matching pymlt's convention).
     """
     import pathlib
+
     ref_path = (
         pathlib.Path(__file__).parent.parent / "reference" / "bernstein_reference.txt"
     )

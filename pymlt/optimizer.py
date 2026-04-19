@@ -7,6 +7,7 @@ This module contains no mathematical logic — it only orchestrates calls to
 Analogue to R's ``mltoptim.R`` (sequential solver attempts) and the ``maxtry``
 restart mechanism in ``mlt()``.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -25,6 +26,7 @@ from pymlt.variables import CensoredData, CensoringType
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class OptimizerConfig:
@@ -92,6 +94,7 @@ class OptimizationResult:
 # Private helpers
 # ---------------------------------------------------------------------------
 
+
 def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     """Project an arbitrary vector to the monotone-non-decreasing cone.
 
@@ -152,19 +155,31 @@ def _make_objective(
     _BIG = 1e10
 
     if use_gradient:
+
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
                 return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=True,
+                    theta,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=True,
                     base_distribution=base_distribution,
                 )
             except ValueError:
                 return _BIG, np.zeros_like(theta)
     else:
+
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
                 return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=False,
+                    theta,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=False,
                     base_distribution=base_distribution,
                 )
             except ValueError:
@@ -264,6 +279,7 @@ def _perturb_and_project(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def optimize(
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
@@ -316,8 +332,9 @@ def optimize(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
     )
-    obj = _make_objective(basis, y, X, censoring, config.use_gradient,
-                          base_distribution=base_distribution)
+    obj = _make_objective(
+        basis, y, X, censoring, config.use_gradient, base_distribution=base_distribution
+    )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
     rng = np.random.default_rng()
@@ -334,7 +351,10 @@ def optimize(
         else:
             n_restarts_used = attempt
             theta_try = _perturb_and_project(
-                theta_init, n_params, rng, nonneg_lower=nonneg_lower,
+                theta_init,
+                n_params,
+                rng,
+                nonneg_lower=nonneg_lower,
             )
 
         try:
@@ -372,10 +392,17 @@ def optimize(
 
     if best_scipy_result is None:
         # All attempts raised exceptions — return the initial point as fallback
-        _nll = cast(float, negative_log_likelihood(
-            theta_init, basis, y, X, censoring,
-            base_distribution=base_distribution,
-        ))
+        _nll = cast(
+            float,
+            negative_log_likelihood(
+                theta_init,
+                basis,
+                y,
+                X,
+                censoring,
+                base_distribution=base_distribution,
+            ),
+        )
         return OptimizationResult(
             theta=theta_init,
             log_likelihood=float(-_nll),

@@ -304,6 +304,47 @@ def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
 
 
+def _d2_logpdf(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
+    """Compute ``ψ'(h) = d² log f(h) / dh²`` for the base distribution.
+
+    Parameters
+    ----------
+    h : NDArray[np.float64]
+        Values of the transformation function.
+    dist : Any
+        scipy.stats distribution object (``norm``, ``logistic``, ``gumbel_l``,
+        ``gumbel_r``, or ``expon``).
+
+    Returns
+    -------
+    NDArray[np.float64]
+        The second derivative of ``log f`` w.r.t. ``h``.
+
+        * normal (N(0,1)):              ``-1``
+        * logistic:                     ``-2 · f(h)`` where ``f`` is logistic pdf
+        * min_extreme_value (gumbel_l): ``-exp(h)``
+        * max_extreme_value (gumbel_r): ``-exp(-h)``
+        * exponential:                  ``0``  (log f is linear in h)
+
+    Notes
+    -----
+    Used to assemble the analytical Hessian of the log-likelihood.  For
+    log-concave base distributions (all five supported choices),
+    ``ψ'(h) ≤ 0`` for every h, which makes the exact-observation Hessian
+    of the *negative* log-likelihood positive on the ``β`` block.
+    """
+    if dist is norm:
+        return np.full_like(h, -1.0)
+    if dist is _mev:
+        return cast(NDArray[np.float64], -np.exp(h))
+    if dist is _maxev:
+        return cast(NDArray[np.float64], -np.exp(-h))
+    if dist is _expon:
+        return np.zeros_like(h)
+    # logistic (remaining case)
+    return cast(NDArray[np.float64], -2.0 * dist.pdf(h))
+
+
 # ---------------------------------------------------------------------------
 # Private log-likelihood functions — one per censoring type
 # ---------------------------------------------------------------------------
@@ -678,6 +719,395 @@ def _grad_interval(
 
 
 # ---------------------------------------------------------------------------
+# Private per-observation score functions — one per censoring type.
+# Each returns an (n, p+q) matrix of gradients of the POSITIVE log-likelihood
+# ℓ_i w.r.t. theta, with rows aligned to the input ordering.
+# ---------------------------------------------------------------------------
+
+
+def _scores_none(
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Per-observation ∂ℓ/∂θ for exact observations, shape ``(n, p+q)``."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+
+    B = basis.evaluate(y)  # (n, p)
+    D = basis.derivative(y, order=1)  # (n, p)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    hp = D @ theta_b  # (n,)
+
+    psi = -_neg_score(h, dist)  # ψ(h) = d log f / dh, shape (n,)
+    # ∂ℓ_i/∂θ_b = B_i · ψ(h_i) + D_i / h'_i
+    scores_b = B * psi[:, None] + D / hp[:, None]
+
+    scores = np.empty((len(y), p + q), dtype=np.float64)
+    scores[:, :p] = scores_b
+    if X is not None:
+        # ∂ℓ_i/∂β = x_i · ψ(h_i)
+        scores[:, p:] = X * psi[:, None]
+    return scores
+
+
+def _scores_right(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Per-observation ∂ℓ/∂θ for right-censored data, shape ``(n, p+q)``."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    n = cd.n
+    theta_b, beta = _split_theta(theta, p, X)
+    scores = np.zeros((n, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        s_e = _scores_none(y_e, theta, basis, X_e, dist=dist)
+        scores[mask_e] = s_e
+
+    mask_c = cd.is_right_censored_mask
+    if mask_c.any():
+        y_c = cd.lower[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        # ∂ℓ_i/∂h = -λ(h) = -f(h)/S(h)
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        scores[mask_c, :p] = -B_c * hazard[:, None]
+        if X_c is not None:
+            scores[mask_c, p:] = -X_c * hazard[:, None]
+
+    return scores
+
+
+def _scores_left(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Per-observation ∂ℓ/∂θ for left-censored data, shape ``(n, p+q)``."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    n = cd.n
+    theta_b, beta = _split_theta(theta, p, X)
+    scores = np.zeros((n, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        scores[mask_e] = _scores_none(y_e, theta, basis, X_e, dist=dist)
+
+    mask_c = cd.is_left_censored_mask
+    if mask_c.any():
+        y_c = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        # ∂ℓ_i/∂h = µ(h) = f(h)/F(h)
+        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        inv_mills = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
+        scores[mask_c, :p] = B_c * inv_mills[:, None]
+        if X_c is not None:
+            scores[mask_c, p:] = X_c * inv_mills[:, None]
+
+    return scores
+
+
+def _scores_interval(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Per-observation ∂ℓ/∂θ for interval-censored data, shape ``(n, p+q)``."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    n = cd.n
+    theta_b, beta = _split_theta(theta, p, X)
+    scores = np.zeros((n, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        scores[mask_e] = _scores_none(y_e, theta, basis, X_e, dist=dist)
+
+    mask_i = cd.is_interval_censored_mask
+    if mask_i.any():
+        lo = cd.lower[mask_i]
+        hi = cd.upper[mask_i]
+        X_i = X[mask_i] if X is not None else None
+        B_lo = basis.evaluate(lo)
+        B_hi = basis.evaluate(hi)
+        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
+        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+
+        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # ∂ℓ_i/∂θ_b = B_hi_i · w_hi - B_lo_i · w_lo
+        scores[mask_i, :p] = B_hi * w_hi[:, None] - B_lo * w_lo[:, None]
+        if X_i is not None:
+            scores[mask_i, p:] = X_i * (w_hi - w_lo)[:, None]
+
+    return scores
+
+
+# ---------------------------------------------------------------------------
+# Private Hessian functions — one per censoring type.
+# Each returns the (p+q, p+q) Hessian of the NEGATIVE log-likelihood.
+# ---------------------------------------------------------------------------
+
+
+def _assemble_hessian(
+    B: NDArray[np.float64],
+    w: NDArray[np.float64],
+    X: NDArray[np.float64] | None,
+    p: int,
+    q: int,
+) -> NDArray[np.float64]:
+    """Assemble ``[B, X]^T · diag(w) · [B, X]`` block structure.
+
+    Reused for every censoring type's shared-h chain-rule term: a diagonal
+    weight ``w`` (shape ``(n_group,)``) times the outer product of the same
+    design row on both sides.  Returns a ``(p+q, p+q)`` symmetric block.
+    """
+    Bw = B * w[:, None]
+    H = np.zeros((p + q, p + q), dtype=np.float64)
+    H[:p, :p] = Bw.T @ B
+    if X is not None and q > 0:
+        Xw = X * w[:, None]
+        H_bx = Bw.T @ X
+        H[:p, p:] = H_bx
+        H[p:, :p] = H_bx.T
+        H[p:, p:] = Xw.T @ X
+    return H
+
+
+def _hess_none(
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Hessian of -ℓ for exact observations, shape ``(p+q, p+q)``.
+
+    Per-observation contribution to ``∂²(-ℓ)/∂θ∂θ'``::
+
+        [θ_b θ_b]:  -ψ'(h) · B_i B_i' + (D_i D_i') / (h'_i)²
+        [θ_b β  ]:  -ψ'(h) · B_i x_i'
+        [β   β  ]:  -ψ'(h) · x_i x_i'
+
+    where ``ψ'(h) = d² log f / dh²`` comes from :func:`_d2_logpdf`.  The
+    ``(D_i D_i')/(h'_i)²`` term comes from ``-∂²/∂θ_b² log(h')``; it is
+    absent for ``β`` because ``h'`` does not depend on ``β``.
+    """
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+
+    B = basis.evaluate(y)  # (n, p)
+    D = basis.derivative(y, order=1)  # (n, p)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    hp = D @ theta_b
+
+    w = -_d2_logpdf(h, dist)  # -ψ'(h), ≥ 0 for log-concave f
+    H = _assemble_hessian(B, w, X, p, q)
+    # Add D^T diag(1/h'²) D term on the θ_b block only
+    Dw = D * (1.0 / (hp * hp))[:, None]
+    H[:p, :p] += Dw.T @ D
+    return H
+
+
+def _hess_right(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Hessian of -ℓ for right-censored data, shape ``(p+q, p+q)``.
+
+    Exact rows contribute via :func:`_hess_none`.  Right-censored rows at
+    lower bound ``h_l`` contribute ``λ(h)·(ψ(h) + λ(h))`` on the shared
+    ``[B, x]`` design, where ``λ = f/S`` is the hazard, ``ψ = d log f / dh``.
+    """
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    H = np.zeros((p + q, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+
+    mask_c = cd.is_right_censored_mask
+    if mask_c.any():
+        y_c = cd.lower[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        lam = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        psi = -_neg_score(h_c, dist)
+        w = lam * (psi + lam)  # = -d²logS/dh² → NLL contribution
+        H += _assemble_hessian(B_c, w, X_c, p, q)
+
+    return H
+
+
+def _hess_left(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Hessian of -ℓ for left-censored data, shape ``(p+q, p+q)``.
+
+    Left-censored rows at upper bound ``h_u`` contribute
+    ``µ(h)·(µ(h) - ψ(h))`` where ``µ = f/F`` is the inverse Mills ratio.
+    """
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    H = np.zeros((p + q, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+
+    mask_c = cd.is_left_censored_mask
+    if mask_c.any():
+        y_c = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        mu = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
+        psi = -_neg_score(h_c, dist)
+        w = mu * (mu - psi)  # = -d²logF/dh² → NLL contribution
+        H += _assemble_hessian(B_c, w, X_c, p, q)
+
+    return H
+
+
+def _hess_interval(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> NDArray[np.float64]:
+    """Hessian of -ℓ for interval-censored data, shape ``(p+q, p+q)``.
+
+    For each interval ``[h_l, h_u]`` with ``p = F(h_u) - F(h_l)``,
+    ``w_lo = f(h_l)/p``, ``w_hi = f(h_u)/p``, the 2x2 Hessian of
+    ``log p`` w.r.t. ``(h_l, h_u)`` has entries::
+
+        ∂²/∂h_l² = -ψ(h_l) w_lo - w_lo²
+        ∂²/∂h_u² =  ψ(h_u) w_hi - w_hi²
+        ∂²/∂h_l ∂h_u = w_hi · w_lo
+
+    Chained through the Jacobian ``∂(h_l, h_u)/∂(θ_b, β) = [[B_lo, x],
+    [B_hi, x]]`` and negated for NLL.
+    """
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    H = np.zeros((p + q, p + q), dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+
+    mask_i = cd.is_interval_censored_mask
+    if mask_i.any():
+        lo = cd.lower[mask_i]
+        hi = cd.upper[mask_i]
+        X_i = X[mask_i] if X is not None else None
+        B_lo = basis.evaluate(lo)
+        B_hi = basis.evaluate(hi)
+        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
+        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+
+        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        psi_lo = -_neg_score(h_lo, dist)
+        psi_hi = -_neg_score(h_hi, dist)
+
+        # Entries of the 2x2 Hessian of log p (per obs, same for ℓ and -ℓ sign
+        # flipped below).
+        a = -psi_lo * w_lo - w_lo * w_lo  # ∂²log p/∂h_l²
+        c = psi_hi * w_hi - w_hi * w_hi  # ∂²log p/∂h_u²
+        b = w_hi * w_lo  # ∂²log p/∂h_l ∂h_u
+
+        # NLL contribution = - (chain through J):
+        #   -[ J_l^T diag(a) J_l + J_l^T diag(b) J_u + J_u^T diag(b) J_l
+        #      + J_u^T diag(c) J_u ]
+        # where J_l = [B_lo, X_i], J_u = [B_hi, X_i].
+        def _outer(
+            U: NDArray[np.float64],
+            Xu: NDArray[np.float64] | None,
+            V: NDArray[np.float64],
+            Xv: NDArray[np.float64] | None,
+            w_vec: NDArray[np.float64],
+        ) -> NDArray[np.float64]:
+            """Compute U^T diag(w_vec) V split into (p+q, p+q) block."""
+            Uw = U * w_vec[:, None]
+            out = np.zeros((p + q, p + q), dtype=np.float64)
+            out[:p, :p] = Uw.T @ V
+            if Xu is not None and Xv is not None and q > 0:
+                out[:p, p:] = Uw.T @ Xv
+                out[p:, :p] = (Xu * w_vec[:, None]).T @ V
+                out[p:, p:] = (Xu * w_vec[:, None]).T @ Xv
+            return out
+
+        block = (
+            _outer(B_lo, X_i, B_lo, X_i, a)
+            + _outer(B_lo, X_i, B_hi, X_i, b)
+            + _outer(B_hi, X_i, B_lo, X_i, b)
+            + _outer(B_hi, X_i, B_hi, X_i, c)
+        )
+        H -= block  # NLL = -ℓ
+
+    return H
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -800,3 +1230,128 @@ def negative_log_likelihood(
             grad = _grad_interval(y, theta, basis, X, dist=dist)
 
     return nll, grad
+
+
+def hessian(
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None = None,
+    censoring: CensoringType = CensoringType.NONE,
+    base_distribution: BaseDistribution = "normal",
+) -> NDArray[np.float64]:
+    """Analytical Hessian of the negative log-likelihood.
+
+    The returned matrix is the observed information ``∂²(-ℓ)/∂θ∂θ'`` at
+    ``theta``.  Inverting it yields the asymptotic covariance matrix of the
+    maximum-likelihood estimator (see
+    :meth:`~pymlt.model.ConditionalTransformationModel.vcov`).
+
+    Parameters
+    ----------
+    theta, basis, y, X, censoring, base_distribution:
+        Same as :func:`log_likelihood`.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Symmetric ``(p+q, p+q)`` Hessian of ``-ℓ`` where ``p = basis.order + 1``
+        and ``q = X.shape[1]`` (``0`` if ``X is None``).
+
+    Raises
+    ------
+    ValueError
+        If ``base_distribution`` is not supported (propagated from
+        :func:`_get_dist`), or if any entry of the Hessian is non-finite —
+        most commonly because ``theta`` violates monotonicity (``h'(y) ≤ 0``)
+        or because observations fall outside the basis support.
+
+    Notes
+    -----
+    All five base distributions are log-concave, so the ``β`` block of the
+    Hessian of ``-ℓ`` is positive semidefinite at any ``h``.  The full
+    Hessian is additionally positive definite at the unconstrained MLE
+    (and invertible) for non-degenerate data.
+    """
+    dist = _get_dist(base_distribution)
+
+    if isinstance(y, np.ndarray):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        result = _hess_none(y_arr, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.NONE:
+        result = _hess_none(y.exact, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.RIGHT:
+        result = _hess_right(y, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.LEFT:
+        result = _hess_left(y, theta, basis, X, dist=dist)
+    else:
+        result = _hess_interval(y, theta, basis, X, dist=dist)
+
+    if not np.all(np.isfinite(result)):
+        raise ValueError(
+            "hessian() produced non-finite entries.  Possible causes: theta "
+            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+            "support, or extreme h values despite clipping."
+        )
+    return result
+
+
+def score_matrix(
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None = None,
+    censoring: CensoringType = CensoringType.NONE,
+    base_distribution: BaseDistribution = "normal",
+) -> NDArray[np.float64]:
+    """Per-observation score contributions ``∂ℓ_i/∂θ``.
+
+    Returns the ``(n, p+q)`` matrix of per-observation gradients of the
+    *positive* log-likelihood, often referred to as ``estfun`` in the R
+    ``sandwich`` package.  ``score_matrix(...).sum(axis=0)`` equals the full
+    log-likelihood gradient (the negative of
+    :func:`negative_log_likelihood` gradient).
+
+    Parameters
+    ----------
+    theta, basis, y, X, censoring, base_distribution:
+        Same as :func:`log_likelihood`.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Per-observation score matrix of shape ``(n, p+q)``.  Row ``i`` gives
+        ``∂ℓ_i/∂θ``.  Rows of observations that contribute nothing to the
+        log-likelihood under the chosen censoring regime (should not occur
+        for well-formed inputs) are zero.
+
+    Raises
+    ------
+    ValueError
+        If ``base_distribution`` is not supported, or if any entry of the
+        score matrix is non-finite — most commonly because ``theta`` violates
+        monotonicity (``h'(y) ≤ 0``) or because observations fall outside the
+        basis support.
+    """
+    dist = _get_dist(base_distribution)
+
+    if isinstance(y, np.ndarray):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        result = _scores_none(y_arr, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.NONE:
+        # Exact observations stored in CensoredData — only .exact is used.
+        result = _scores_none(y.exact, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.RIGHT:
+        result = _scores_right(y, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.LEFT:
+        result = _scores_left(y, theta, basis, X, dist=dist)
+    else:
+        result = _scores_interval(y, theta, basis, X, dist=dist)
+
+    if not np.all(np.isfinite(result)):
+        raise ValueError(
+            "score_matrix() produced non-finite entries.  Possible causes: "
+            "theta violates monotonicity (h'(y) ≤ 0), observations outside "
+            "basis support, or extreme h values despite clipping."
+        )
+    return result

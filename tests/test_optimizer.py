@@ -1,4 +1,5 @@
 """Tests for pymlt.optimizer — convergence, feasibility, result structure."""
+
 from __future__ import annotations
 
 import warnings
@@ -23,6 +24,7 @@ from pymlt.variables import CensoredData, CensoringType
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_basis(order: int = 3, support: tuple = (0.0, 1.0)) -> BernsteinBasis:
     return BernsteinBasis(order=order, support=support)
 
@@ -36,6 +38,7 @@ def simple_data(n: int = 60, seed: int = 0) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # OptimizerConfig defaults
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizerConfig:
     def test_defaults(self):
@@ -57,6 +60,7 @@ class TestOptimizerConfig:
 # ---------------------------------------------------------------------------
 # OptimizationResult structure
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizationResultFields:
     def test_all_fields_present(self):
@@ -95,6 +99,7 @@ class TestOptimizationResultFields:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 class TestProjectToFeasible:
     def test_already_sorted(self):
@@ -151,6 +156,7 @@ class TestPerturbAndProject:
 # optimize() — convergence and feasibility
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizeConvergence:
     def test_converges_on_simple_data(self):
         basis = make_basis(order=3)
@@ -164,13 +170,12 @@ class TestOptimizeConvergence:
         result = optimize(basis, y)
         n_params = basis.order + 1
         theta_b = result.theta[:n_params]
-        assert np.all(np.diff(theta_b) >= -1e-6), (
-            f"theta not non-decreasing: {theta_b}"
-        )
+        assert np.all(np.diff(theta_b) >= -1e-6), f"theta not non-decreasing: {theta_b}"
 
     def test_nll_decreased_from_init(self):
         """Optimised NLL ≤ initial NLL."""
         from pymlt.likelihood import negative_log_likelihood
+
         basis = make_basis(order=3)
         y = simple_data(n=60)
         theta_init = _initial_theta(basis.order + 1, None)
@@ -184,8 +189,10 @@ class TestOptimizeConvergence:
         y = simple_data(n=100)
         result = optimize(basis, y)
         D = MonotonicityConstraint(basis.order + 1).as_matrix()
-        violations = D @ result.theta[:basis.order + 1]
-        assert np.all(violations >= -1e-6), f"Constraint violated: {violations.min():.2e}"
+        violations = D @ result.theta[: basis.order + 1]
+        assert np.all(violations >= -1e-6), (
+            f"Constraint violated: {violations.min():.2e}"
+        )
 
     def test_log_likelihood_is_finite(self):
         basis = make_basis(order=3)
@@ -226,7 +233,7 @@ class TestOptimizeWithCovariates:
         assert result.theta.shape == (basis.order + 1 + q,)
         assert np.isfinite(result.log_likelihood)
         # Only the basis part must be monotone
-        assert np.all(np.diff(result.theta[:basis.order + 1]) >= -1e-6)
+        assert np.all(np.diff(result.theta[: basis.order + 1]) >= -1e-6)
 
 
 class TestOptimizeSolvers:
@@ -277,6 +284,7 @@ class TestOptimizeRestarts:
 # base_distribution validation in optimize()
 # ---------------------------------------------------------------------------
 
+
 class TestBaseDistributionValidation:
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
@@ -309,9 +317,7 @@ class TestBaseDistributionValidation:
 
     def test_exponential_accepted_and_nonnegative_lower(self):
         """Exponential fit must respect h(y_min) = theta_b[0] >= 0."""
-        result = optimize(
-            make_basis(), simple_data(), base_distribution="exponential"
-        )
+        result = optimize(make_basis(), simple_data(), base_distribution="exponential")
         assert isinstance(result, OptimizationResult)
         # Feasibility (within SLSQP tolerance): theta_b[0] >= 0
         assert result.theta[0] >= -1e-6
@@ -321,6 +327,7 @@ class TestBaseDistributionValidation:
 # _make_objective — ValueError fallback penalty
 # ---------------------------------------------------------------------------
 
+
 class TestMakeObjectivePenalty:
     """Infeasible theta (h' ≤ 0) must trigger the ValueError catch that
     returns a large penalty instead of crashing the optimiser."""
@@ -328,9 +335,7 @@ class TestMakeObjectivePenalty:
     def test_infeasible_theta_grad_returns_penalty(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         y = np.array([0.3, 0.5, 0.7])
-        obj = _make_objective(
-            basis, y, None, CensoringType.NONE, use_gradient=True
-        )
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])  # strictly decreasing
         val, grad = obj(theta_bad)
         assert val == 1e10
@@ -339,9 +344,7 @@ class TestMakeObjectivePenalty:
     def test_infeasible_theta_nograd_returns_penalty(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         y = np.array([0.3, 0.5, 0.7])
-        obj = _make_objective(
-            basis, y, None, CensoringType.NONE, use_gradient=False
-        )
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=False)
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
         val = obj(theta_bad)
         assert val == 1e10
@@ -351,11 +354,14 @@ class TestMakeObjectivePenalty:
 # optimize() — scipy-exception / all-fail fallback
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizeExceptionFallback:
     def test_all_attempts_raise_returns_initial(self, monkeypatch):
         """Every scipy call raises → fallback returns initial theta, unconverged."""
+
         def boom(*args, **kwargs):
             raise RuntimeError("scipy blew up")
+
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(max_restarts=2)
@@ -365,15 +371,15 @@ class TestOptimizeExceptionFallback:
         assert not result.converged
         assert result.n_iter == 0
         assert "exception" in result.solver_message.lower()
-        np.testing.assert_allclose(
-            result.theta, np.linspace(0.0, 1.0, basis.order + 1)
-        )
+        np.testing.assert_allclose(result.theta, np.linspace(0.0, 1.0, basis.order + 1))
         assert np.isfinite(result.log_likelihood)
 
     def test_exception_with_verbose_warns(self, monkeypatch):
         """verbose=True → RuntimeWarning emitted from the except branch."""
+
         def boom(*args, **kwargs):
             raise RuntimeError("scipy blew up")
+
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(max_restarts=0, verbose=True)
@@ -385,10 +391,10 @@ class TestOptimizeExceptionFallback:
 # optimize() — verbose warning on genuine non-convergence
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizeVerboseNonConvergence:
     def test_verbose_warns_on_non_convergence(self):
         """Tight iter budget → scipy returns success=False → verbose warning."""
         cfg = OptimizerConfig(max_iter=1, max_restarts=3, verbose=True)
         with pytest.warns(RuntimeWarning, match="did not converge"):
             optimize(make_basis(order=3), simple_data(n=80), config=cfg)
-

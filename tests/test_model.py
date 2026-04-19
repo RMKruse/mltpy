@@ -1108,6 +1108,7 @@ def test_integration_r_reference():
 # reaches at least that log-likelihood.
 # ---------------------------------------------------------------------------
 
+
 class TestExponentialWithCovariates:
     """Exponential support ([0, ∞)) must hold per observation when covariates
     are present: ``h(y_i|x_i) >= 0`` for every training row ``i``.
@@ -1123,9 +1124,7 @@ class TestExponentialWithCovariates:
         y = rng.uniform(0.05, 0.95, n)
         X = rng.normal(0.0, 0.5, (n, q))
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
-        model = ConditionalTransformationModel(
-            basis, base_distribution="exponential"
-        )
+        model = ConditionalTransformationModel(basis, base_distribution="exponential")
         model.fit(y, X=X)
         return model, basis, y, X
 
@@ -1198,9 +1197,7 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
     from pymlt.likelihood import log_likelihood
 
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
-    ll_py_at_theta_r = log_likelihood(
-        theta_r, basis, y_ref, base_distribution=name
-    )
+    ll_py_at_theta_r = log_likelihood(theta_r, basis, y_ref, base_distribution=name)
     # Same formula, same data, same theta → exact agreement with R mlt
     np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-8)
 
