@@ -262,6 +262,12 @@ def build_constraints(
     support_rows: NDArray[np.float64] | None = None
     if nonneg_lower:
         if X is None:
+            if total > n_params:  
+                raise ValueError(  
+                    "X must be provided when nonneg_lower=True and"  
+                    "total_params > n_params so support-feasibility"  
+                    "constraints can include the regression coefficients."  
+                )
             support_rows = np.zeros((1, total))
             support_rows[0, 0] = 1.0
         else:

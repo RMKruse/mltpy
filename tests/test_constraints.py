@@ -334,6 +334,7 @@ class TestNonnegLower:
         vals = support["fun"](theta)
         assert vals[0] == pytest.approx(0.5 + 1.0 * 1.0 + (-0.5) * 0.0)
         assert vals[1] == pytest.approx(0.5 + (-2.0) * 1.0 + 0.3 * 0.0)
+        assert vals[1] < 0
         assert vals[2] == pytest.approx(0.5 + 0.5 * 1.0 + 1.0 * 0.0)
 
     def test_covariates_jacobian_matches_support_matrix(self):
