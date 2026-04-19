@@ -1,4 +1,5 @@
 """Tests for pymlt.variables — variable types and CensoredData."""
+
 import numpy as np
 import pytest
 from hypothesis import given, settings
@@ -15,6 +16,7 @@ from pymlt.variables import (
 # ---------------------------------------------------------------------------
 # NumericVariable
 # ---------------------------------------------------------------------------
+
 
 class TestNumericVariable:
     def test_basic_creation(self):
@@ -61,6 +63,7 @@ class TestNumericVariable:
 # OrderedVariable
 # ---------------------------------------------------------------------------
 
+
 class TestOrderedVariable:
     def test_basic_creation(self):
         v = OrderedVariable("grade", levels=["low", "medium", "high"])
@@ -94,6 +97,7 @@ class TestOrderedVariable:
 # SurvivalVariable
 # ---------------------------------------------------------------------------
 
+
 class TestSurvivalVariable:
     def test_default_support(self):
         v = SurvivalVariable("t")
@@ -121,6 +125,7 @@ class TestSurvivalVariable:
 # CensoredData — constructors
 # ---------------------------------------------------------------------------
 
+
 class TestCensoredDataFromExact:
     def test_basic(self):
         y = np.array([1.0, 2.0, 3.0])
@@ -145,7 +150,11 @@ class TestCensoredDataFromExact:
         y[0] = 99.0
         assert cd.exact[0] == 1.0
 
-    @given(arrays(float, st.integers(1, 50), elements=st.floats(-1e6, 1e6, allow_nan=False)))
+    @given(
+        arrays(
+            float, st.integers(1, 50), elements=st.floats(-1e6, 1e6, allow_nan=False)
+        )
+    )
     def test_all_exact_for_any_finite_array(self, y):
         cd = CensoredData.from_exact(y)
         assert cd.is_exact_mask.all()
@@ -231,6 +240,7 @@ class TestCensoredDataIntervalCensored:
 # CensoredData — direct construction / validation
 # ---------------------------------------------------------------------------
 
+
 class TestCensoredDataValidation:
     def test_length_mismatch_lower_raises(self):
         with pytest.raises(ValueError, match="same length"):
@@ -289,6 +299,7 @@ class TestCensoredDataValidation:
 # ---------------------------------------------------------------------------
 # CensoredData — mask exclusivity (property-based)
 # ---------------------------------------------------------------------------
+
 
 @given(
     y=arrays(float, st.integers(1, 30), elements=st.floats(-1e3, 1e3, allow_nan=False)),

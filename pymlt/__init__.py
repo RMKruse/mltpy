@@ -1,5 +1,11 @@
 """pymlt — Conditional Transformation Models in Python."""
 
+from pymlt.likelihood import (
+    hessian,
+    log_likelihood,
+    negative_log_likelihood,
+    score_matrix,
+)
 from pymlt.model import (
     MLT,
     AnovaResult,
@@ -32,6 +38,11 @@ __all__ = [
     # Inference
     "anova",
     "AnovaResult",
+    # Likelihood primitives
+    "log_likelihood",
+    "negative_log_likelihood",
+    "hessian",
+    "score_matrix",
     # Exceptions / warnings
     "NotFittedError",
     "ConvergenceWarning",

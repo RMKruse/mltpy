@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.stats import norm as _norm
 
 from pymlt.model import MLT
 from pymlt.optimizer import OptimizerConfig
@@ -61,6 +62,13 @@ class _TramModel(MLT):
     def summary(self) -> str:
         """Return a formatted diagnostic string.
 
+        When covariates are present the output includes a Wald coefficient
+        table for the shift terms (``beta``), matching R ``tram::summary``:
+        ``Estimate``, ``Std. Error``, ``z value``, ``Pr(>|z|)``.  Baseline
+        Bernstein coefficients ``theta_b`` are treated as nuisance and not
+        tabulated — they are constrained (monotone) and the corresponding
+        Wald z-tests are not meaningful.
+
         Returns
         -------
         str
@@ -87,7 +95,49 @@ class _TramModel(MLT):
                 f"Converged:    {'Yes' if self.result_.converged else 'No'}",
                 f"n_restarts:   {self.result_.n_restarts}",
             ]
+            table = self._coef_table()
+            if table is not None:
+                lines += ["", "Coefficients:", table]
         return "\n".join(lines)
+
+    def _coef_table(self) -> str | None:
+        """Format a Wald coefficient table for the ``beta`` block.
+
+        Returns ``None`` when the fitted model has no covariates or if the
+        Hessian is singular so that standard errors cannot be computed.
+        """
+        if self.theta_ is None:
+            return None
+        p = self.basis.order + 1
+        q = self.theta_.size - p
+        if q <= 0:
+            return None
+
+        try:
+            se = self.standard_errors()
+        except RuntimeError:
+            return "  [Standardfehler nicht verfügbar: Hesse-Matrix ist singulär.]"
+
+        beta = self.theta_[p:]
+        beta_se = se[p:]
+        z = beta / beta_se
+        pvals = 2.0 * _norm.sf(np.abs(z))
+
+        names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q)]
+        name_width = max(len(n) for n in names)
+        name_width = max(name_width, 4)
+
+        header = (
+            f"  {'':<{name_width}}  {'Estimate':>10}  {'Std. Error':>10}  "
+            f"{'z value':>8}  {'Pr(>|z|)':>9}"
+        )
+        rows = [header]
+        for name, b, s, zv, pv in zip(names, beta, beta_se, z, pvals):
+            rows.append(
+                f"  {name:<{name_width}}  {b:>10.4f}  {s:>10.4f}  "
+                f"{zv:>8.3f}  {pv:>9.4g}"
+            )
+        return "\n".join(rows)
 
     def plot(self, y: NDArray[np.float64], ax: Any = None) -> Any | list[Any]:
         """Plot the estimated CDF and density side by side.

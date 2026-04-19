@@ -303,3 +303,121 @@ writeLines(format(lm_cov_coef, digits = 15),
 
 cat(sprintf("Lm covariate: n=%d, intercept=%.6f, slope=%.6f, sigma=%.6f\n",
             n_lm_cov, lm_cov_coef[1], lm_cov_coef[2], lm_cov_coef[3]))
+
+# ---------------------------------------------------------------------------
+# vcov / estfun / standard errors references
+#
+# For each of three canonical fits (BoxCox, Colr, Coxph) on data with one
+# covariate, we write:
+#
+#   vcov_<model>_y.txt       — response
+#   vcov_<model>_event.txt   — 1=observed, 0=right-censored (Coxph only)
+#   vcov_<model>_x.txt       — single covariate
+#   vcov_<model>_support.txt — "a b" on one line
+#   vcov_<model>_theta.txt   — [theta_basis | beta] evaluated at R's MLE
+#   vcov_<model>_vcov.txt    — flattened vcov(fit) matrix (row-major)
+#   vcov_<model>_estfun.txt  — flattened sandwich::estfun(fit) matrix (row-major)
+#
+# pymlt tests load theta and data, call hessian()/score_matrix() at that
+# theta, invert the Hessian, and cross-check against R's vcov and estfun.
+# This isolates the analytical Hessian formula from optimiser differences.
+# ---------------------------------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(sandwich)
+})
+
+# Helper: flatten an R matrix by row to match numpy's default row-major layout.
+flatten_row_major <- function(mat) {
+  as.numeric(t(mat))
+}
+
+# --- BoxCox (normal base, exact) -----------------------------------------
+set.seed(101)
+n_bc <- 150
+x_bc <- rnorm(n_bc)
+y_bc <- 1.0 + 0.8 * x_bc + rnorm(n_bc, sd = 0.6)
+a_bc <- min(y_bc) - 0.1
+b_bc <- max(y_bc) + 0.1
+fit_bc <- tram::BoxCox(y ~ x, data = data.frame(y = y_bc, x = x_bc),
+                       support = c(a_bc, b_bc), order = 4)
+theta_bc   <- coef(fit_bc, with_baseline = TRUE)
+estfun_bc  <- sandwich::estfun(fit_bc)
+# tram's vcov() restricts to beta; mlt's vcov() returns the full (p+q, p+q)
+# observed information inverse — that's what we need to match against pymlt.
+vcov_full_bc <- vcov(as.mlt(fit_bc))
+
+writeLines(format(y_bc, digits = 15), con = file.path(out_dir, "vcov_boxcox_y.txt"))
+writeLines(format(x_bc, digits = 15), con = file.path(out_dir, "vcov_boxcox_x.txt"))
+writeLines(paste(format(a_bc, digits = 15),
+                 format(b_bc, digits = 15)),
+           con = file.path(out_dir, "vcov_boxcox_support.txt"))
+writeLines(format(theta_bc, digits = 15),
+           con = file.path(out_dir, "vcov_boxcox_theta.txt"))
+writeLines(format(flatten_row_major(vcov_full_bc), digits = 15),
+           con = file.path(out_dir, "vcov_boxcox_vcov.txt"))
+writeLines(format(flatten_row_major(estfun_bc), digits = 15),
+           con = file.path(out_dir, "vcov_boxcox_estfun.txt"))
+
+cat(sprintf("BoxCox vcov ref: n=%d, p+q=%d\n", n_bc, length(theta_bc)))
+
+# --- Colr (logistic base, exact) -----------------------------------------
+set.seed(103)
+n_colr <- 150
+x_colr <- rnorm(n_colr)
+y_colr <- rlogis(n_colr, location = 0.5 * x_colr, scale = 1.0)
+a_colr <- min(y_colr) - 0.1
+b_colr <- max(y_colr) + 0.1
+fit_colr <- tram::Colr(y ~ x, data = data.frame(y = y_colr, x = x_colr),
+                       support = c(a_colr, b_colr), order = 4)
+theta_colr  <- coef(fit_colr, with_baseline = TRUE)
+estfun_colr <- sandwich::estfun(fit_colr)
+vcov_full_colr <- vcov(as.mlt(fit_colr))
+
+writeLines(format(y_colr, digits = 15), con = file.path(out_dir, "vcov_colr_y.txt"))
+writeLines(format(x_colr, digits = 15), con = file.path(out_dir, "vcov_colr_x.txt"))
+writeLines(paste(format(a_colr, digits = 15),
+                 format(b_colr, digits = 15)),
+           con = file.path(out_dir, "vcov_colr_support.txt"))
+writeLines(format(theta_colr, digits = 15),
+           con = file.path(out_dir, "vcov_colr_theta.txt"))
+writeLines(format(flatten_row_major(vcov_full_colr), digits = 15),
+           con = file.path(out_dir, "vcov_colr_vcov.txt"))
+writeLines(format(flatten_row_major(estfun_colr), digits = 15),
+           con = file.path(out_dir, "vcov_colr_estfun.txt"))
+
+cat(sprintf("Colr vcov ref: n=%d, p+q=%d\n", n_colr, length(theta_colr)))
+
+# --- Coxph (min extreme value base, right-censored) ----------------------
+set.seed(107)
+n_cx <- 200
+x_cx <- rnorm(n_cx)
+t_cx <- rexp(n_cx, rate = exp(0.3 * x_cx))
+cens_cx <- rexp(n_cx, rate = 0.4)
+y_cx <- pmin(t_cx, cens_cx)
+event_cx <- as.integer(t_cx <= cens_cx)
+a_cx <- 1e-3
+b_cx <- max(y_cx) + 0.1
+fit_cx <- tram::Coxph(Surv(y, event) ~ x,
+                      data = data.frame(y = y_cx, event = event_cx, x = x_cx),
+                      support = c(a_cx, b_cx), order = 4)
+theta_cx   <- coef(fit_cx, with_baseline = TRUE)
+estfun_cx  <- sandwich::estfun(fit_cx)
+vcov_full_cx <- vcov(as.mlt(fit_cx))
+
+writeLines(format(y_cx, digits = 15), con = file.path(out_dir, "vcov_coxph_y.txt"))
+writeLines(as.character(event_cx),
+           con = file.path(out_dir, "vcov_coxph_event.txt"))
+writeLines(format(x_cx, digits = 15), con = file.path(out_dir, "vcov_coxph_x.txt"))
+writeLines(paste(format(a_cx, digits = 15),
+                 format(b_cx, digits = 15)),
+           con = file.path(out_dir, "vcov_coxph_support.txt"))
+writeLines(format(theta_cx, digits = 15),
+           con = file.path(out_dir, "vcov_coxph_theta.txt"))
+writeLines(format(flatten_row_major(vcov_full_cx), digits = 15),
+           con = file.path(out_dir, "vcov_coxph_vcov.txt"))
+writeLines(format(flatten_row_major(estfun_cx), digits = 15),
+           con = file.path(out_dir, "vcov_coxph_estfun.txt"))
+
+cat(sprintf("Coxph vcov ref: n=%d, p+q=%d, observed=%d\n",
+            n_cx, length(theta_cx), sum(event_cx == 1)))
