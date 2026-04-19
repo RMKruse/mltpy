@@ -19,18 +19,20 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
-from scipy.stats import chi2
+from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import (
     BaseDistribution,
     _get_dist,
+    _neg_score,
     log_likelihood,
 )
 from pymlt.likelihood import (
@@ -74,6 +76,14 @@ _VALID_WHAT = (
     "odds",
     "logodds",
     "quantile",
+)
+
+_VALID_CONFBAND_WHAT = (
+    "trafo",
+    "distribution",
+    "survivor",
+    "density",
+    "hazard",
 )
 
 # Small epsilon used for bracket safety in brentq
@@ -651,6 +661,300 @@ class ConditionalTransformationModel:
                 "Sattelpunkt stehen geblieben."
             )
         return cast(NDArray[np.float64], np.sqrt(diag))
+
+    def confint(
+        self,
+        level: float = 0.95,
+        parm: Sequence[int] | None = None,
+    ) -> NDArray[np.float64]:
+        """Wald confidence intervals for :attr:`theta_`.
+
+        Computes the symmetric normal-approximation interval
+
+        .. math::
+            \\hat\\theta_j \\pm z_{1-\\alpha/2}\\,\\sqrt{V_{jj}},
+
+        where :math:`V = \\mathrm{vcov}()` is the inverse observed information
+        matrix and :math:`z_{1-\\alpha/2}` is the standard normal quantile for
+        confidence ``level`` :math:`= 1-\\alpha`.  Matches R
+        ``confint.default(mlt_fit, level=level)``.
+
+        Parameters
+        ----------
+        level:
+            Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
+        parm:
+            Optional sequence of integer indices selecting a subset of
+            parameters.  ``None`` returns intervals for all entries of
+            :attr:`theta_`.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Array of shape ``(k, 2)`` with columns ``[lower, upper]``; ``k``
+            equals ``len(theta_)`` when ``parm is None`` else ``len(parm)``.
+            Row order matches the requested index order.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``level`` is outside ``(0, 1)`` or ``parm`` contains indices
+            outside ``[0, len(theta_))``.
+        RuntimeError
+            Propagated from :meth:`vcov` on singular Hessians.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1)).fit(y)
+        >>> ci = model.confint(level=0.95)  # shape (p, 2)
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+            )
+        if not (0.0 < level < 1.0):
+            raise ValueError(f"level={level!r} ist ungültig. Erwartet: 0 < level < 1.")
+
+        se = self.standard_errors()
+        k = self.theta_.size
+        if parm is None:
+            idx = np.arange(k)
+        else:
+            idx = np.asarray(parm, dtype=int).ravel()
+            if idx.size and (idx.min() < 0 or idx.max() >= k):
+                raise ValueError(
+                    f"parm enthält Indizes außerhalb [0, {k}). Erhalten: "
+                    f"min={int(idx.min())}, max={int(idx.max())}."
+                )
+
+        z = float(norm.ppf(0.5 * (1.0 + level)))
+        est = self.theta_[idx]
+        half = z * se[idx]
+        return np.column_stack((est - half, est + half))
+
+    def confband(
+        self,
+        y_grid: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        level: float = 0.95,
+        what: Literal[
+            "trafo", "distribution", "survivor", "density", "hazard"
+        ] = "distribution",
+    ) -> NDArray[np.float64]:
+        """Pointwise delta-method confidence band for a predicted curve.
+
+        For each grid point ``y_i`` (with an optional covariate profile
+        ``x``), compute a "linear-predictor" scale ``η_i`` together with its
+        asymptotic variance via the delta method
+
+        .. math::
+            \\eta_i = g(y_i, x;\\,\\theta),\\qquad
+            \\mathrm{Var}(\\eta_i) = J_i\\,V\\,J_i^\\top,\\quad
+            J_i = \\partial\\eta_i/\\partial\\theta,
+
+        form the Wald interval ``η_i ± z · sqrt(Var(η_i))``, and
+        back-transform the endpoints to the requested ``what`` scale.  The
+        intervals are *pointwise*, not simultaneous.
+
+        The linear predictor and back-transform depend on ``what``:
+
+        * ``"trafo"``        — ``η = h``; back-transform = identity
+        * ``"distribution"`` — ``η = h``; back-transform = ``F_base(·)``
+        * ``"survivor"``     — ``η = h``; back-transform = ``1 − F_base(·)``
+          (endpoints swapped, since ``1 − F`` is decreasing)
+        * ``"density"``      — ``η = log f(h) + log h'``; back-transform = ``exp(·)``
+        * ``"hazard"``       — ``η = log f(h) + log h' − log S(h)``;
+          back-transform = ``exp(·)``
+
+        Parameters
+        ----------
+        y_grid:
+            Response values at which to evaluate the band.  Must lie within
+            ``basis.support``.
+        X:
+            Covariate profile for a single curve.  Accepts a 1D array of
+            length ``q`` or a 2D ``(1, q)`` array; broadcast across
+            ``y_grid``.  Required when the model was fit with covariates;
+            must be ``None`` when it was not.
+        level:
+            Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
+        what:
+            One of ``"trafo"``, ``"distribution"``, ``"survivor"``,
+            ``"density"``, ``"hazard"``.  Defaults to ``"distribution"``.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Array of shape ``(len(y_grid), 3)`` with columns
+            ``[estimate, lower, upper]`` on the ``what`` scale.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``level`` is outside ``(0, 1)``, ``what`` is not supported,
+            or the shape/presence of ``X`` is inconsistent with the fitted
+            model.
+        RuntimeError
+            Propagated from :meth:`vcov` on singular Hessians, or if the
+            fitted basis violates monotonicity at a grid point
+            (``h'(y) ≤ 0``), which would make the ``density``/``hazard``
+            linear predictor ill-defined.
+
+        Notes
+        -----
+        Working on the transformation scale before back-transforming keeps
+        probability bands in ``[0, 1]`` and density/hazard bands positive.
+        The reference R routine ``mlt::confband`` builds *simultaneous*
+        bands via multivariate-normal quantiles; this implementation is
+        pointwise to match the Wald construction used in most applied
+        survival plots.
+
+        Examples
+        --------
+        >>> model = Coxph(support=(0.01, t.max())).fit(cd, X=X)
+        >>> grid = np.linspace(0.1, t.max(), 100)
+        >>> band = model.confband(grid, X=X[:1], what="survivor")
+        >>> ax.fill_between(grid, band[:, 1], band[:, 2], alpha=0.2)
+        >>> ax.plot(grid, band[:, 0])
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+            )
+        if not (0.0 < level < 1.0):
+            raise ValueError(f"level={level!r} ist ungültig. Erwartet: 0 < level < 1.")
+        if what not in _VALID_CONFBAND_WHAT:
+            raise ValueError(
+                f"what={what!r} ist ungültig. Erlaubt: {_VALID_CONFBAND_WHAT}."
+            )
+
+        p = self.basis.order + 1
+        q = self.theta_.size - p
+        theta_b = self.theta_[:p]
+        beta = self.theta_[p:] if q > 0 else None
+
+        # Validate X versus the fitted parameter layout
+        if q == 0:
+            if X is not None:
+                raise ValueError(
+                    "Das Modell wurde ohne Kovariaten gefittet; X muss None sein."
+                )
+            x_row: NDArray[np.float64] | None = None
+        else:
+            if X is None:
+                raise ValueError(
+                    f"Das Modell wurde mit {q} Kovariaten gefittet; X ist "
+                    "erforderlich (Shape (q,) oder (1, q))."
+                )
+            X_arr = np.asarray(X, dtype=float)
+            if X_arr.ndim == 1:
+                X_arr = X_arr[None, :]
+            if X_arr.shape != (1, q):
+                raise ValueError(
+                    f"X hat Shape {X_arr.shape}, erwartet (q,) oder (1, q) mit q={q}."
+                )
+            x_row = X_arr[0]
+
+        y_arr = np.asarray(y_grid, dtype=float).ravel()
+        m = y_arr.size
+        V = self.vcov()
+
+        B = self.basis.evaluate(y_arr)  # (m, p)
+        D = self.basis.derivative(y_arr, order=1)  # (m, p)
+        h = B @ theta_b
+        hp = D @ theta_b
+        if x_row is not None and beta is not None:
+            h = h + float(x_row @ beta)
+
+        # Assemble per-grid-point Jacobian J of shape (m, p+q).
+        # For scales whose η involves log h', also validate h' > 0.
+        if what in ("density", "hazard") and np.any(hp <= 0.0):
+            raise RuntimeError(
+                "h'(y) <= 0 an mindestens einem Gitterpunkt — die "
+                f"{what}-Zielgröße hat kein log h'-Term und die Konfidenzband-"
+                "Formel ist undefiniert. Prüfe Monotonie des Fits oder wähle "
+                "ein anderes what."
+            )
+
+        dist = _get_dist(self.base_distribution)
+
+        if what in ("trafo", "distribution", "survivor"):
+            # η = h;  J_b = B(y),  J_β = x_row  (broadcast)
+            J = np.empty((m, p + q), dtype=np.float64)
+            J[:, :p] = B
+            if q > 0 and x_row is not None:
+                J[:, p:] = x_row[None, :]
+            eta = h
+        else:
+            # "density" or "hazard":
+            #   density:  η = log f(h) + log h'
+            #   hazard :  η = log f(h) + log h' - log S(h)
+            #   ∂/∂h  of log f(h)   = ψ(h)
+            #   ∂/∂h  of (-log S(h)) = λ(h) = f(h)/S(h)
+            # So:
+            #   dη/dθ_b = coeff * B(y) + D(y) / h'
+            #   dη/dβ   = coeff * x_row
+            # with coeff = ψ(h)         (density)
+            #      coeff = ψ(h) + λ(h)  (hazard)
+            psi = -_neg_score(h, dist)  # ψ(h) = d log f(h)/dh
+            if what == "hazard":
+                # λ(h) = f(h)/S(h); compute in log-space for tail stability.
+                lam = np.exp(dist.logpdf(h) - dist.logsf(h))
+                coeff = psi + lam
+            else:
+                coeff = psi
+
+            J = np.empty((m, p + q), dtype=np.float64)
+            J[:, :p] = coeff[:, None] * B + D / hp[:, None]
+            if q > 0 and x_row is not None:
+                J[:, p:] = coeff[:, None] * x_row[None, :]
+
+            if what == "density":
+                eta = dist.logpdf(h) + np.log(hp)
+            else:  # hazard
+                eta = dist.logpdf(h) + np.log(hp) - dist.logsf(h)
+
+        # Var(η_i) = J_i · V · J_i^T, vectorised across grid points.
+        var_eta = np.einsum("ij,jk,ik->i", J, V, J)
+        var_eta = np.maximum(var_eta, 0.0)
+        se_eta = np.sqrt(var_eta)
+
+        z = float(norm.ppf(0.5 * (1.0 + level)))
+        lo_eta = eta - z * se_eta
+        hi_eta = eta + z * se_eta
+
+        if what == "trafo":
+            est, lo, hi = eta, lo_eta, hi_eta
+        elif what == "distribution":
+            est = dist.cdf(h)
+            lo = dist.cdf(lo_eta)
+            hi = dist.cdf(hi_eta)
+        elif what == "survivor":
+            est = dist.sf(h)
+            # 1 − F is monotone decreasing → swap endpoints
+            lo = dist.sf(hi_eta)
+            hi = dist.sf(lo_eta)
+        else:  # density or hazard: both back-transformed with exp
+            est = np.exp(eta)
+            lo = np.exp(lo_eta)
+            hi = np.exp(hi_eta)
+
+        return cast(
+            NDArray[np.float64],
+            np.column_stack(
+                (
+                    np.asarray(est, dtype=np.float64),
+                    np.asarray(lo, dtype=np.float64),
+                    np.asarray(hi, dtype=np.float64),
+                )
+            ),
+        )
 
     def aic(self) -> float:
         """Akaike Information Criterion of the fitted model.
