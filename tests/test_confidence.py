@@ -352,3 +352,25 @@ def test_confband_intercept_only_no_X():
     # X=None works when the model was fit without covariates.
     band = model.confband(grid, X=None, what="distribution")
     assert band.shape == (10, 3)
+
+
+@pytest.mark.parametrize("what", ["density", "hazard"])
+def test_confband_density_hazard_clip_extreme_h_warns(what):
+    """Saturated |h| > _H_CLIP on density/hazard must warn and stay finite.
+
+    Forces the condition by hand-setting theta_ to values that drive
+    h = B @ theta_b well past ±30 across the basis support, then checks
+    that the band is fully finite and a UserWarning mentioning the clip
+    fires from the model module (not leaking inf from dist.logsf(h)).
+    """
+    rng = np.random.default_rng(11)
+    y = rng.uniform(0.1, 0.9, 100)
+    model = MLT(order=4, support=(0.0, 1.0)).fit(y)
+    # Override theta with values spanning ±50 so h crosses ±_H_CLIP on the grid.
+    model.theta_ = np.linspace(-50.0, 50.0, model.theta_.size)
+    # Invert the hessian at the original theta is still valid; keep hessian_
+    # from the fit so vcov() is non-singular.
+    grid = np.linspace(0.01, 0.99, 25)
+    with pytest.warns(UserWarning, match="exceeds"):
+        band = model.confband(grid, what=what, level=0.95)
+    assert np.all(np.isfinite(band))

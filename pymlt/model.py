@@ -30,6 +30,7 @@ from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import (
+    _H_CLIP,
     BaseDistribution,
     _get_dist,
     _neg_score,
@@ -886,6 +887,7 @@ class ConditionalTransformationModel:
 
         if what in ("trafo", "distribution", "survivor"):
             # η = h;  J_b = B(y),  J_β = x_row  (broadcast)
+            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
             J = np.empty((m, p + q), dtype=np.float64)
             J[:, :p] = B
             if q > 0 and x_row is not None:
@@ -902,23 +904,40 @@ class ConditionalTransformationModel:
             #   dη/dβ   = coeff * x_row
             # with coeff = ψ(h)         (density)
             #      coeff = ψ(h) + λ(h)  (hazard)
-            psi = -_neg_score(h, dist)  # ψ(h) = d log f(h)/dh
+            # At extreme |h|, logsf(h) → -∞ for light-tailed bases (normal,
+            # min/max extreme value), so ψ and λ = exp(logpdf − logsf) can
+            # overflow and propagate inf into J and η.  Clip to ±_H_CLIP
+            # (the same bound likelihood.py uses on every h) and warn when
+            # the clip actually bites so the caller knows the band tails
+            # are saturated rather than silently infinite.
+            if np.any(np.abs(h) > _H_CLIP):
+                warnings.warn(
+                    f"confband(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} "
+                    "at one or more grid points; clipping for numerical "
+                    "stability. The band at these points is a floor/ceiling, "
+                    "not a true asymptotic interval. Consider restricting "
+                    "y_grid to values where the CDF is not saturated.",
+                    stacklevel=2,
+                )
+            h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+            psi = -_neg_score(h_c, dist)  # ψ(h) = d log f(h)/dh
             if what == "hazard":
                 # λ(h) = f(h)/S(h); compute in log-space for tail stability.
-                lam = np.exp(dist.logpdf(h) - dist.logsf(h))
+                lam = np.exp(dist.logpdf(h_c) - dist.logsf(h_c))
                 coeff = psi + lam
             else:
                 coeff = psi
 
+            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
             J = np.empty((m, p + q), dtype=np.float64)
             J[:, :p] = coeff[:, None] * B + D / hp[:, None]
             if q > 0 and x_row is not None:
                 J[:, p:] = coeff[:, None] * x_row[None, :]
 
             if what == "density":
-                eta = dist.logpdf(h) + np.log(hp)
+                eta = dist.logpdf(h_c) + np.log(hp)
             else:  # hazard
-                eta = dist.logpdf(h) + np.log(hp) - dist.logsf(h)
+                eta = dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
 
         # Var(η_i) = J_i · V · J_i^T, vectorised across grid points.
         var_eta = np.einsum("ij,jk,ik->i", J, V, J)
