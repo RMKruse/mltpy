@@ -15,6 +15,8 @@ Coxph
     Cox proportional hazards model for right-censored survival data.
 Colr
     Continuous outcome logistic regression — uses a logistic base distribution.
+Lm
+    Normal linear regression as a CTM (order=1 Bernstein, normal base).
 """
 
 from __future__ import annotations
@@ -396,3 +398,177 @@ class Colr(_TramModel):
             optimizer_config=optimizer_config,
             base_distribution="logistic",
         )
+
+
+# ---------------------------------------------------------------------------
+# Lm
+# ---------------------------------------------------------------------------
+
+
+class Lm(_TramModel):
+    r"""Normal linear regression expressed as a CTM.
+
+    Fixes the Bernstein basis to ``order=1`` and the base distribution to
+    standard normal.  With these constraints the transformation
+    :math:`h(y) = \theta_0 (1-u) + \theta_1 u`, where
+    :math:`u = (y-a)/(b-a)`, is affine, so the CTM
+    :math:`h(Y) - \beta^\top X \sim \mathcal{N}(0,1)` is exactly equivalent
+    to the classical normal linear model
+    :math:`Y = \mu + \gamma^\top X + \varepsilon`,
+    :math:`\varepsilon \sim \mathcal{N}(0, \sigma^2)`.
+
+    The mapping between CTM and lm parameters is
+
+    .. math::
+
+        \hat{\sigma} &= (b - a) / (\theta_1 - \theta_0), \\
+        \hat{\mu}    &= a - \theta_0 \hat{\sigma}, \\
+        \hat{\gamma} &= -\hat{\sigma} \, \beta_{\mathrm{ctm}}.
+
+    The minus sign on :math:`\hat{\gamma}` reflects pymlt's internal shift
+    convention ``h(y) + X @ beta = z`` (the R ``tram`` package uses
+    ``h(y) - X @ beta = z``, hence R's :math:`\beta` equals
+    :math:`-\beta_{\mathrm{ctm}}`).
+
+    Note that :math:`\hat{\sigma}` is the MLE, which differs from the
+    unbiased OLS estimator returned by ``lm()`` by a factor
+    :math:`\sqrt{(n-p)/n}`.
+
+    These are exposed via :attr:`sigma_`, :attr:`intercept_`, and
+    :attr:`coef_` (sklearn-style fitted attributes).
+
+    Parameters
+    ----------
+    support:
+        Closed interval ``(a, b)`` covering all observed response values.
+    optimizer_config:
+        Optimisation settings.  If ``None``, library defaults are used.
+
+    Notes
+    -----
+    The Bernstein order is fixed at ``1`` by construction; passing an
+    ``order`` keyword raises ``TypeError``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from pymlt.tram import Lm
+    >>> rng = np.random.default_rng(0)
+    >>> x = rng.normal(size=200)
+    >>> y = 2.0 + 3.0 * x + rng.normal(scale=0.5, size=200)
+    >>> model = Lm(support=(y.min() - 0.1, y.max() + 0.1))
+    >>> model.fit(y, X=x.reshape(-1, 1))
+    >>> # OLS cross-check
+    >>> A = np.c_[np.ones_like(x), x]
+    >>> beta_ols, *_ = np.linalg.lstsq(A, y, rcond=None)
+    >>> np.allclose([model.intercept_, model.coef_[0]], beta_ols, atol=0.05)
+    True
+    """
+
+    def __init__(
+        self,
+        support: tuple[float, float],
+        optimizer_config: OptimizerConfig | None = None,
+    ) -> None:
+        super().__init__(
+            order=1,
+            support=support,
+            censoring=CensoringType.NONE,
+            optimizer_config=optimizer_config,
+            base_distribution="normal",
+        )
+
+    def _baseline(self) -> tuple[float, float]:
+        """Return the two baseline Bernstein coefficients (theta_0, theta_1)."""
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
+        return float(self.theta_[0]), float(self.theta_[1])
+
+    @property
+    def sigma_(self) -> float:
+        """Estimated residual standard deviation of the equivalent lm.
+
+        Computed as ``(b - a) / (theta_1 - theta_0)``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        RuntimeError
+            If the fit is degenerate with ``theta_[1] == theta_[0]``, which
+            is feasible under the non-strict monotonicity constraint but
+            leaves the lm-equivalence mapping undefined.
+        """
+        t0, t1 = self._baseline()
+        a, b = self._support
+        denom = t1 - t0
+        if denom <= 0.0:
+            raise RuntimeError(
+                f"Degenerate Lm fit: theta_[1] - theta_[0] = {denom!r} "
+                "(expected > 0). The fitted transformation is constant "
+                "on the support, so sigma_, intercept_, and coef_ are "
+                "undefined. Check the fit diagnostics (support, data "
+                "scale, optimiser convergence)."
+            )
+        return (b - a) / denom
+
+    @property
+    def intercept_(self) -> float:
+        """Estimated intercept of the equivalent lm.
+
+        Computed as ``a - theta_0 * sigma_``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        """
+        t0, _ = self._baseline()
+        a, _ = self._support
+        return a - t0 * self.sigma_
+
+    @property
+    def coef_(self) -> NDArray[np.float64]:
+        """Estimated regression coefficients of the equivalent lm.
+
+        Computed as ``-sigma_ * beta_ctm``, where ``beta_ctm`` is the
+        covariate part of ``theta_``.  Has shape ``(0,)`` when no
+        covariates were supplied at fit time.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
+        beta_ctm = self.theta_[2:]
+        return -self.sigma_ * beta_ctm
+
+    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Evaluate the fitted affine transformation h(y) = B(y) @ theta_b.
+
+        Parameters
+        ----------
+        y:
+            Response values within ``basis.support``.
+
+        Returns
+        -------
+        NDArray of shape ``(len(y),)``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
+        p = self.basis.order + 1
+        theta_b = self.theta_[:p]
+        y_arr = np.asarray(y, dtype=float).ravel()
+        B = self.basis.evaluate(y_arr)
+        return B @ theta_b

@@ -217,3 +217,89 @@ writeLines(format(ll_exp, digits = 15),
            con = file.path(out_dir, "mlt_exponential_ll.txt"))
 
 cat(sprintf("Exponential: n=%d, ll=%.6f\n", length(y_exp), ll_exp))
+
+# ---------------------------------------------------------------------------
+# Lm (normal linear regression as a CTM) reference
+#
+# tram::Lm with order=1 Bernstein + normal base is equivalent to classical
+# normal linear regression.  We write both the CTM Bernstein coefficients
+# (from tram::Lm) and the lm() point estimates so pymlt tests can verify
+# both the raw theta_ and the derived (intercept, slope, sigma).
+#
+#   lm_uni_y.txt         — response vector
+#   lm_uni_support.txt   — support "a b" on one line
+#   lm_uni_theta.txt     — [theta_0, theta_1] from tram::Lm
+#   lm_uni_lm_coef.txt   — [intercept, sigma] from lm() + summary()$sigma
+#
+#   lm_cov_y.txt         — response vector
+#   lm_cov_x.txt         — single covariate
+#   lm_cov_support.txt   — support "a b" on one line
+#   lm_cov_theta.txt     — [theta_0, theta_1, beta_ctm]
+#   lm_cov_lm_coef.txt   — [intercept, slope, sigma] from lm()
+# ---------------------------------------------------------------------------
+
+suppressPackageStartupMessages({
+  library(tram)
+})
+
+# Univariate case --------------------------------------------------------
+set.seed(17)
+n_lm_uni <- 200
+y_lm_uni <- rnorm(n_lm_uni, mean = 2.0, sd = 0.5)
+a_uni <- min(y_lm_uni) - 0.1
+b_uni <- max(y_lm_uni) + 0.1
+df_lm_uni <- data.frame(y = y_lm_uni)
+
+fit_lm_uni    <- tram::Lm(y ~ 1, data = df_lm_uni,
+                          support = c(a_uni, b_uni), order = 1)
+fit_base_uni  <- lm(y ~ 1, data = df_lm_uni)
+
+theta_lm_uni <- coef(fit_lm_uni, with_baseline = TRUE)
+lm_uni_coef  <- c(intercept = unname(coef(fit_base_uni)[1]),
+                  sigma     = summary(fit_base_uni)$sigma)
+
+writeLines(format(y_lm_uni, digits = 15),
+           con = file.path(out_dir, "lm_uni_y.txt"))
+writeLines(paste(format(a_uni, digits = 15),
+                 format(b_uni, digits = 15)),
+           con = file.path(out_dir, "lm_uni_support.txt"))
+writeLines(format(theta_lm_uni, digits = 15),
+           con = file.path(out_dir, "lm_uni_theta.txt"))
+writeLines(format(lm_uni_coef, digits = 15),
+           con = file.path(out_dir, "lm_uni_lm_coef.txt"))
+
+cat(sprintf("Lm univariate: n=%d, intercept=%.6f, sigma=%.6f\n",
+            n_lm_uni, lm_uni_coef[1], lm_uni_coef[2]))
+
+# One-covariate case -----------------------------------------------------
+set.seed(19)
+n_lm_cov <- 200
+x_lm_cov <- rnorm(n_lm_cov)
+y_lm_cov <- 2.0 + 3.0 * x_lm_cov + rnorm(n_lm_cov, sd = 0.5)
+a_cov <- min(y_lm_cov) - 0.1
+b_cov <- max(y_lm_cov) + 0.1
+df_lm_cov <- data.frame(y = y_lm_cov, x = x_lm_cov)
+
+fit_lm_cov   <- tram::Lm(y ~ x, data = df_lm_cov,
+                         support = c(a_cov, b_cov), order = 1)
+fit_base_cov <- lm(y ~ x, data = df_lm_cov)
+
+theta_lm_cov <- coef(fit_lm_cov, with_baseline = TRUE)
+lm_cov_coef  <- c(intercept = unname(coef(fit_base_cov)[1]),
+                  slope     = unname(coef(fit_base_cov)[2]),
+                  sigma     = summary(fit_base_cov)$sigma)
+
+writeLines(format(y_lm_cov, digits = 15),
+           con = file.path(out_dir, "lm_cov_y.txt"))
+writeLines(format(x_lm_cov, digits = 15),
+           con = file.path(out_dir, "lm_cov_x.txt"))
+writeLines(paste(format(a_cov, digits = 15),
+                 format(b_cov, digits = 15)),
+           con = file.path(out_dir, "lm_cov_support.txt"))
+writeLines(format(theta_lm_cov, digits = 15),
+           con = file.path(out_dir, "lm_cov_theta.txt"))
+writeLines(format(lm_cov_coef, digits = 15),
+           con = file.path(out_dir, "lm_cov_lm_coef.txt"))
+
+cat(sprintf("Lm covariate: n=%d, intercept=%.6f, slope=%.6f, sigma=%.6f\n",
+            n_lm_cov, lm_cov_coef[1], lm_cov_coef[2], lm_cov_coef[3]))
