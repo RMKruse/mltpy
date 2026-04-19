@@ -477,6 +477,18 @@ class TestGetDist:
         from scipy.stats import logistic
         assert _get_dist("logistic") is logistic
 
+    def test_min_extreme_value_returns_gumbel_l(self):
+        from scipy.stats import gumbel_l
+        assert _get_dist("min_extreme_value") is gumbel_l
+
+    def test_max_extreme_value_returns_gumbel_r(self):
+        from scipy.stats import gumbel_r
+        assert _get_dist("max_extreme_value") is gumbel_r
+
+    def test_exponential_returns_expon(self):
+        from scipy.stats import expon
+        assert _get_dist("exponential") is expon
+
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
             _get_dist("cauchy")
@@ -492,7 +504,11 @@ class TestGetDist:
 
     def test_valid_distributions_constant(self):
         assert set(_VALID_BASE_DISTRIBUTIONS) == {
-            "normal", "logistic", "min_extreme_value",
+            "normal",
+            "logistic",
+            "min_extreme_value",
+            "max_extreme_value",
+            "exponential",
         }
 
 
@@ -510,3 +526,150 @@ def test_negative_log_likelihood_invalid_distribution_raises():
     y = np.linspace(0.1, 0.9, 20)
     with pytest.raises(ValueError, match="base_distribution"):
         negative_log_likelihood(theta, basis, y, base_distribution="student-t")
+
+
+# ---------------------------------------------------------------------------
+# _neg_score — analytical formulae per base distribution
+# ---------------------------------------------------------------------------
+
+class TestNegScore:
+    """Verify _neg_score(h, dist) matches -∂ log f(h)/∂h for each distribution.
+
+    Reference values are derived from the closed-form score of each density.
+    A finite-difference check on ``dist.logpdf`` confirms the formula.
+    """
+
+    @staticmethod
+    def _fd_neg_score(dist, h, eps=1e-6):
+        # -(d/dh log f(h)) via central differences on logpdf.
+        return -(dist.logpdf(h + eps) - dist.logpdf(h - eps)) / (2 * eps)
+
+    def test_normal(self):
+        from scipy.stats import norm
+
+        from pymlt.likelihood import _neg_score
+        h = np.linspace(-2.0, 2.0, 9)
+        np.testing.assert_allclose(_neg_score(h, norm), h, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, norm), self._fd_neg_score(norm, h),
+                                   rtol=1e-4)
+
+    def test_min_extreme_value(self):
+        from scipy.stats import gumbel_l
+
+        from pymlt.likelihood import _neg_score
+        h = np.linspace(-1.5, 1.5, 9)
+        expected = np.exp(h) - 1.0
+        np.testing.assert_allclose(_neg_score(h, gumbel_l), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, gumbel_l),
+                                   self._fd_neg_score(gumbel_l, h), rtol=1e-4)
+
+    def test_max_extreme_value(self):
+        from scipy.stats import gumbel_r
+
+        from pymlt.likelihood import _neg_score
+        h = np.linspace(-1.5, 1.5, 9)
+        expected = 1.0 - np.exp(-h)
+        np.testing.assert_allclose(_neg_score(h, gumbel_r), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, gumbel_r),
+                                   self._fd_neg_score(gumbel_r, h), rtol=1e-4)
+
+    def test_exponential(self):
+        from scipy.stats import expon
+
+        from pymlt.likelihood import _neg_score
+        h = np.linspace(0.1, 3.0, 9)  # strictly > 0: in support
+        expected = np.ones_like(h)
+        np.testing.assert_allclose(_neg_score(h, expon), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, expon),
+                                   self._fd_neg_score(expon, h), rtol=1e-4)
+
+    def test_logistic(self):
+        from scipy.stats import logistic
+
+        from pymlt.likelihood import _neg_score
+        h = np.linspace(-2.0, 2.0, 9)
+        expected = 2.0 * logistic.cdf(h) - 1.0
+        np.testing.assert_allclose(_neg_score(h, logistic), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, logistic),
+                                   self._fd_neg_score(logistic, h), rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Per-distribution log-likelihood + gradient checks
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "base_distribution",
+    ["normal", "logistic", "min_extreme_value", "max_extreme_value", "exponential"],
+)
+class TestPerDistributionLikelihood:
+    """End-to-end per-distribution coverage of log_likelihood and its gradient."""
+
+    def _data(self, base_distribution):
+        """Return (basis, theta, y) feasible for the given base distribution.
+
+        For ``exponential`` we need h(y) >= 0, so start theta_b at 0.
+        """
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.4)  # theta_b[0] = 0, feasible for all
+        y = np.linspace(0.1, 0.9, 12)
+        return basis, theta, y
+
+    def test_finite(self, base_distribution):
+        basis, theta, y = self._data(base_distribution)
+        ll = log_likelihood(theta, basis, y, base_distribution=base_distribution)
+        assert np.isfinite(ll)
+
+    def test_manual_matches_scipy(self, base_distribution):
+        """LL = Σ dist.logpdf(h) + Σ log(h') computed directly."""
+        basis, theta, y = self._data(base_distribution)
+        dist = _get_dist(base_distribution)
+        B = basis.evaluate(y)
+        D = basis.derivative(y, order=1)
+        h = B @ theta
+        hp = D @ theta
+        expected = float(np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
+        result = log_likelihood(theta, basis, y, base_distribution=base_distribution)
+        np.testing.assert_allclose(result, expected, rtol=1e-10)
+
+    def test_gradient_matches_fd(self, base_distribution):
+        basis, theta, y = self._data(base_distribution)
+
+        def f(t):
+            return negative_log_likelihood(
+                t, basis, y, None, CensoringType.NONE,
+                base_distribution=base_distribution,
+            )
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t, basis, y, None, CensoringType.NONE, gradient=True,
+                base_distribution=base_distribution,
+            )
+            return grad
+
+        err = check_grad(f, g, theta)
+        assert err < 1e-4, f"check_grad err={err:.2e} for {base_distribution}"
+
+    def test_gradient_right_matches_fd(self, base_distribution):
+        basis, theta, _ = self._data(base_distribution)
+        rng = np.random.default_rng(11)
+        y = np.sort(rng.uniform(0.05, 0.95, 12))
+        censored = rng.random(12) < 0.4
+        cd = CensoredData.right_censored(y, censored)
+
+        def f(t):
+            return negative_log_likelihood(
+                t, basis, cd, None, CensoringType.RIGHT,
+                base_distribution=base_distribution,
+            )
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t, basis, cd, None, CensoringType.RIGHT, gradient=True,
+                base_distribution=base_distribution,
+            )
+            return grad
+
+        err = check_grad(f, g, theta)
+        assert err < 1e-4, f"check_grad err={err:.2e} for {base_distribution}"

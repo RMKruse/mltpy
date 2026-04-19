@@ -295,6 +295,27 @@ class TestBaseDistributionValidation:
         result = optimize(make_basis(), simple_data(), base_distribution="logistic")
         assert isinstance(result, OptimizationResult)
 
+    def test_min_extreme_value_accepted(self):
+        result = optimize(
+            make_basis(), simple_data(), base_distribution="min_extreme_value"
+        )
+        assert isinstance(result, OptimizationResult)
+
+    def test_max_extreme_value_accepted(self):
+        result = optimize(
+            make_basis(), simple_data(), base_distribution="max_extreme_value"
+        )
+        assert isinstance(result, OptimizationResult)
+
+    def test_exponential_accepted_and_nonnegative_lower(self):
+        """Exponential fit must respect h(y_min) = theta_b[0] >= 0."""
+        result = optimize(
+            make_basis(), simple_data(), base_distribution="exponential"
+        )
+        assert isinstance(result, OptimizationResult)
+        # Feasibility (within SLSQP tolerance): theta_b[0] >= 0
+        assert result.theta[0] >= -1e-6
+
 
 # ---------------------------------------------------------------------------
 # _make_objective — ValueError fallback penalty

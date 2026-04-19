@@ -181,12 +181,15 @@ def build_constraints(
     upper: float | None = None,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
     total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
 ) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
     Always includes the monotonicity constraint (non-decreasing ``theta``).
     Optionally adds boundary equality constraints when ``lower`` or ``upper``
-    are specified.
+    are specified, and support-feasibility inequalities when ``nonneg_lower``
+    is set (see below).
 
     ``optimizer.py`` calls this function — it does **not** instantiate the
     constraint classes directly.
@@ -208,7 +211,37 @@ def build_constraints(
         Total length of the parameter vector passed to the optimiser, including
         any regression coefficients (``beta``).  When ``total_params > n_params``
         the constraint matrix is padded with zero columns so that it maps the
-        full ``theta`` vector.  Defaults to ``n_params`` (no beta).
+        full ``theta`` vector.  Defaults to ``n_params`` (no beta).  If
+        ``nonneg_lower=True`` and ``X`` is passed, this must be provided as the
+        full parameter length ``n_params + X.shape[1]``.
+    nonneg_lower:
+        If ``True``, require ``h(y|x) >= 0``.  Used for
+        ``base_distribution="exponential"``, whose support is ``[0, ∞)``.
+
+        * No covariates (``X is None``): the single inequality
+          ``theta_b[0] >= 0`` is sufficient, since ``h(y) = B_k(y) · theta_b``
+          and ``min_y B_k(y) · theta_b = theta_b[0]`` under monotonicity.
+        * With covariates: ``h(y|x) = B_k(y) · theta_b + x'β``; the minimum
+          over ``y`` is attained at ``y_min`` (because ``theta_b`` is
+          non-decreasing and ``B_k(y_min) = [1, 0, ..., 0]``), giving
+          ``min_y h(y|x_i) = theta_b[0] + X_i · β`` per observation ``i``.
+          One inequality ``theta_b[0] + X_i · β >= 0`` is added per row of
+          ``X``, making the training fit feasible under the exponential
+          support.
+
+        Kept distinct from ``lower`` because ``lower`` is an *equality* that
+        pins ``theta[0]``.
+    X:
+        Optional covariate matrix of shape ``(n, q)``.  Only consulted when
+        ``nonneg_lower=True`` — see above.  ``q`` must equal
+        ``total_params - n_params``.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` has invalid shape, if ``X`` columns do not match
+        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted.
 
     Returns
     -------
@@ -223,6 +256,46 @@ def build_constraints(
     if total > n_params:
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
+    # Support-feasibility rows for nonneg_lower.  Shape (n_rows, total).
+    # No covariates: one row [1, 0, ..., 0].
+    # With covariates: n rows [1, 0, ..., 0 | X_i].
+    support_rows: NDArray[np.float64] | None = None
+    if nonneg_lower:
+        if X is None:
+            if total > n_params:  
+                raise ValueError(  
+                    "X must be provided when nonneg_lower=True and"  
+                    "total_params > n_params so support-feasibility"  
+                    "constraints can include the regression coefficients."  
+                )
+            support_rows = np.zeros((1, total))
+            support_rows[0, 0] = 1.0
+        else:
+            X_arr = np.asarray(X, dtype=np.float64)
+            if X_arr.ndim != 2:
+                raise ValueError(
+                    f"X must be 2-D, got shape {X_arr.shape}"
+                )
+            if total_params is None:
+                raise ValueError(
+                    "total_params must be provided when nonneg_lower=True and "
+                    "X is passed. Expected full parameter length "
+                    "n_params + X.shape[1]."
+                )
+            if X_arr.shape[1] != total - n_params:
+                raise ValueError(
+                    f"X has {X_arr.shape[1]} columns but total_params - "
+                    f"n_params = {total - n_params}"
+                )
+            if X_arr.shape[1] == 0:
+                support_rows = np.zeros((1, total))
+                support_rows[0, 0] = 1.0
+            else:
+                n_obs = X_arr.shape[0]
+                support_rows = np.zeros((n_obs, total))
+                support_rows[:, 0] = 1.0
+                support_rows[:, n_params:] = X_arr
+
     if solver == "slsqp":
         result: list[dict[str, Any]] = [
             {
@@ -231,6 +304,14 @@ def build_constraints(
                 "jac": lambda theta, _D=D: _D,
             }
         ]
+        if support_rows is not None:
+            result.append(
+                {
+                    "type": "ineq",
+                    "fun": lambda theta, _S=support_rows: _S @ theta,
+                    "jac": lambda theta, _S=support_rows: _S,
+                }
+            )
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
             result.extend(bc.as_scipy_constraint())
@@ -238,6 +319,8 @@ def build_constraints(
 
     else:  # trust-constr
         lcs: list[LinearConstraint] = [LinearConstraint(D, lb=0.0, ub=np.inf)]
+        if support_rows is not None:
+            lcs.append(LinearConstraint(support_rows, lb=0.0, ub=np.inf))
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
             lcs.append(bc.as_LinearConstraint())
