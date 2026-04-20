@@ -421,3 +421,139 @@ writeLines(format(flatten_row_major(estfun_cx), digits = 15),
 
 cat(sprintf("Coxph vcov ref: n=%d, p+q=%d, observed=%d\n",
             n_cx, length(theta_cx), sum(event_cx == 1)))
+
+# ---------------------------------------------------------------------------
+# confint references — Wald 95% CIs for each fitted coefficient.
+#
+# confint() is ±qnorm(0.975) * sqrt(diag(vcov(fit))) around coef(fit).  R's
+# mlt::confint picks a sub-block via `parm` but this is the same formula.
+# We emit R-convention CIs for each of the three tram fits above.  tram's
+# sign convention differs from pymlt's only for BoxCox (negative=TRUE);
+# the Python test flips beta rows accordingly before comparing.
+#
+#   reference/confint_<model>.txt  — flattened (k, 2) matrix, row-major
+#                                     columns = [lower, upper]
+# ---------------------------------------------------------------------------
+
+.write_confint_ref <- function(fit, filename, level = 0.95) {
+  cf <- coef(fit, with_baseline = TRUE)
+  se <- sqrt(diag(vcov(as.mlt(fit))))
+  z  <- qnorm(0.5 * (1 + level))
+  ci <- cbind(cf - z * se, cf + z * se)
+  writeLines(format(flatten_row_major(ci), digits = 15),
+             con = file.path(out_dir, filename))
+}
+
+.write_confint_ref(fit_bc,   "confint_boxcox.txt")
+.write_confint_ref(fit_colr, "confint_colr.txt")
+.write_confint_ref(fit_cx,   "confint_coxph.txt")
+
+cat("confint refs: boxcox, colr, coxph written.\n")
+
+# ---------------------------------------------------------------------------
+# confband reference — baseline (no-covariate) MLT fit, normal base.
+#
+# Fits the same order-4 Bernstein basis / uniform(0.02, 0.98) sample as the
+# very top of this file, then writes:
+#
+#   reference/confband_baseline_theta.txt      — [theta_0, ..., theta_p-1]
+#   reference/confband_baseline_vcov.txt       — (p, p) flattened row-major
+#   reference/confband_baseline_y_grid.txt     — m-point evaluation grid
+#   reference/confband_baseline_<what>.txt     — (m, 3) flattened row-major
+#                                                 cols = [estimate, lwr, upr]
+#
+# `what` ∈ {trafo, distribution, survivor, density, hazard}.  Bands are
+# pointwise Wald on the transformation / log-density / log-hazard scale,
+# back-transformed to the requested output scale.  No covariates → no sign-
+# convention issue.
+# ---------------------------------------------------------------------------
+
+# Reuse the top-of-file `y` and basis: order=4, support=(0, 1), N(0,1) base.
+fit_cb   <- fit            # from line 37
+theta_cb <- coef(fit_cb, with_baseline = TRUE)
+V_cb     <- vcov(fit_cb)
+p_cb     <- length(theta_cb)
+
+# Evaluation grid: inside the support, avoiding the exact endpoints where
+# h' -> 0 on the Bernstein basis.
+y_grid_cb <- seq(0.05, 0.95, length.out = 25)
+
+# Bernstein model matrix B and its first derivative D on the grid.
+B_grid <- model.matrix(b, data = data.frame(y = y_grid_cb))
+
+# First derivative of the Bernstein basis: use variables / basefun's
+# `deriv = 1` argument on model.matrix.
+D_grid <- model.matrix(b, data = data.frame(y = y_grid_cb), deriv = c(y = 1L))
+
+h_hat  <- as.numeric(B_grid %*% theta_cb)
+hp_hat <- as.numeric(D_grid %*% theta_cb)
+
+# Per-grid-point linear-predictor variance via delta method:
+#   Var(eta_i) = J_i %*% V %*% t(J_i)
+# with J depending on `what`.  Vectorised across the grid.
+.var_eta_trafo <- function(B, V) {
+  # J = B
+  rowSums((B %*% V) * B)
+}
+
+.var_eta_density <- function(B, D, hp, psi, V) {
+  # J = psi * B + D / hp
+  J <- psi * B + D / hp
+  rowSums((J %*% V) * J)
+}
+
+.var_eta_hazard <- function(B, D, hp, psi, lam, V) {
+  # J = (psi + lam) * B + D / hp
+  coeff <- psi + lam
+  J <- coeff * B + D / hp
+  rowSums((J %*% V) * J)
+}
+
+.write_band <- function(estimate, lwr, upr, filename) {
+  mat <- cbind(estimate, lwr, upr)
+  writeLines(format(flatten_row_major(mat), digits = 15),
+             con = file.path(out_dir, filename))
+}
+
+qn <- qnorm(0.975)
+
+# --- trafo / distribution / survivor (eta = h) ---------------------------
+var_h <- .var_eta_trafo(B_grid, V_cb)
+se_h  <- sqrt(var_h)
+h_lo  <- h_hat - qn * se_h
+h_hi  <- h_hat + qn * se_h
+
+.write_band(h_hat,        h_lo,         h_hi,         "confband_baseline_trafo.txt")
+.write_band(pnorm(h_hat), pnorm(h_lo),  pnorm(h_hi),  "confband_baseline_distribution.txt")
+# 1 - F is monotone decreasing → lower/upper swap.
+.write_band(1 - pnorm(h_hat), 1 - pnorm(h_hi), 1 - pnorm(h_lo),
+            "confband_baseline_survivor.txt")
+
+# --- density (eta = log f(h) + log h') -----------------------------------
+psi_normal  <- -h_hat                 # ψ(h) = d log φ(h)/dh = -h for N(0,1)
+eta_dens    <- dnorm(h_hat, log = TRUE) + log(hp_hat)
+var_dens    <- .var_eta_density(B_grid, D_grid, hp_hat, psi_normal, V_cb)
+se_dens     <- sqrt(var_dens)
+dens_lo     <- exp(eta_dens - qn * se_dens)
+dens_hi     <- exp(eta_dens + qn * se_dens)
+.write_band(exp(eta_dens), dens_lo, dens_hi, "confband_baseline_density.txt")
+
+# --- hazard (eta = log f(h) + log h' - log S(h)) -------------------------
+lam_normal  <- dnorm(h_hat) / pnorm(h_hat, lower.tail = FALSE)
+eta_haz     <- dnorm(h_hat, log = TRUE) + log(hp_hat) -
+               pnorm(h_hat, lower.tail = FALSE, log.p = TRUE)
+var_haz     <- .var_eta_hazard(B_grid, D_grid, hp_hat, psi_normal, lam_normal, V_cb)
+se_haz      <- sqrt(var_haz)
+haz_lo      <- exp(eta_haz - qn * se_haz)
+haz_hi      <- exp(eta_haz + qn * se_haz)
+.write_band(exp(eta_haz), haz_lo, haz_hi, "confband_baseline_hazard.txt")
+
+# --- shared inputs --------------------------------------------------------
+writeLines(format(theta_cb,  digits = 15),
+           con = file.path(out_dir, "confband_baseline_theta.txt"))
+writeLines(format(flatten_row_major(V_cb), digits = 15),
+           con = file.path(out_dir, "confband_baseline_vcov.txt"))
+writeLines(format(y_grid_cb, digits = 15),
+           con = file.path(out_dir, "confband_baseline_y_grid.txt"))
+
+cat(sprintf("confband baseline refs: p=%d, m=%d\n", p_cb, length(y_grid_cb)))
