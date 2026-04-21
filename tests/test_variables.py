@@ -31,7 +31,7 @@ class TestNumericVariable:
         assert v.bounds == (-3.0, 3.0)
 
     def test_with_log_first(self):
-        v = NumericVariable("y", support=(0.0, 10.0), log_first=True)
+        v = NumericVariable("y", support=(1e-8, 10.0), log_first=True)
         assert v.log_first is True
 
     def test_support_equal_raises(self):
@@ -49,6 +49,31 @@ class TestNumericVariable:
     def test_bounds_equal_raises(self):
         with pytest.raises(ValueError, match="bounds"):
             NumericVariable("y", support=(0.0, 10.0), bounds=(3.0, 3.0))
+
+    def test_bounds_below_support_raises(self):
+        with pytest.raises(ValueError, match="contained in support"):
+            NumericVariable("y", support=(0.0, 10.0), bounds=(-1.0, 5.0))
+
+    def test_bounds_above_support_raises(self):
+        with pytest.raises(ValueError, match="contained in support"):
+            NumericVariable("y", support=(0.0, 10.0), bounds=(5.0, 11.0))
+
+    def test_bounds_equal_support_ok(self):
+        v = NumericVariable("y", support=(0.0, 10.0), bounds=(0.0, 10.0))
+        assert v.bounds == (0.0, 10.0)
+
+    def test_log_first_negative_support_raises(self):
+        with pytest.raises(ValueError, match="log_first"):
+            NumericVariable("y", support=(-1.0, 5.0), log_first=True)
+
+    def test_log_first_zero_support_raises(self):
+        with pytest.raises(ValueError, match="log_first"):
+            NumericVariable("y", support=(0.0, 10.0), log_first=True)
+
+    def test_log_first_positive_support_ok(self):
+        v = NumericVariable("y", support=(1e-8, 10.0), log_first=True)
+        assert v.log_first is True
+        assert v.support[0] > 0.0
 
     @given(
         a=st.floats(-1e6, 1e6, allow_nan=False, allow_infinity=False),
@@ -282,6 +307,16 @@ class TestCensoredDataValidation:
                 lower=np.array([1.0, 2.0]),
                 upper=np.array([1.0, 2.0]),
                 trunc_upper=np.array([5.0]),
+            )
+
+    def test_trunc_lower_greater_than_trunc_upper_raises(self):
+        with pytest.raises(ValueError, match="trunc_lower must be <= trunc_upper"):
+            CensoredData(
+                exact=np.array([1.0, 2.0]),
+                lower=np.array([1.0, 2.0]),
+                upper=np.array([1.0, 2.0]),
+                trunc_lower=np.array([0.0, 2.0]),
+                trunc_upper=np.array([3.0, 1.0]),
             )
 
     def test_truncation_stored_correctly(self):

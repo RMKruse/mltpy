@@ -45,8 +45,19 @@ class NumericVariable:
     def __post_init__(self) -> None:
         if self.support[0] >= self.support[1]:
             raise ValueError(f"support must satisfy a < b, got {self.support}")
-        if self.bounds is not None and self.bounds[0] >= self.bounds[1]:
-            raise ValueError(f"bounds must satisfy a < b, got {self.bounds}")
+        if self.bounds is not None:
+            if self.bounds[0] >= self.bounds[1]:
+                raise ValueError(f"bounds must satisfy a < b, got {self.bounds}")
+            if self.bounds[0] < self.support[0] or self.bounds[1] > self.support[1]:
+                raise ValueError(
+                    f"bounds must be contained in support, got bounds={self.bounds} "
+                    f"and support={self.support}"
+                )
+        if self.log_first and self.support[0] <= 0.0:
+            raise ValueError(
+                f"log_first=True requires support lower bound > 0, "
+                f"got support={self.support}"
+            )
 
 
 @dataclass
@@ -154,6 +165,11 @@ class CensoredData:
             self.trunc_upper = np.asarray(self.trunc_upper, dtype=float)
             if len(self.trunc_upper) != n:
                 raise ValueError("trunc_upper must have the same length as exact")
+        if self.trunc_lower is not None and self.trunc_upper is not None:
+            if np.any(self.trunc_lower > self.trunc_upper):
+                raise ValueError(
+                    "trunc_lower must be <= trunc_upper for every observation"
+                )
 
     # ------------------------------------------------------------------
     # Constructors
