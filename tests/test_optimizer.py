@@ -356,11 +356,12 @@ class TestMakeObjectivePenalty:
 
 
 class TestOptimizeExceptionFallback:
-    def test_all_attempts_raise_returns_initial(self, monkeypatch):
-        """Every scipy call raises → fallback returns initial theta, unconverged."""
+    def test_linalg_error_retries_and_falls_back(self, monkeypatch):
+        """Every scipy call raises LinAlgError → fallback returns initial theta."""
+        from numpy.linalg import LinAlgError
 
         def boom(*args, **kwargs):
-            raise RuntimeError("scipy blew up")
+            raise LinAlgError("singular matrix")
 
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
@@ -370,21 +371,69 @@ class TestOptimizeExceptionFallback:
 
         assert not result.converged
         assert result.n_iter == 0
-        assert "exception" in result.solver_message.lower()
+        assert "linalgerror" in result.solver_message.lower()
         np.testing.assert_allclose(result.theta, np.linspace(0.0, 1.0, basis.order + 1))
         assert np.isfinite(result.log_likelihood)
 
-    def test_exception_with_verbose_warns(self, monkeypatch):
-        """verbose=True → RuntimeWarning emitted from the except branch."""
+    def test_unrelated_exception_propagates(self, monkeypatch):
+        """A non-LinAlgError from minimize must bubble out — not be silenced."""
 
         def boom(*args, **kwargs):
             raise RuntimeError("scipy blew up")
 
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
+        cfg = OptimizerConfig(max_restarts=2)
+        with pytest.raises(RuntimeError, match="scipy blew up"):
+            optimize(make_basis(order=3), simple_data(), config=cfg)
+
+    def test_linalg_error_with_verbose_warns(self, monkeypatch):
+        """verbose=True → RuntimeWarning emitted on each LinAlgError retry."""
+        from numpy.linalg import LinAlgError
+
+        def boom(*args, **kwargs):
+            raise LinAlgError("singular matrix")
+
+        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+
         cfg = OptimizerConfig(max_restarts=0, verbose=True)
-        with pytest.warns(RuntimeWarning, match="raised"):
+        with pytest.warns(RuntimeWarning, match="hit"):
             optimize(make_basis(), simple_data(), config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# _make_objective — narrow catch (infeasibility only)
+# ---------------------------------------------------------------------------
+
+
+class TestMakeObjectiveNarrowCatch:
+    """Only InfeasibleParameterError is absorbed into the penalty; other
+    ValueErrors — e.g. a shape bug or an unsupported distribution — must
+    propagate out so that genuine bugs are surfaced."""
+
+    def test_unrelated_value_error_propagates_grad(self, monkeypatch):
+        basis = make_basis(order=3)
+        y = simple_data()
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
+
+        def bad_nll(*args, **kwargs):
+            raise ValueError("bad shape")
+
+        monkeypatch.setattr("pymlt.optimizer.negative_log_likelihood", bad_nll)
+        with pytest.raises(ValueError, match="bad shape"):
+            obj(np.linspace(0.0, 1.0, basis.order + 1))
+
+    def test_unrelated_value_error_propagates_nograd(self, monkeypatch):
+        basis = make_basis(order=3)
+        y = simple_data()
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=False)
+
+        def bad_nll(*args, **kwargs):
+            raise ValueError("bad shape")
+
+        monkeypatch.setattr("pymlt.optimizer.negative_log_likelihood", bad_nll)
+        with pytest.raises(ValueError, match="bad shape"):
+            obj(np.linspace(0.0, 1.0, basis.order + 1))
 
 
 # ---------------------------------------------------------------------------

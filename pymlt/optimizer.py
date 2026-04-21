@@ -15,12 +15,18 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional, cast
 
 import numpy as np
+from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import build_constraints
-from pymlt.likelihood import BaseDistribution, _get_dist, negative_log_likelihood
+from pymlt.likelihood import (
+    BaseDistribution,
+    InfeasibleParameterError,
+    _get_dist,
+    negative_log_likelihood,
+)
 from pymlt.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
@@ -128,8 +134,11 @@ def _make_objective(
     ``jac=True`` should be passed to scipy.  When False it returns a scalar
     and ``jac=None`` should be used.
 
-    ValueError from infeasible theta (h' ≤ 0) is caught and replaced by a
-    large penalty so that the optimiser can back off rather than crash.
+    :class:`~pymlt.likelihood.InfeasibleParameterError` from an infeasible
+    ``theta`` (h' ≤ 0) is caught and replaced by a large penalty so that the
+    optimiser can back off rather than crash.  Any other exception — including
+    plain ``ValueError`` for unsupported ``base_distribution`` or shape
+    mismatches — propagates out so that genuine bugs are not silenced.
 
     Parameters
     ----------
@@ -167,7 +176,7 @@ def _make_objective(
                     gradient=True,
                     base_distribution=base_distribution,
                 )
-            except ValueError:
+            except InfeasibleParameterError:
                 return _BIG, np.zeros_like(theta)
     else:
 
@@ -182,7 +191,7 @@ def _make_objective(
                     gradient=False,
                     base_distribution=base_distribution,
                 )
-            except ValueError:
+            except InfeasibleParameterError:
                 return _BIG
 
     return obj
@@ -366,10 +375,10 @@ def optimize(
                 constraints=constraints,
                 options=options,
             )
-        except Exception as exc:
+        except LinAlgError as exc:
             if config.verbose:
                 warnings.warn(
-                    f"optimizer.py: attempt {attempt + 1} raised {exc!r}",
+                    f"optimizer.py: attempt {attempt + 1} hit {exc!r}; retrying",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -391,7 +400,9 @@ def optimize(
             )
 
     if best_scipy_result is None:
-        # All attempts raised exceptions — return the initial point as fallback
+        # Every attempt hit a numerical linear-algebra failure — return the
+        # initial point as fallback so the caller can surface a
+        # ConvergenceWarning rather than re-raising.
         _nll = cast(
             float,
             negative_log_likelihood(
@@ -409,7 +420,7 @@ def optimize(
             converged=False,
             n_iter=0,
             n_restarts=n_restarts_used,
-            solver_message="All optimisation attempts raised an exception.",
+            solver_message="All optimisation attempts raised LinAlgError.",
         )
 
     return OptimizationResult(

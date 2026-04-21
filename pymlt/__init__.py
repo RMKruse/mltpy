@@ -1,6 +1,7 @@
 """pymlt — Conditional Transformation Models in Python."""
 
 from pymlt.likelihood import (
+    InfeasibleParameterError,
     hessian,
     log_likelihood,
     negative_log_likelihood,
@@ -46,6 +47,7 @@ __all__ = [
     # Exceptions / warnings
     "NotFittedError",
     "ConvergenceWarning",
+    "InfeasibleParameterError",
     # Data types
     "CensoredData",
     "CensoringType",

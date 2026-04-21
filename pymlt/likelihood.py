@@ -129,6 +129,17 @@ def _get_dist(base_distribution: str) -> Any:
     )
 
 
+class InfeasibleParameterError(ValueError):
+    """Raised when the log-likelihood is non-finite at the given ``theta``.
+
+    Subclass of :class:`ValueError` so callers that pre-date this class keep
+    working.  The optimiser catches this specific subclass to distinguish
+    "this parameter point is infeasible, retreat" from "something is
+    genuinely wrong" (e.g. a shape bug or an unsupported ``base_distribution``,
+    which should propagate).
+    """
+
+
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
@@ -1149,10 +1160,13 @@ def log_likelihood(
 
     Raises
     ------
-    ValueError
+    InfeasibleParameterError
         If the result is ``-inf`` or ``NaN``.  Most likely causes: theta
         violates monotonicity (h' ≤ 0), observations outside support, or
-        numerical overflow in the basis evaluation.
+        numerical overflow in the basis evaluation.  Subclass of
+        :class:`ValueError`.
+    ValueError
+        From :func:`_get_dist` if ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
 
@@ -1170,7 +1184,7 @@ def log_likelihood(
             result = _ll_interval(y, theta, basis, X, dist=dist)
 
     if not np.isfinite(result):
-        raise ValueError(
+        raise InfeasibleParameterError(
             f"log_likelihood returned {result}.  Possible causes: theta "
             "violates monotonicity (h'(y) ≤ 0), observations outside basis "
             "support, or extreme h values despite clipping."
@@ -1260,11 +1274,13 @@ def hessian(
 
     Raises
     ------
+    InfeasibleParameterError
+        If any entry of the Hessian is non-finite — most commonly because
+        ``theta`` violates monotonicity (``h'(y) ≤ 0``) or because observations
+        fall outside the basis support.  Subclass of :class:`ValueError`.
     ValueError
         If ``base_distribution`` is not supported (propagated from
-        :func:`_get_dist`), or if any entry of the Hessian is non-finite —
-        most commonly because ``theta`` violates monotonicity (``h'(y) ≤ 0``)
-        or because observations fall outside the basis support.
+        :func:`_get_dist`).
 
     Notes
     -----
@@ -1288,7 +1304,7 @@ def hessian(
         result = _hess_interval(y, theta, basis, X, dist=dist)
 
     if not np.all(np.isfinite(result)):
-        raise ValueError(
+        raise InfeasibleParameterError(
             "hessian() produced non-finite entries.  Possible causes: theta "
             "violates monotonicity (h'(y) ≤ 0), observations outside basis "
             "support, or extreme h values despite clipping."
@@ -1327,11 +1343,13 @@ def score_matrix(
 
     Raises
     ------
+    InfeasibleParameterError
+        If any entry of the score matrix is non-finite — most commonly
+        because ``theta`` violates monotonicity (``h'(y) ≤ 0``) or because
+        observations fall outside the basis support.  Subclass of
+        :class:`ValueError`.
     ValueError
-        If ``base_distribution`` is not supported, or if any entry of the
-        score matrix is non-finite — most commonly because ``theta`` violates
-        monotonicity (``h'(y) ≤ 0``) or because observations fall outside the
-        basis support.
+        If ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
 
@@ -1349,7 +1367,7 @@ def score_matrix(
         result = _scores_interval(y, theta, basis, X, dist=dist)
 
     if not np.all(np.isfinite(result)):
-        raise ValueError(
+        raise InfeasibleParameterError(
             "score_matrix() produced non-finite entries.  Possible causes: "
             "theta violates monotonicity (h'(y) ≤ 0), observations outside "
             "basis support, or extreme h values despite clipping."
