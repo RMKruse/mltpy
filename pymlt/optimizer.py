@@ -25,7 +25,7 @@ from pymlt.likelihood import (
     BaseDistribution,
     InfeasibleParameterError,
     _get_dist,
-    negative_log_likelihood,
+    _negative_log_likelihood_from_dist,
 )
 from pymlt.variables import CensoredData, CensoringType
 
@@ -133,6 +133,8 @@ def _make_objective(
     censoring: CensoringType,
     use_gradient: bool,
     base_distribution: BaseDistribution = "normal",
+    *,
+    dist: Any | None = None,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -160,6 +162,10 @@ def _make_objective(
         If True, return analytical gradients along with the negative log-likelihood.
     base_distribution : BaseDistribution, default="normal"
         The base distribution to estimate transformations against.
+    dist : Any | None, default=None
+        Optional pre-resolved scipy.stats distribution object. When provided,
+        objective evaluations reuse it instead of re-dispatching from
+        ``base_distribution`` on every call.
 
     Returns
     -------
@@ -168,19 +174,20 @@ def _make_objective(
         negative log-likelihood (and optionally its gradient vector).
     """
     _BIG = 1e10
+    resolved_dist = _get_dist(base_distribution) if dist is None else dist
 
     if use_gradient:
 
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
-                return negative_log_likelihood(
+                return _negative_log_likelihood_from_dist(
                     theta,
                     basis,
                     y,
                     X,
                     censoring,
                     gradient=True,
-                    base_distribution=base_distribution,
+                    dist=resolved_dist,
                 )
             except InfeasibleParameterError:
                 return _BIG, np.zeros_like(theta)
@@ -188,14 +195,14 @@ def _make_objective(
 
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
-                return negative_log_likelihood(
+                return _negative_log_likelihood_from_dist(
                     theta,
                     basis,
                     y,
                     X,
                     censoring,
                     gradient=False,
-                    base_distribution=base_distribution,
+                    dist=resolved_dist,
                 )
             except InfeasibleParameterError:
                 return _BIG
@@ -330,7 +337,8 @@ def optimize(
         ``converged=False``.  The caller (``model.py``) decides whether to
         raise or warn.
     """
-    _get_dist(base_distribution)  # fail fast; raises ValueError for unsupported values
+    # Fail fast for unsupported base distributions before entering scipy.
+    dist = _get_dist(base_distribution)
     if config is None:
         config = OptimizerConfig()
 
@@ -348,7 +356,13 @@ def optimize(
         X=X if nonneg_lower else None,
     )
     obj = _make_objective(
-        basis, y, X, censoring, config.use_gradient, base_distribution=base_distribution
+        basis,
+        y,
+        X,
+        censoring,
+        config.use_gradient,
+        base_distribution=base_distribution,
+        dist=dist,
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
@@ -414,13 +428,14 @@ def optimize(
         # ConvergenceWarning rather than re-raising.
         _nll = cast(
             float,
-            negative_log_likelihood(
+            _negative_log_likelihood_from_dist(
                 theta_init,
                 basis,
                 y,
                 X,
                 censoring,
-                base_distribution=base_distribution,
+                gradient=False,
+                dist=dist,
             ),
         )
         return OptimizationResult(

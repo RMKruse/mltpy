@@ -1308,6 +1308,74 @@ def _hess_interval(
 # ---------------------------------------------------------------------------
 
 
+def _log_likelihood_from_dist(
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    dist: Any,
+) -> float:
+    """Internal log-likelihood evaluator for a pre-resolved base distribution."""
+    if isinstance(y, np.ndarray):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        result = _ll_none(y_arr, theta, basis, X, dist=dist)
+    else:
+        if censoring is CensoringType.NONE:
+            result = _ll_none(y.exact, theta, basis, X, dist=dist)
+        elif censoring is CensoringType.RIGHT:
+            result = _ll_right(y, theta, basis, X, dist=dist)
+        elif censoring is CensoringType.LEFT:
+            result = _ll_left(y, theta, basis, X, dist=dist)
+        else:  # INTERVAL
+            result = _ll_interval(y, theta, basis, X, dist=dist)
+
+    if not np.isfinite(result):
+        raise InfeasibleParameterError(
+            f"log_likelihood returned {result}.  Possible causes: theta "
+            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+            "support, or extreme h values despite clipping."
+        )
+    return result
+
+
+def _negative_log_likelihood_from_dist(
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    gradient: bool,
+    dist: Any,
+) -> float | tuple[float, NDArray[np.float64]]:
+    """Internal NLL evaluator for a pre-resolved base distribution."""
+    if not gradient:
+        return -_log_likelihood_from_dist(theta, basis, y, X, censoring, dist)
+
+    # Single pass: share basis.evaluate / basis.derivative and mask slicing
+    # between the log-likelihood and its gradient.
+    if isinstance(y, np.ndarray):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        ll, grad = _ll_and_grad_none(y_arr, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.NONE:
+        ll, grad = _ll_and_grad_none(y.exact, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.RIGHT:
+        ll, grad = _ll_and_grad_right(y, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.LEFT:
+        ll, grad = _ll_and_grad_left(y, theta, basis, X, dist=dist)
+    else:
+        ll, grad = _ll_and_grad_interval(y, theta, basis, X, dist=dist)
+
+    if not np.isfinite(ll):
+        raise InfeasibleParameterError(
+            f"log_likelihood returned {ll}.  Possible causes: theta "
+            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+            "support, or extreme h values despite clipping."
+        )
+
+    return -ll, grad
+
+
 def log_likelihood(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
@@ -1354,27 +1422,7 @@ def log_likelihood(
         From :func:`_get_dist` if ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
-
-    if isinstance(y, np.ndarray):
-        y_arr = np.asarray(y, dtype=float).ravel()
-        result = _ll_none(y_arr, theta, basis, X, dist=dist)
-    else:
-        if censoring is CensoringType.NONE:
-            result = _ll_none(y.exact, theta, basis, X, dist=dist)
-        elif censoring is CensoringType.RIGHT:
-            result = _ll_right(y, theta, basis, X, dist=dist)
-        elif censoring is CensoringType.LEFT:
-            result = _ll_left(y, theta, basis, X, dist=dist)
-        else:  # INTERVAL
-            result = _ll_interval(y, theta, basis, X, dist=dist)
-
-    if not np.isfinite(result):
-        raise InfeasibleParameterError(
-            f"log_likelihood returned {result}.  Possible causes: theta "
-            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-            "support, or extreme h values despite clipping."
-        )
-    return result
+    return _log_likelihood_from_dist(theta, basis, y, X, censoring, dist)
 
 
 def negative_log_likelihood(
@@ -1405,35 +1453,10 @@ def negative_log_likelihood(
     float  when ``gradient=False``
     (float, NDArray)  when ``gradient=True``
     """
-    if not gradient:
-        return -log_likelihood(
-            theta, basis, y, X, censoring, base_distribution=base_distribution
-        )
-
     dist = _get_dist(base_distribution)
-
-    # Single pass: share basis.evaluate / basis.derivative and mask slicing
-    # between the log-likelihood and its gradient.
-    if isinstance(y, np.ndarray):
-        y_arr = np.asarray(y, dtype=float).ravel()
-        ll, grad = _ll_and_grad_none(y_arr, theta, basis, X, dist=dist)
-    elif censoring is CensoringType.NONE:
-        ll, grad = _ll_and_grad_none(y.exact, theta, basis, X, dist=dist)
-    elif censoring is CensoringType.RIGHT:
-        ll, grad = _ll_and_grad_right(y, theta, basis, X, dist=dist)
-    elif censoring is CensoringType.LEFT:
-        ll, grad = _ll_and_grad_left(y, theta, basis, X, dist=dist)
-    else:
-        ll, grad = _ll_and_grad_interval(y, theta, basis, X, dist=dist)
-
-    if not np.isfinite(ll):
-        raise InfeasibleParameterError(
-            f"log_likelihood returned {ll}.  Possible causes: theta "
-            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-            "support, or extreme h values despite clipping."
-        )
-
-    return -ll, grad
+    return _negative_log_likelihood_from_dist(
+        theta, basis, y, X, censoring, gradient, dist
+    )
 
 
 def hessian(

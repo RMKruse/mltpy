@@ -349,6 +349,27 @@ class TestBaseDistributionValidation:
         # Feasibility (within SLSQP tolerance): theta_b[0] >= 0
         assert result.theta[0] >= -1e-6
 
+    def test_optimize_resolves_distribution_once(self, monkeypatch):
+        calls = 0
+
+        def count_optimizer_get_dist(base_distribution):
+            nonlocal calls
+            calls += 1
+            from scipy.stats import norm
+
+            return norm
+
+        def fail_likelihood_get_dist(base_distribution):
+            raise AssertionError("_get_dist should not run inside optimize() evaluations")
+
+        monkeypatch.setattr("pymlt.optimizer._get_dist", count_optimizer_get_dist)
+        monkeypatch.setattr("pymlt.likelihood._get_dist", fail_likelihood_get_dist)
+
+        result = optimize(make_basis(order=2), simple_data(n=20))
+
+        assert isinstance(result, OptimizationResult)
+        assert calls == 1
+
 
 # ---------------------------------------------------------------------------
 # _make_objective — ValueError fallback penalty
@@ -446,7 +467,9 @@ class TestMakeObjectiveNarrowCatch:
         def bad_nll(*args, **kwargs):
             raise ValueError("bad shape")
 
-        monkeypatch.setattr("pymlt.optimizer.negative_log_likelihood", bad_nll)
+        monkeypatch.setattr(
+            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+        )
         with pytest.raises(ValueError, match="bad shape"):
             obj(np.linspace(0.0, 1.0, basis.order + 1))
 
@@ -458,7 +481,9 @@ class TestMakeObjectiveNarrowCatch:
         def bad_nll(*args, **kwargs):
             raise ValueError("bad shape")
 
-        monkeypatch.setattr("pymlt.optimizer.negative_log_likelihood", bad_nll)
+        monkeypatch.setattr(
+            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+        )
         with pytest.raises(ValueError, match="bad shape"):
             obj(np.linspace(0.0, 1.0, basis.order + 1))
 
