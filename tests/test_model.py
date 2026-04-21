@@ -165,6 +165,11 @@ class TestValidateInput:
         with pytest.raises(ValueError, match="upper"):
             model.fit(cd)
 
+    def test_empty_y_raises(self):
+        model = make_ctm()
+        with pytest.raises(ValueError, match="at least one observation"):
+            model.fit(np.array([], dtype=float))
+
     def test_x_1d_reshaped(self):
         """A 1-D X array is promoted to a column vector; fit must succeed."""
         model = make_ctm()

@@ -236,6 +236,10 @@ class ConditionalTransformationModel:
         else:
             # Coerce without importing pandas: np.asarray handles pd.Series
             y_arr = np.asarray(y, dtype=float).ravel()
+            if y_arr.size == 0:
+                raise ValueError(
+                    "y must contain at least one observation, got empty array"
+                )
             if y_arr.min() < a or y_arr.max() > b:
                 raise ValueError(
                     f"y contains values outside support [{a}, {b}]. "
