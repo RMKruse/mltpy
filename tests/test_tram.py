@@ -649,3 +649,35 @@ class TestLmEquivalence:
         np.testing.assert_allclose(model.intercept_, beta_ols[0], atol=0.02)
         np.testing.assert_allclose(model.coef_[0], beta_ols[1], atol=0.02)
         np.testing.assert_allclose(model.sigma_, sigma_mle, atol=0.02)
+
+
+@pytest.mark.skipif(
+    not (REFERENCE_DIR / "predict_quantile_coxph_expected.txt").exists(),
+    reason="R reference data not generated; run Rscript reference/generate_reference.R",
+)
+class TestCoxphPredictQuantileReference:
+    """Validate conditional quantile prediction against R tram::Coxph."""
+
+    def test_conditional_quantile_matches_r(self):
+        y = np.loadtxt(REFERENCE_DIR / "vcov_coxph_y.txt")
+        event = np.loadtxt(REFERENCE_DIR / "vcov_coxph_event.txt").astype(bool)
+        x = np.loadtxt(REFERENCE_DIR / "vcov_coxph_x.txt")
+        a, b = np.loadtxt(REFERENCE_DIR / "vcov_coxph_support.txt")
+
+        X_grid = np.loadtxt(REFERENCE_DIR / "predict_quantile_coxph_X.txt")
+        probs = np.loadtxt(REFERENCE_DIR / "predict_quantile_coxph_probs.txt")
+        expected = np.loadtxt(
+            REFERENCE_DIR / "predict_quantile_coxph_expected.txt"
+        ).reshape(len(X_grid), len(probs))
+
+        # CensoredData uses censored-mask (True = censored), complement of event.
+        cd = CensoredData.right_censored(y, ~event)
+        model = Coxph(support=(float(a), float(b)), order=4).fit(cd, X=x.reshape(-1, 1))
+
+        # For each X value, compute quantile vector at all probs (rows of expected).
+        got = np.empty_like(expected)
+        for i, xv in enumerate(X_grid):
+            X_new = np.full((len(probs), 1), float(xv))
+            got[i] = model.predict(probs, X_new=X_new, what="quantile")
+
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-6)

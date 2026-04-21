@@ -557,3 +557,39 @@ writeLines(format(y_grid_cb, digits = 15),
            con = file.path(out_dir, "confband_baseline_y_grid.txt"))
 
 cat(sprintf("confband baseline refs: p=%d, m=%d\n", p_cb, length(y_grid_cb)))
+
+# ---------------------------------------------------------------------------
+# Conditional-quantile reference for a Coxph fit with covariates.
+#
+# Re-fits the same Coxph model as the vcov_coxph_* fixture, then asks
+# mlt::predict for quantiles on a small (X, prob) grid.  The Python test
+# refits Coxph on the same (y, event, x) data and checks that
+# predict(probs, X_new=X, what="quantile") matches R row-for-row.
+#
+# One row of the expected matrix per X value, one column per probability.
+# Writes the matrix row-major (matching flatten_row_major elsewhere).
+# ---------------------------------------------------------------------------
+
+x_grid_pq  <- c(-1.0, -0.5, 0.0, 0.5, 1.0)
+prob_grid_pq <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+
+# mlt::predict with type="quantile": returns a (length(prob), length(newdata))
+# matrix; columns correspond to rows of newdata.  Transpose so that each row
+# of the saved matrix corresponds to one X value.
+q_mat_pq <- predict(
+  as.mlt(fit_cx),
+  newdata = data.frame(x = x_grid_pq),
+  type = "quantile",
+  prob = prob_grid_pq
+)
+q_mat_pq <- t(q_mat_pq)  # rows = X, cols = prob
+
+writeLines(format(x_grid_pq, digits = 15),
+           con = file.path(out_dir, "predict_quantile_coxph_X.txt"))
+writeLines(format(prob_grid_pq, digits = 15),
+           con = file.path(out_dir, "predict_quantile_coxph_probs.txt"))
+writeLines(format(flatten_row_major(q_mat_pq), digits = 15),
+           con = file.path(out_dir, "predict_quantile_coxph_expected.txt"))
+
+cat(sprintf("Coxph predict-quantile ref: %d X x %d probs\n",
+            length(x_grid_pq), length(prob_grid_pq)))

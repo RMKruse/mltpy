@@ -444,7 +444,27 @@ class ConditionalTransformationModel:
                 X_arr = X_arr[:, None]
 
         if what == "quantile":
-            return self._predict_quantile(y_arr, theta_b)
+            xbeta: NDArray[np.float64] | None = None
+            if len(self.theta_) > p:
+                if X_arr is None:
+                    raise ValueError(
+                        "Model was fitted with covariates; X_new must be "
+                        "provided for conditional quantile prediction."
+                    )
+                if X_arr.shape[0] != y_arr.shape[0]:
+                    raise ValueError(
+                        f"X_new has {X_arr.shape[0]} rows but y_new has "
+                        f"{y_arr.shape[0]} elements; they must match for "
+                        "quantile prediction."
+                    )
+                beta = self.theta_[p:]
+                if X_arr.shape[1] != beta.shape[0]:
+                    raise ValueError(
+                        f"X_new has {X_arr.shape[1]} columns but the fitted "
+                        f"model has {beta.shape[0]} covariate coefficients."
+                    )
+                xbeta = X_arr @ beta
+            return self._predict_quantile(y_arr, theta_b, xbeta=xbeta)
 
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -491,13 +511,17 @@ class ConditionalTransformationModel:
         return cast(NDArray[np.float64], dist.logcdf(h) - dist.logsf(h))
 
     def _predict_quantile(
-        self, probs: NDArray[np.float64], theta_b: NDArray[np.float64]
+        self,
+        probs: NDArray[np.float64],
+        theta_b: NDArray[np.float64],
+        xbeta: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
-        """Numerically invert h(q) = F⁻¹(p) via brentq for each p.
+        """Numerically invert the conditional transformation via brentq.
 
-        F⁻¹ is the quantile function (``dist.ppf``) of the base distribution
-        selected by ``self.base_distribution`` (see ``likelihood._get_dist``
-        for the full list of supported distributions).
+        Solves ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i]`` for each ``i``,
+        where ``h_baseline(y) = B_k(y) · theta_b`` and ``F⁻¹`` is the
+        quantile function of the base distribution.  When ``xbeta is None``
+        this reduces to the marginal inversion ``h_baseline(q) = F⁻¹(p)``.
 
         Parameters
         ----------
@@ -505,13 +529,16 @@ class ConditionalTransformationModel:
             Probabilities in (0, 1).
         theta_b:
             Bernstein coefficient vector of length ``order + 1``.
+        xbeta:
+            Per-row linear predictor ``X @ beta`` of shape ``(len(probs),)``,
+            or ``None`` for the baseline (no-covariate) case.
 
         Returns
         -------
         NDArray of same length as ``probs``.
         """
         a, b = self.basis.support
-        # Clip z into the range that brentq can bracket
+        # Bracket-clip range for h_baseline — independent of xbeta.
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
@@ -521,7 +548,8 @@ class ConditionalTransformationModel:
         dist = _get_dist(self.base_distribution)
         quantiles = np.empty(len(probs))
         for i, p in enumerate(probs):
-            z = float(np.clip(dist.ppf(p), z_min, z_max))
+            shift = 0.0 if xbeta is None else float(xbeta[i])
+            z = float(np.clip(dist.ppf(p) - shift, z_min, z_max))
             quantiles[i] = brentq(
                 lambda q, z=z: _h_scalar(q) - z,
                 a,
@@ -1056,7 +1084,9 @@ class ConditionalTransformationModel:
         n:
             Number of samples to draw.
         X:
-            Optional covariate matrix of shape ``(n, q)``.
+            Covariate matrix of shape ``(n, q)``.  Each row yields one
+            conditional draw; must be supplied when the model was fitted
+            with covariates.  Pass ``None`` only for covariate-free fits.
         random_state:
             Seed or :class:`numpy.random.Generator` for reproducibility.
 
@@ -1068,8 +1098,23 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        ValueError
+            If ``X`` is provided but its number of rows does not equal ``n``.
         """
         self._check_is_fitted()
+
+        if X is not None:
+            X_arr = np.asarray(X, dtype=float)
+            if X_arr.ndim == 1:
+                X_arr = X_arr[:, None]
+            if X_arr.shape[0] != n:
+                raise ValueError(
+                    f"X has {X_arr.shape[0]} rows but n={n}; simulate() "
+                    "draws one observation per row of X, so the counts "
+                    "must match."
+                )
+        else:
+            X_arr = None
 
         if isinstance(random_state, np.random.Generator):
             rng = random_state
@@ -1078,7 +1123,7 @@ class ConditionalTransformationModel:
 
         # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf
         u = np.clip(rng.uniform(size=n), 1e-10, 1 - 1e-10)
-        return self.predict(u, X_new=X, what="quantile")
+        return self.predict(u, X_new=X_arr, what="quantile")
 
     def __repr__(self) -> str:
         name = type(self).__name__
@@ -1270,9 +1315,7 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
         )
     for i, m in enumerate(models):
         if not m.is_fitted_:
-            raise ValueError(
-                f"Model #{i} is not fitted. Call fit() before anova()."
-            )
+            raise ValueError(f"Model #{i} is not fitted. Call fit() before anova().")
 
     n_obs_ref = models[0].n_obs_
     for i, m in enumerate(models):

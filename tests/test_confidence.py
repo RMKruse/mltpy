@@ -311,7 +311,7 @@ class TestInvalidInputs:
             self.model.confint(parm=[0, 999])
 
     def test_confband_unexpected_X(self):
-        with pytest.raises(ValueError, match="ohne Kovariaten"):
+        with pytest.raises(ValueError, match="without covariates"):
             self.model.confband(np.array([0.5]), X=np.array([1.0]))
 
 
@@ -327,15 +327,15 @@ class TestXShapeValidation:
         ).fit(self.y, X=self.X)
 
     def test_missing_X_raises(self):
-        with pytest.raises(ValueError, match="Kovariaten"):
+        with pytest.raises(ValueError, match="covariates"):
             self.model.confband(np.array([0.5]), X=None)
 
     def test_wrong_X_shape_raises(self):
-        with pytest.raises(ValueError, match="Shape"):
+        with pytest.raises(ValueError, match="shape"):
             self.model.confband(np.array([0.5]), X=np.zeros((1, 3)))
 
     def test_multi_row_X_raises(self):
-        with pytest.raises(ValueError, match="Shape"):
+        with pytest.raises(ValueError, match="shape"):
             self.model.confband(np.array([0.5, 0.6]), X=np.zeros((2, 2)))
 
     def test_1d_X_accepted(self):
