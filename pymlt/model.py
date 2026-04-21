@@ -192,7 +192,7 @@ class ConditionalTransformationModel:
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
         if not self.is_fitted_:
-            raise NotFittedError("Modell wurde noch nicht gefittet. Rufe fit(y) auf.")
+            raise NotFittedError("Model has not been fitted yet. Call fit(y) first.")
 
     def _validate_input(
         self,
@@ -228,8 +228,8 @@ class ConditionalTransformationModel:
             for vals, name in [(fin_lo, "lower"), (fin_hi, "upper")]:
                 if len(vals) and (vals.min() < a or vals.max() > b):
                     raise ValueError(
-                        f"CensoredData.{name} enthält Werte außerhalb support "
-                        f"[{a}, {b}]. Passe BernsteinBasis(support=...) an."
+                        f"CensoredData.{name} contains values outside support "
+                        f"[{a}, {b}]. Adjust BernsteinBasis(support=...) accordingly."
                     )
             n = y.n
             y_clean: NDArray[np.float64] | CensoredData = y
@@ -238,8 +238,8 @@ class ConditionalTransformationModel:
             y_arr = np.asarray(y, dtype=float).ravel()
             if y_arr.min() < a or y_arr.max() > b:
                 raise ValueError(
-                    f"y enthält Werte außerhalb support [{a}, {b}]. "
-                    f"Passe BernsteinBasis(support=...) an. "
+                    f"y contains values outside support [{a}, {b}]. "
+                    f"Adjust BernsteinBasis(support=...) accordingly. "
                     f"(min={y_arr.min():.4g}, max={y_arr.max():.4g})"
                 )
             n = len(y_arr)
@@ -252,8 +252,8 @@ class ConditionalTransformationModel:
                 X_clean = X_clean[:, None]
             if X_clean.shape[0] != n:
                 raise ValueError(
-                    f"X hat {X_clean.shape[0]} Zeilen, y hat aber {n} "
-                    "Beobachtungen. Beide müssen übereinstimmen."
+                    f"X has {X_clean.shape[0]} rows, but y has {n} "
+                    "observations. Both must match."
                 )
 
         return y_clean, X_clean
@@ -305,10 +305,9 @@ class ConditionalTransformationModel:
 
         if not result.converged:
             warnings.warn(
-                f"Optimierung nicht konvergiert nach {result.n_restarts} "
-                f"Restarts. Solver-Meldung: {result.solver_message}. "
-                "Ergebnis ist das beste gefundene, aber möglicherweise "
-                "nicht das MLE.",
+                f"Optimization did not converge after {result.n_restarts}"
+                f"restarts. Solver message: {result.solver_message}."
+                "The result is the best found, but may not be the MLE.",
                 ConvergenceWarning,
                 stacklevel=2,
             )
@@ -428,11 +427,11 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
 
         if what not in _VALID_WHAT:
-            raise ValueError(f"what={what!r} ist ungültig. Erlaubt: {_VALID_WHAT}")
+            raise ValueError(f"what={what!r} is invalid. Allowed: {_VALID_WHAT}")
 
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
@@ -560,7 +559,7 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
@@ -599,17 +598,17 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.hessian_ is None:
             raise RuntimeError(
-                "hessian_ fehlt unerwartet nach dem Fitten. "
-                "Bitte fit(y) erneut aufrufen."
+                "hessian_ is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
             )
         try:
             return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
         except np.linalg.LinAlgError as exc:
             raise RuntimeError(
-                "vcov() konnte nicht berechnet werden: die Hesse-Matrix ist "
-                "singulär oder schlecht konditioniert.  Mögliche Ursachen: "
-                "aktive Monotonie-Constraint am MLE, zu hoher Basis-Grad im "
-                "Verhältnis zur Stichprobengröße, oder kollineare Kovariaten."
+                "vcov() could not be computed: the Hessian matrix is singular "
+                "or ill-conditioned.  Possible causes: active monotonicity "
+                "constraint at the MLE, basis order too high relative to "
+                "sample size, or collinear covariates."
             ) from exc
 
     def estfun(self) -> NDArray[np.float64]:
@@ -656,10 +655,10 @@ class ConditionalTransformationModel:
         diag = np.diag(self.vcov())
         if np.any(diag < 0):
             raise RuntimeError(
-                "vcov() enthält negative Diagonaleinträge — die Hesse-Matrix "
-                "ist nicht positiv definit.  Das Modell ist möglicherweise "
-                "nicht identifiziert oder die Optimierung ist an einem "
-                "Sattelpunkt stehen geblieben."
+                "vcov() contains negative diagonal entries — the Hessian "
+                "matrix is not positive definite.  The model may not be "
+                "identified or the optimisation may have stalled at a "
+                "saddle point."
             )
         return cast(NDArray[np.float64], np.sqrt(diag))
 
@@ -714,10 +713,10 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         if not (0.0 < level < 1.0):
-            raise ValueError(f"level={level!r} ist ungültig. Erwartet: 0 < level < 1.")
+            raise ValueError(f"level={level!r} is invalid. Expected: 0 < level < 1.")
 
         se = self.standard_errors()
         k = self.theta_.size
@@ -727,7 +726,7 @@ class ConditionalTransformationModel:
             idx = np.asarray(parm, dtype=int).ravel()
             if idx.size and (idx.min() < 0 or idx.max() >= k):
                 raise ValueError(
-                    f"parm enthält Indizes außerhalb [0, {k}). Erhalten: "
+                    f"parm contains indices outside [0, {k}). Received: "
                     f"min={int(idx.min())}, max={int(idx.max())}."
                 )
 
@@ -826,13 +825,13 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         if not (0.0 < level < 1.0):
-            raise ValueError(f"level={level!r} ist ungültig. Erwartet: 0 < level < 1.")
+            raise ValueError(f"level={level!r} is invalid. Expected: 0 < level < 1.")
         if what not in _VALID_CONFBAND_WHAT:
             raise ValueError(
-                f"what={what!r} ist ungültig. Erlaubt: {_VALID_CONFBAND_WHAT}."
+                f"what={what!r} is invalid. Allowed: {_VALID_CONFBAND_WHAT}."
             )
 
         p = self.basis.order + 1
@@ -844,21 +843,21 @@ class ConditionalTransformationModel:
         if q == 0:
             if X is not None:
                 raise ValueError(
-                    "Das Modell wurde ohne Kovariaten gefittet; X muss None sein."
+                    "The model was fitted without covariates; X must be None."
                 )
             x_row: NDArray[np.float64] | None = None
         else:
             if X is None:
                 raise ValueError(
-                    f"Das Modell wurde mit {q} Kovariaten gefittet; X ist "
-                    "erforderlich (Shape (q,) oder (1, q))."
+                    f"The model was fitted with {q} covariates; X is "
+                    "required (shape (q,) or (1, q))."
                 )
             X_arr = np.asarray(X, dtype=float)
             if X_arr.ndim == 1:
                 X_arr = X_arr[None, :]
             if X_arr.shape != (1, q):
                 raise ValueError(
-                    f"X hat Shape {X_arr.shape}, erwartet (q,) oder (1, q) mit q={q}."
+                    f"X has shape {X_arr.shape}, expected (q,) or (1, q) with q={q}."
                 )
             x_row = X_arr[0]
 
@@ -877,10 +876,10 @@ class ConditionalTransformationModel:
         # For scales whose η involves log h', also validate h' > 0.
         if what in ("density", "hazard") and np.any(hp <= 0.0):
             raise RuntimeError(
-                "h'(y) <= 0 an mindestens einem Gitterpunkt — die "
-                f"{what}-Zielgröße hat kein log h'-Term und die Konfidenzband-"
-                "Formel ist undefiniert. Prüfe Monotonie des Fits oder wähle "
-                "ein anderes what."
+                "h'(y) <= 0 at at least one grid point — the "
+                f"{what} target involves a log h' term and the "
+                "confidence-band formula is undefined. Check monotonicity "
+                "of the fit or choose a different what."
             )
 
         dist = _get_dist(self.base_distribution)
@@ -1004,7 +1003,7 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.result_ is None or self.n_free_params_ is None:
-            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+            raise RuntimeError("Model state is unexpectedly missing after fitting.")
         return -2.0 * self.result_.log_likelihood + 2.0 * self.n_free_params_
 
     def bic(self) -> float:
@@ -1035,7 +1034,7 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.result_ is None or self.n_free_params_ is None or self.n_obs_ is None:
-            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+            raise RuntimeError("Model state is unexpectedly missing after fitting.")
         return (
             -2.0 * self.result_.log_likelihood
             + math.log(self.n_obs_) * self.n_free_params_
@@ -1088,7 +1087,7 @@ class ConditionalTransformationModel:
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(
-                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                    "Result (result_) is unexpectedly missing after fitting."
                 )
             ll = self.result_.log_likelihood
             return (
@@ -1151,7 +1150,7 @@ class MLT(ConditionalTransformationModel):
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(
-                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                    "Result (result_) is unexpectedly missing after fitting."
                 )
             ll = self.result_.log_likelihood
             return (
@@ -1267,20 +1266,20 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
     """
     if len(models) < 2:
         raise ValueError(
-            f"anova() benötigt mindestens 2 Modelle, erhalten: {len(models)}."
+            f"anova() requires at least 2 models, received: {len(models)}."
         )
     for i, m in enumerate(models):
         if not m.is_fitted_:
             raise ValueError(
-                f"Modell #{i} ist nicht gefittet. Rufe fit() vor anova() auf."
+                f"Model #{i} is not fitted. Call fit() before anova()."
             )
 
     n_obs_ref = models[0].n_obs_
     for i, m in enumerate(models):
         if m.n_obs_ != n_obs_ref:
             raise ValueError(
-                f"Modelle müssen auf derselben Stichprobengröße gefittet sein. "
-                f"Modell #0 hat n={n_obs_ref}, Modell #{i} hat n={m.n_obs_}."
+                f"Models must be fitted on the same sample size. "
+                f"Model #0 has n={n_obs_ref}, model #{i} has n={m.n_obs_}."
             )
 
     # Label each model by its caller-input position *before* sorting, so that
@@ -1302,9 +1301,9 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
         ddf = n_params[i] - n_params[i - 1]
         if ddf <= 0:
             raise ValueError(
-                "Aufeinanderfolgende Modelle müssen eine echt unterschiedliche "
-                f"Parameterzahl haben (Modell {i - 1}: k={n_params[i - 1]}, "
-                f"Modell {i}: k={n_params[i]})."
+                "Consecutive models must have strictly different parameter "
+                f"counts (model {i - 1}: k={n_params[i - 1]}, "
+                f"model {i}: k={n_params[i]})."
             )
         d = 2.0 * (log_lik[i] - log_lik[i - 1])
         # Negative deviance can occur if the larger model failed to converge

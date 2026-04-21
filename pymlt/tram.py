@@ -116,7 +116,7 @@ class _TramModel(MLT):
         try:
             se = self.standard_errors()
         except RuntimeError:
-            return "  [Standardfehler nicht verfügbar: Hesse-Matrix ist singulär.]"
+            return "  [Standard errors not available: Hessian matrix is singular.]"
 
         beta = self.theta_[p:]
         beta_se = se[p:]
