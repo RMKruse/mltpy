@@ -280,6 +280,33 @@ class TestOptimizeRestarts:
             assert result.n_restarts == 0
 
 
+class TestOptimizeReproducibility:
+    """`OptimizerConfig.random_state` controls the restart-perturbation RNG."""
+
+    def _run(self, random_state):
+        cfg = OptimizerConfig(
+            max_iter=1, max_restarts=3, random_state=random_state, verbose=False
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return optimize(make_basis(), simple_data(), config=cfg)
+
+    def test_same_seed_same_theta(self):
+        r1 = self._run(42)
+        r2 = self._run(42)
+        np.testing.assert_allclose(r1.theta, r2.theta)
+
+    def test_different_seed_different_theta(self):
+        r1 = self._run(1)
+        r2 = self._run(2)
+        assert not np.allclose(r1.theta, r2.theta)
+
+    def test_generator_instance_accepted(self):
+        r_int = self._run(7)
+        r_gen = self._run(np.random.default_rng(7))
+        np.testing.assert_allclose(r_int.theta, r_gen.theta)
+
+
 # ---------------------------------------------------------------------------
 # base_distribution validation in optimize()
 # ---------------------------------------------------------------------------

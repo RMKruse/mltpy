@@ -58,6 +58,11 @@ class OptimizerConfig:
         Set to ``False`` only for debugging.
     verbose:
         If ``True``, print a warning on each failed attempt.
+    random_state:
+        If an ``int``, seeds the RNG used to perturb restart starting points
+        so repeated fits with the same config and data are bit-identical.
+        If a :class:`numpy.random.Generator`, it is used directly.
+        If ``None`` (default), draws are non-reproducible across runs.
     """
 
     solver: Literal["slsqp", "trust-constr"] = "slsqp"
@@ -66,6 +71,7 @@ class OptimizerConfig:
     max_restarts: int = 3
     use_gradient: bool = True
     verbose: bool = False
+    random_state: int | np.random.Generator | None = None
 
 
 @dataclass
@@ -346,7 +352,10 @@ def optimize(
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
-    rng = np.random.default_rng()
+    if isinstance(config.random_state, np.random.Generator):
+        rng = config.random_state
+    else:
+        rng = np.random.default_rng(config.random_state)
 
     theta_init = _initial_theta(n_params, X)
 

@@ -404,7 +404,12 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
         # --- Quantiles ---
         quantile_py: NDArray[np.float64] | None = None
         if case.quantile_probs is not None:
-            quantile_py = model.predict(case.quantile_probs, what="quantile")
+            X_q = None
+            if case.regression:
+                X_q = np.zeros((len(case.quantile_probs), case.n_covariates))
+            quantile_py = model.predict(
+                case.quantile_probs, X_new=X_q, what="quantile"
+            )
 
         # --- Hazard at grid points (right-censored only) ---
         hazard_py: NDArray[np.float64] | None = None

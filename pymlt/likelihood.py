@@ -730,6 +730,191 @@ def _grad_interval(
 
 
 # ---------------------------------------------------------------------------
+# Private combined LL + gradient helpers — one per censoring type.
+# Used by negative_log_likelihood(gradient=True) so the optimiser pays for
+# basis.evaluate / basis.derivative and the mask slicing once per iteration
+# instead of twice.  Return (ll, grad_of_negative_ll).
+# ---------------------------------------------------------------------------
+
+
+def _ll_and_grad_none(
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> tuple[float, NDArray[np.float64]]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for exact observations."""
+    p = basis.order + 1
+    theta_b, beta = _split_theta(theta, p, X)
+
+    B = basis.evaluate(y)
+    D = basis.derivative(y, order=1)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    hp = D @ theta_b
+
+    ns = _neg_score(h, dist)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # hp ≤ 0 (monotonicity violation) → log(hp) is -inf/nan, 1/hp is ±inf.
+        # The non-finite ll is caught by InfeasibleParameterError downstream;
+        # the gradient is discarded in that case.
+        ll = float(np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
+        grad_b = B.T @ ns - D.T @ (1.0 / hp)
+    if X is not None and beta is not None:
+        grad = np.concatenate([grad_b, X.T @ ns])
+    else:
+        grad = grad_b
+    return ll, cast(NDArray[np.float64], grad)
+
+
+def _ll_and_grad_right(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> tuple[float, NDArray[np.float64]]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    ll = 0.0
+    grad = np.zeros(p + q)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        B_e = basis.evaluate(y_e)
+        D_e = basis.derivative(y_e, order=1)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        hp_e = D_e @ theta_b
+        ns = _neg_score(h_e, dist)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        if X_e is not None:
+            grad[p:] += X_e.T @ ns
+
+    mask_c = cd.is_right_censored_mask
+    if mask_c.any():
+        y_c = cd.lower[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        ll += float(np.sum(dist.logsf(h_c)))
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        grad[:p] += B_c.T @ hazard
+        if X_c is not None:
+            grad[p:] += X_c.T @ hazard
+
+    return ll, cast(NDArray[np.float64], grad)
+
+
+def _ll_and_grad_left(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> tuple[float, NDArray[np.float64]]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    ll = 0.0
+    grad = np.zeros(p + q)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        B_e = basis.evaluate(y_e)
+        D_e = basis.derivative(y_e, order=1)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        hp_e = D_e @ theta_b
+        ns = _neg_score(h_e, dist)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        if X_e is not None:
+            grad[p:] += X_e.T @ ns
+
+    mask_c = cd.is_left_censored_mask
+    if mask_c.any():
+        y_c = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        log_Fc = _logcdf(h_c)
+        ll += float(np.sum(log_Fc))
+        inv_mills = np.exp(dist.logpdf(h_c) - log_Fc)
+        grad[:p] -= B_c.T @ inv_mills
+        if X_c is not None:
+            grad[p:] -= X_c.T @ inv_mills
+
+    return ll, cast(NDArray[np.float64], grad)
+
+
+def _ll_and_grad_interval(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    dist: Any = norm,
+) -> tuple[float, NDArray[np.float64]]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
+    p = basis.order + 1
+    q = X.shape[1] if X is not None else 0
+    theta_b, beta = _split_theta(theta, p, X)
+    ll = 0.0
+    grad = np.zeros(p + q)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        y_e = cd.exact[mask_e]
+        X_e = X[mask_e] if X is not None else None
+        B_e = basis.evaluate(y_e)
+        D_e = basis.derivative(y_e, order=1)
+        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        hp_e = D_e @ theta_b
+        ns = _neg_score(h_e, dist)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        if X_e is not None:
+            grad[p:] += X_e.T @ ns
+
+    mask_i = cd.is_interval_censored_mask
+    if mask_i.any():
+        lo = cd.lower[mask_i]
+        hi = cd.upper[mask_i]
+        X_i = X[mask_i] if X is not None else None
+        B_lo = basis.evaluate(lo)
+        B_hi = basis.evaluate(hi)
+        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
+        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+
+        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        ll += float(np.sum(log_p))
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        with np.errstate(invalid="ignore"):
+            grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
+            if X_i is not None:
+                grad[p:] -= X_i.T @ (w_hi - w_lo)
+
+    return ll, cast(NDArray[np.float64], grad)
+
+
+# ---------------------------------------------------------------------------
 # Private per-observation score functions — one per censoring type.
 # Each returns an (n, p+q) matrix of gradients of the POSITIVE log-likelihood
 # ℓ_i w.r.t. theta, with rows aligned to the input ordering.
@@ -1220,30 +1405,35 @@ def negative_log_likelihood(
     float  when ``gradient=False``
     (float, NDArray)  when ``gradient=True``
     """
-    nll = -log_likelihood(
-        theta, basis, y, X, censoring, base_distribution=base_distribution
-    )
-
     if not gradient:
-        return nll
+        return -log_likelihood(
+            theta, basis, y, X, censoring, base_distribution=base_distribution
+        )
 
     dist = _get_dist(base_distribution)
 
-    # Analytical gradient of the negative log-likelihood
+    # Single pass: share basis.evaluate / basis.derivative and mask slicing
+    # between the log-likelihood and its gradient.
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        grad = _grad_none(y_arr, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_none(y_arr, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.NONE:
+        ll, grad = _ll_and_grad_none(y.exact, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.RIGHT:
+        ll, grad = _ll_and_grad_right(y, theta, basis, X, dist=dist)
+    elif censoring is CensoringType.LEFT:
+        ll, grad = _ll_and_grad_left(y, theta, basis, X, dist=dist)
     else:
-        if censoring is CensoringType.NONE:
-            grad = _grad_none(y.exact, theta, basis, X, dist=dist)
-        elif censoring is CensoringType.RIGHT:
-            grad = _grad_right(y, theta, basis, X, dist=dist)
-        elif censoring is CensoringType.LEFT:
-            grad = _grad_left(y, theta, basis, X, dist=dist)
-        else:
-            grad = _grad_interval(y, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_interval(y, theta, basis, X, dist=dist)
 
-    return nll, grad
+    if not np.isfinite(ll):
+        raise InfeasibleParameterError(
+            f"log_likelihood returned {ll}.  Possible causes: theta "
+            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+            "support, or extreme h values despite clipping."
+        )
+
+    return -ll, grad
 
 
 def hessian(
