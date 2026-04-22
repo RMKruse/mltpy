@@ -62,6 +62,31 @@ def _make_interval(n: int, rng: np.random.Generator) -> CensoredData:
     return CensoredData(lower=y - half, upper=y + half, exact=np.full(n, np.nan))
 
 
+def _support_from_response(
+    y: np.ndarray | CensoredData, pad: float = 0.05
+) -> tuple[float, float]:
+    """Span every finite observable endpoint of the response.
+
+    Mirrors R ``mlt``'s convention that a ``numeric_var``'s support (and thus
+    the ``Bernstein_basis`` it defines) must cover the full range of observed
+    events — exact values *and* the finite endpoints of left/right/interval
+    censored observations.  The basis is not expected to extrapolate; the
+    support is the data support.
+    """
+    if isinstance(y, CensoredData):
+        parts = [
+            y.lower[np.isfinite(y.lower)],
+            y.upper[np.isfinite(y.upper)],
+            y.exact[np.isfinite(y.exact)],
+        ]
+        vals = np.concatenate([p for p in parts if p.size])
+    else:
+        vals = np.asarray(y, dtype=float).ravel()
+    lo, hi = float(vals.min()), float(vals.max())
+    span = hi - lo
+    return lo - pad * span, hi + pad * span
+
+
 _DISTS = ("normal", "logistic", "min_extreme_value", "max_extreme_value")
 
 
@@ -79,7 +104,6 @@ def test_score_sums_to_minus_nll_gradient(base_distribution, censoring, builder)
     """``score_matrix.sum(0)`` must equal ``-grad(NLL)`` (both are ``grad ℓ``)."""
     rng = np.random.default_rng(123)
     n = 50
-    basis = BernsteinBasis(order=4, support=(0.01, 10.0))
     theta = np.concatenate([np.linspace(-1.2, 1.4, 5), [0.25, -0.15]])
     X = rng.normal(0, 1, (n, 2))
     y: np.ndarray | CensoredData
@@ -87,6 +111,7 @@ def test_score_sums_to_minus_nll_gradient(base_distribution, censoring, builder)
         y = np.abs(rng.normal(1.5, 0.5, n)) + 0.1
     else:
         y = builder(n, rng)
+    basis = BernsteinBasis(order=4, support=_support_from_response(y))
 
     _, grad_nll = negative_log_likelihood(
         theta,
@@ -122,13 +147,13 @@ def test_hessian_matches_finite_differences(base_distribution, censoring, builde
     """Analytical Hessian matches finite differences of the analytical gradient."""
     rng = np.random.default_rng(7)
     n = 40
-    basis = BernsteinBasis(order=4, support=(0.01, 10.0))
     theta = np.concatenate([np.linspace(-1.2, 1.4, 5), [0.25, -0.15]])
     X = rng.normal(0, 1, (n, 2))
     if builder is None:
         y: np.ndarray | CensoredData = np.abs(rng.normal(1.5, 0.5, n)) + 0.1
     else:
         y = builder(n, rng)
+    basis = BernsteinBasis(order=4, support=_support_from_response(y))
 
     def grad_fn(t: np.ndarray) -> np.ndarray:
         _, g = negative_log_likelihood(
