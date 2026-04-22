@@ -56,6 +56,7 @@ Numerical stability
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import numpy as np
@@ -86,8 +87,43 @@ _VALID_BASE_DISTRIBUTIONS = (
 )
 
 
-def _get_dist(base_distribution: str) -> Any:
-    """Return the scipy.stats distribution for *base_distribution*.
+@dataclass(frozen=True)
+class DistOps:
+    """Typed wrapper around a scipy.stats distribution used by the likelihood.
+
+    Dispatch in the hot paths (analytical score, second derivative, log-CDF
+    fast path) goes through :attr:`kind` — a plain string comparison against
+    the :data:`BaseDistribution` Literal — rather than ``dist is norm`` style
+    identity checks.  Identity-based dispatch is fragile: anything that
+    reimports scipy, pickles the distribution, or wraps it for instrumentation
+    can silently break the identity while leaving attribute access intact,
+    which would previously fall through to the logistic branch in
+    :func:`_neg_score` and :func:`_d2_logpdf` and produce wrong gradients.
+
+    The ``__getattr__`` forwarder exposes every scipy distribution method
+    (``logpdf``, ``logcdf``, ``logsf``, ``cdf``, ``pdf``, ``ppf``, ...) so
+    existing call sites that read e.g. ``dist.logpdf(h)`` continue to work
+    without change.
+    """
+
+    kind: BaseDistribution
+    scipy: Any
+
+    def __getattr__(self, name: str) -> Any:
+        # Dataclass attributes (``kind``, ``scipy``) are resolved normally;
+        # this method only runs for missing names, so recursion is impossible.
+        return getattr(self.scipy, name)
+
+
+_NORM_OPS = DistOps("normal", norm)
+_LOGIS_OPS = DistOps("logistic", _logistic)
+_MEV_OPS = DistOps("min_extreme_value", _mev)
+_MAXEV_OPS = DistOps("max_extreme_value", _maxev)
+_EXPON_OPS = DistOps("exponential", _expon)
+
+
+def _get_dist(base_distribution: str) -> DistOps:
+    """Return the :class:`DistOps` wrapper for *base_distribution*.
 
     The supported choices are:
 
@@ -107,6 +143,10 @@ def _get_dist(base_distribution: str) -> Any:
       no covariates this collapses to ``theta_b[0] >= 0``; with covariates,
       one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row.
 
+    The returned :class:`DistOps` forwards attribute access to the underlying
+    scipy distribution, so ``_get_dist("normal").logpdf(h)`` is equivalent to
+    ``scipy.stats.norm.logpdf(h)``.
+
     Raises
     ------
     ValueError
@@ -114,15 +154,15 @@ def _get_dist(base_distribution: str) -> Any:
         is never silently swallowed.
     """
     if base_distribution == "normal":
-        return norm
+        return _NORM_OPS
     if base_distribution == "logistic":
-        return _logistic
+        return _LOGIS_OPS
     if base_distribution == "min_extreme_value":
-        return _mev
+        return _MEV_OPS
     if base_distribution == "max_extreme_value":
-        return _maxev
+        return _MAXEV_OPS
     if base_distribution == "exponential":
-        return _expon
+        return _EXPON_OPS
     raise ValueError(
         f"base_distribution={base_distribution!r} is not supported. "
         f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
@@ -153,7 +193,7 @@ _LOG_FLOAT_MAX: float = float(np.log(np.finfo(np.float64).max))
 
 
 def _log_diff_ndtr(
-    a: NDArray[np.float64], b: NDArray[np.float64], dist: Any = norm
+    a: NDArray[np.float64], b: NDArray[np.float64], dist: DistOps = _NORM_OPS
 ) -> NDArray[np.float64]:
     """Compute log(F(b) − F(a)) in a numerically stable way.
 
@@ -174,9 +214,9 @@ def _log_diff_ndtr(
         Lower arguments. Must satisfy a <= b.
     b: NDArray[np.float64]
         Upper arguments. Must satisfy a <= b.
-    dist: Any, default=scipy.stats.norm
-        Base distribution object (e.g., norm or logistic) providing
-        ``logcdf`` and ``logpdf``.
+    dist: DistOps, default=:data:`_NORM_OPS`
+        Distribution wrapper providing ``logcdf`` / ``logpdf`` via attribute
+        forwarding to the underlying scipy distribution.
 
     Returns
     -------
@@ -204,7 +244,7 @@ def _log_diff_ndtr(
     b = np.asarray(b, dtype=float)
 
     # Use log_ndtr for normal (more stable at extreme values); dist.logcdf otherwise
-    _logcdf = log_ndtr if dist is norm else dist.logcdf
+    _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
 
     log_Fa = _logcdf(a)  # log F(a)
     log_Fb = _logcdf(b)  # log F(b)
@@ -281,50 +321,50 @@ def _shift(
     return h
 
 
-def _neg_score(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
+def _neg_score(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
     """Compute -(∂ log f(h) / ∂h) for the base distribution.
 
     Parameters
     ----------
     h : NDArray[np.float64]
         Values of the transformation function.
-    dist : Any
-        scipy.stats distribution object (``norm``, ``logistic``, ``gumbel_l``,
-        ``gumbel_r``, or ``expon``).
+    dist : DistOps
+        Distribution wrapper (dispatched on :attr:`DistOps.kind`).
 
     Returns
     -------
     NDArray[np.float64]
         The negative derivative of the log-density.
 
-        * normal (N(0,1)):            ``h``
-        * logistic:                   ``2 F(h) - 1``
+        * normal (N(0,1)):              ``h``
+        * logistic:                     ``2 F(h) - 1``
         * min_extreme_value (gumbel_l): ``exp(h) - 1``
         * max_extreme_value (gumbel_r): ``1 - exp(-h)``
-        * exponential:                ``1`` (constant)
+        * exponential:                  ``1`` (constant)
     """
-    if dist is norm:
+    kind = dist.kind
+    if kind == "normal":
         return h
-    if dist is _mev:
+    if kind == "logistic":
+        return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
+    if kind == "min_extreme_value":
         return np.exp(h) - 1.0
-    if dist is _maxev:
+    if kind == "max_extreme_value":
         return 1.0 - np.exp(-h)
-    if dist is _expon:
+    if kind == "exponential":
         return np.ones_like(h)
-    # logistic (remaining case)
-    return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
+    raise AssertionError(f"unhandled dist.kind={kind!r}")
 
 
-def _d2_logpdf(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
+def _d2_logpdf(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
     """Compute ``ψ'(h) = d² log f(h) / dh²`` for the base distribution.
 
     Parameters
     ----------
     h : NDArray[np.float64]
         Values of the transformation function.
-    dist : Any
-        scipy.stats distribution object (``norm``, ``logistic``, ``gumbel_l``,
-        ``gumbel_r``, or ``expon``).
+    dist : DistOps
+        Distribution wrapper (dispatched on :attr:`DistOps.kind`).
 
     Returns
     -------
@@ -344,16 +384,18 @@ def _d2_logpdf(h: NDArray[np.float64], dist: Any) -> NDArray[np.float64]:
     ``ψ'(h) ≤ 0`` for every h, which makes the exact-observation Hessian
     of the *negative* log-likelihood positive on the ``β`` block.
     """
-    if dist is norm:
+    kind = dist.kind
+    if kind == "normal":
         return np.full_like(h, -1.0)
-    if dist is _mev:
+    if kind == "logistic":
+        return cast(NDArray[np.float64], -2.0 * dist.pdf(h))
+    if kind == "min_extreme_value":
         return cast(NDArray[np.float64], -np.exp(h))
-    if dist is _maxev:
+    if kind == "max_extreme_value":
         return cast(NDArray[np.float64], -np.exp(-h))
-    if dist is _expon:
+    if kind == "exponential":
         return np.zeros_like(h)
-    # logistic (remaining case)
-    return cast(NDArray[np.float64], -2.0 * dist.pdf(h))
+    raise AssertionError(f"unhandled dist.kind={kind!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +408,7 @@ def _ll_none(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> float:
     """Computes the log-likelihood for exactly observed (uncensored) data.
 
@@ -384,7 +426,7 @@ def _ll_none(
         Polynomial basis object.
     X : NDArray[np.float64] | None
         Covariates.
-    dist : Any, default=scipy.stats.norm
+    dist : DistOps, default=:data:`_NORM_OPS`
         Base distribution.
 
     Returns
@@ -411,7 +453,7 @@ def _ll_right(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> float:
     """Computes the log-likelihood for right-censored data.
 
@@ -430,7 +472,7 @@ def _ll_right(
         Polynomial basis object.
     X : NDArray[np.float64] | None
         Covariates.
-    dist : Any, default=scipy.stats.norm
+    dist : DistOps, default=:data:`_NORM_OPS`
         Base distribution.
 
     Returns
@@ -468,7 +510,7 @@ def _ll_left(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> float:
     """Computes the log-likelihood for left-censored data.
 
@@ -486,7 +528,7 @@ def _ll_left(
         Polynomial basis object.
     X : NDArray[np.float64] | None
         Covariates.
-    dist : Any, default=scipy.stats.norm
+    dist : DistOps, default=:data:`_NORM_OPS`
         Base distribution.
 
     Returns
@@ -514,7 +556,7 @@ def _ll_left(
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         ll += float(np.sum(_logcdf(h_c)))
 
     return ll
@@ -525,7 +567,7 @@ def _ll_interval(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> float:
     """ℓ = Σ log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
     p = basis.order + 1
@@ -568,7 +610,7 @@ def _grad_none(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
@@ -593,7 +635,7 @@ def _grad_right(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for right-censored data."""
     p = basis.order + 1
@@ -636,7 +678,7 @@ def _grad_left(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for left-censored data."""
     p = basis.order + 1
@@ -664,7 +706,7 @@ def _grad_left(
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = -B_c.T @ [f(h)/F(h)]
-        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         inv_mills = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
         grad[:p] -= B_c.T @ inv_mills
         if X_c is not None:
@@ -678,7 +720,7 @@ def _grad_interval(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for interval-censored data."""
     p = basis.order + 1
@@ -742,7 +784,7 @@ def _ll_and_grad_none(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> tuple[float, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
@@ -772,7 +814,7 @@ def _ll_and_grad_right(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> tuple[float, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
     p = basis.order + 1
@@ -817,7 +859,7 @@ def _ll_and_grad_left(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> tuple[float, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
     p = basis.order + 1
@@ -847,7 +889,7 @@ def _ll_and_grad_left(
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_Fc = _logcdf(h_c)
         ll += float(np.sum(log_Fc))
         inv_mills = np.exp(dist.logpdf(h_c) - log_Fc)
@@ -863,7 +905,7 @@ def _ll_and_grad_interval(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> tuple[float, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
     p = basis.order + 1
@@ -926,7 +968,7 @@ def _scores_none(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for exact observations, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -955,7 +997,7 @@ def _scores_right(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for right-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -992,7 +1034,7 @@ def _scores_left(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for left-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1014,7 +1056,7 @@ def _scores_left(
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂ℓ_i/∂h = µ(h) = f(h)/F(h)
-        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         inv_mills = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
         scores[mask_c, :p] = B_c * inv_mills[:, None]
         if X_c is not None:
@@ -1028,7 +1070,7 @@ def _scores_interval(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for interval-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1105,7 +1147,7 @@ def _hess_none(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for exact observations, shape ``(p+q, p+q)``.
 
@@ -1141,7 +1183,7 @@ def _hess_right(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for right-censored data, shape ``(p+q, p+q)``.
 
@@ -1180,7 +1222,7 @@ def _hess_left(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for left-censored data, shape ``(p+q, p+q)``.
 
@@ -1204,7 +1246,7 @@ def _hess_left(
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        _logcdf = log_ndtr if dist is norm else dist.logcdf
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         mu = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
         psi = -_neg_score(h_c, dist)
         w = mu * (mu - psi)  # = -d²logF/dh² → NLL contribution
@@ -1218,7 +1260,7 @@ def _hess_interval(
     theta: NDArray[np.float64],
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
-    dist: Any = norm,
+    dist: DistOps = _NORM_OPS,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for interval-censored data, shape ``(p+q, p+q)``.
 
@@ -1314,7 +1356,7 @@ def _log_likelihood_from_dist(
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
-    dist: Any,
+    dist: DistOps,
 ) -> float:
     """Internal log-likelihood evaluator for a pre-resolved base distribution."""
     if isinstance(y, np.ndarray):
@@ -1346,7 +1388,7 @@ def _negative_log_likelihood_from_dist(
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
     gradient: bool,
-    dist: Any,
+    dist: DistOps,
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Internal NLL evaluator for a pre-resolved base distribution."""
     if not gradient:

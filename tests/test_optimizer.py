@@ -355,9 +355,9 @@ class TestBaseDistributionValidation:
         def count_optimizer_get_dist(base_distribution):
             nonlocal calls
             calls += 1
-            from scipy.stats import norm
+            from pymlt.likelihood import _NORM_OPS
 
-            return norm
+            return _NORM_OPS
 
         def fail_likelihood_get_dist(base_distribution):
             raise AssertionError("_get_dist should not run inside optimize() evaluations")

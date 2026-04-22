@@ -23,6 +23,7 @@ from pymlt.basis import BernsteinBasis
 from pymlt.constraints import build_constraints
 from pymlt.likelihood import (
     BaseDistribution,
+    DistOps,
     InfeasibleParameterError,
     _get_dist,
     _negative_log_likelihood_from_dist,
@@ -134,7 +135,7 @@ def _make_objective(
     use_gradient: bool,
     base_distribution: BaseDistribution = "normal",
     *,
-    dist: Any | None = None,
+    dist: DistOps | None = None,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -162,8 +163,8 @@ def _make_objective(
         If True, return analytical gradients along with the negative log-likelihood.
     base_distribution : BaseDistribution, default="normal"
         The base distribution to estimate transformations against.
-    dist : Any | None, default=None
-        Optional pre-resolved scipy.stats distribution object. When provided,
+    dist : DistOps | None, default=None
+        Optional pre-resolved distribution wrapper. When provided,
         objective evaluations reuse it instead of re-dispatching from
         ``base_distribution`` on every call.
 

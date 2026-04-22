@@ -491,27 +491,37 @@ class TestGetDist:
     def test_normal_returns_norm(self):
         from scipy.stats import norm
 
-        assert _get_dist("normal") is norm
+        ops = _get_dist("normal")
+        assert ops.kind == "normal"
+        assert ops.scipy is norm
 
     def test_logistic_returns_logistic(self):
         from scipy.stats import logistic
 
-        assert _get_dist("logistic") is logistic
+        ops = _get_dist("logistic")
+        assert ops.kind == "logistic"
+        assert ops.scipy is logistic
 
     def test_min_extreme_value_returns_gumbel_l(self):
         from scipy.stats import gumbel_l
 
-        assert _get_dist("min_extreme_value") is gumbel_l
+        ops = _get_dist("min_extreme_value")
+        assert ops.kind == "min_extreme_value"
+        assert ops.scipy is gumbel_l
 
     def test_max_extreme_value_returns_gumbel_r(self):
         from scipy.stats import gumbel_r
 
-        assert _get_dist("max_extreme_value") is gumbel_r
+        ops = _get_dist("max_extreme_value")
+        assert ops.kind == "max_extreme_value"
+        assert ops.scipy is gumbel_r
 
     def test_exponential_returns_expon(self):
         from scipy.stats import expon
 
-        assert _get_dist("exponential") is expon
+        ops = _get_dist("exponential")
+        assert ops.kind == "exponential"
+        assert ops.scipy is expon
 
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
@@ -570,63 +580,71 @@ class TestNegScore:
         return -(dist.logpdf(h + eps) - dist.logpdf(h - eps)) / (2 * eps)
 
     def test_normal(self):
-        from scipy.stats import norm
-
-        from pymlt.likelihood import _neg_score
+        from pymlt.likelihood import _NORM_OPS, _neg_score
 
         h = np.linspace(-2.0, 2.0, 9)
-        np.testing.assert_allclose(_neg_score(h, norm), h, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, _NORM_OPS), h, rtol=1e-12)
         np.testing.assert_allclose(
-            _neg_score(h, norm), self._fd_neg_score(norm, h), rtol=1e-4
+            _neg_score(h, _NORM_OPS), self._fd_neg_score(_NORM_OPS, h), rtol=1e-4
         )
 
     def test_min_extreme_value(self):
-        from scipy.stats import gumbel_l
-
-        from pymlt.likelihood import _neg_score
+        from pymlt.likelihood import _MEV_OPS, _neg_score
 
         h = np.linspace(-1.5, 1.5, 9)
         expected = np.exp(h) - 1.0
-        np.testing.assert_allclose(_neg_score(h, gumbel_l), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, _MEV_OPS), expected, rtol=1e-12)
         np.testing.assert_allclose(
-            _neg_score(h, gumbel_l), self._fd_neg_score(gumbel_l, h), rtol=1e-4
+            _neg_score(h, _MEV_OPS), self._fd_neg_score(_MEV_OPS, h), rtol=1e-4
         )
 
     def test_max_extreme_value(self):
-        from scipy.stats import gumbel_r
-
-        from pymlt.likelihood import _neg_score
+        from pymlt.likelihood import _MAXEV_OPS, _neg_score
 
         h = np.linspace(-1.5, 1.5, 9)
         expected = 1.0 - np.exp(-h)
-        np.testing.assert_allclose(_neg_score(h, gumbel_r), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, _MAXEV_OPS), expected, rtol=1e-12)
         np.testing.assert_allclose(
-            _neg_score(h, gumbel_r), self._fd_neg_score(gumbel_r, h), rtol=1e-4
+            _neg_score(h, _MAXEV_OPS), self._fd_neg_score(_MAXEV_OPS, h), rtol=1e-4
         )
 
     def test_exponential(self):
-        from scipy.stats import expon
-
-        from pymlt.likelihood import _neg_score
+        from pymlt.likelihood import _EXPON_OPS, _neg_score
 
         h = np.linspace(0.1, 3.0, 9)  # strictly > 0: in support
         expected = np.ones_like(h)
-        np.testing.assert_allclose(_neg_score(h, expon), expected, rtol=1e-12)
+        np.testing.assert_allclose(_neg_score(h, _EXPON_OPS), expected, rtol=1e-12)
         np.testing.assert_allclose(
-            _neg_score(h, expon), self._fd_neg_score(expon, h), rtol=1e-4
+            _neg_score(h, _EXPON_OPS), self._fd_neg_score(_EXPON_OPS, h), rtol=1e-4
         )
 
     def test_logistic(self):
-        from scipy.stats import logistic
-
-        from pymlt.likelihood import _neg_score
+        from pymlt.likelihood import _LOGIS_OPS, _neg_score
 
         h = np.linspace(-2.0, 2.0, 9)
-        expected = 2.0 * logistic.cdf(h) - 1.0
-        np.testing.assert_allclose(_neg_score(h, logistic), expected, rtol=1e-12)
+        expected = 2.0 * _LOGIS_OPS.cdf(h) - 1.0
+        np.testing.assert_allclose(_neg_score(h, _LOGIS_OPS), expected, rtol=1e-12)
         np.testing.assert_allclose(
-            _neg_score(h, logistic), self._fd_neg_score(logistic, h), rtol=1e-4
+            _neg_score(h, _LOGIS_OPS), self._fd_neg_score(_LOGIS_OPS, h), rtol=1e-4
         )
+
+    def test_unhandled_kind_raises_neg_score(self):
+        """Exhaustiveness guard: an unknown kind fails loudly, no logistic fallthrough."""
+        from pymlt.likelihood import DistOps, _neg_score
+
+        bogus = DistOps(kind="not-a-real-distribution", scipy=None)  # type: ignore[arg-type]
+
+        with pytest.raises(AssertionError, match="unhandled dist.kind"):
+            _neg_score(np.array([0.0, 1.0]), bogus)
+
+    def test_unhandled_kind_raises_d2_logpdf(self):
+        """Same guard in _d2_logpdf — the other correctness-critical dispatch."""
+        from pymlt.likelihood import DistOps, _d2_logpdf
+
+        bogus = DistOps(kind="not-a-real-distribution", scipy=None)  # type: ignore[arg-type]
+
+        with pytest.raises(AssertionError, match="unhandled dist.kind"):
+            _d2_logpdf(np.array([0.0, 1.0]), bogus)
 
 
 # ---------------------------------------------------------------------------
@@ -727,3 +745,124 @@ class TestPerDistributionLikelihood:
 
         err = check_grad(f, g, theta)
         assert err < 1e-4, f"check_grad err={err:.2e} for {base_distribution}"
+
+
+# ---------------------------------------------------------------------------
+# Regression: DistOps dispatches by kind string, not scipy object identity.
+# ---------------------------------------------------------------------------
+
+
+class _ScipyProxy:
+    """Minimal passthrough around a scipy.stats distribution.
+
+    A fresh proxy object has a different ``id()`` than ``scipy.stats.norm``
+    etc., so any code that dispatches by ``dist is norm`` (or similar identity
+    check) would silently take the wrong branch when handed one of these.
+    The proxy is there to simulate the real-world scenarios that prompted the
+    refactor: scipy reimports in sub-interpreters, pickle round-trips, and
+    test wrappers.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+@pytest.mark.parametrize(
+    "base_distribution",
+    ["normal", "logistic", "min_extreme_value", "max_extreme_value", "exponential"],
+)
+class TestDistOpsDispatchIsIdentityFree:
+    """A DistOps wrapping a proxy must behave identically to the canonical one.
+
+    This is the regression guard for the fragile ``dist is norm`` pattern that
+    existed prior to DistOps.  If a future change reintroduces identity-based
+    dispatch on the scipy object, these tests will fail — either with wrong
+    numerics in ``_neg_score`` / ``_d2_logpdf`` (the silent correctness bug)
+    or with a reduced-precision fallback in the ``log_ndtr`` path.
+    """
+
+    def _make_ops(self, base_distribution):
+        from pymlt.likelihood import DistOps, _get_dist
+
+        canonical = _get_dist(base_distribution)
+        proxy = _ScipyProxy(canonical.scipy)
+        wrapped = DistOps(kind=canonical.kind, scipy=proxy)
+        # Sanity: identity against the module-level singleton is broken on purpose.
+        assert wrapped.scipy is not canonical.scipy
+        return canonical, wrapped
+
+    @staticmethod
+    def _h_grid(base_distribution):
+        # exponential has support [0, inf); stay strictly > 0.
+        if base_distribution == "exponential":
+            return np.linspace(0.1, 2.5, 9)
+        return np.linspace(-2.0, 2.0, 9)
+
+    def test_neg_score_matches(self, base_distribution):
+        from pymlt.likelihood import _neg_score
+
+        canonical, wrapped = self._make_ops(base_distribution)
+        h = self._h_grid(base_distribution)
+        np.testing.assert_array_equal(_neg_score(h, wrapped), _neg_score(h, canonical))
+
+    def test_d2_logpdf_matches(self, base_distribution):
+        from pymlt.likelihood import _d2_logpdf
+
+        canonical, wrapped = self._make_ops(base_distribution)
+        h = self._h_grid(base_distribution)
+        np.testing.assert_array_equal(_d2_logpdf(h, wrapped), _d2_logpdf(h, canonical))
+
+    def test_log_likelihood_none_matches(self, base_distribution):
+        from pymlt.likelihood import _log_likelihood_from_dist
+
+        canonical, wrapped = self._make_ops(base_distribution)
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.4)
+        y = np.linspace(0.1, 0.9, 12)
+        ref = _log_likelihood_from_dist(
+            theta, basis, y, None, CensoringType.NONE, canonical
+        )
+        got = _log_likelihood_from_dist(
+            theta, basis, y, None, CensoringType.NONE, wrapped
+        )
+        np.testing.assert_allclose(got, ref, rtol=1e-12, atol=0.0)
+
+    def test_nll_with_gradient_matches(self, base_distribution):
+        from pymlt.likelihood import _negative_log_likelihood_from_dist
+
+        canonical, wrapped = self._make_ops(base_distribution)
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.4)
+        y = np.linspace(0.1, 0.9, 12)
+
+        nll_ref, grad_ref = _negative_log_likelihood_from_dist(
+            theta, basis, y, None, CensoringType.NONE, True, canonical
+        )
+        nll_w, grad_w = _negative_log_likelihood_from_dist(
+            theta, basis, y, None, CensoringType.NONE, True, wrapped
+        )
+        np.testing.assert_allclose(nll_w, nll_ref, rtol=1e-12, atol=0.0)
+        np.testing.assert_array_equal(grad_w, grad_ref)
+
+    def test_log_likelihood_left_censored_matches(self, base_distribution):
+        """Covers the ``log_ndtr if dist.kind == 'normal'`` fast-path sites."""
+        from pymlt.likelihood import _log_likelihood_from_dist
+
+        canonical, wrapped = self._make_ops(base_distribution)
+        basis = make_basis(order=4)
+        theta = ascending_theta(4, step=0.4)
+        rng = np.random.default_rng(7)
+        y = np.sort(rng.uniform(0.1, 0.9, 12))
+        censored = rng.random(12) < 0.4
+        cd = CensoredData.left_censored(y, censored)
+
+        ref = _log_likelihood_from_dist(
+            theta, basis, cd, None, CensoringType.LEFT, canonical
+        )
+        got = _log_likelihood_from_dist(
+            theta, basis, cd, None, CensoringType.LEFT, wrapped
+        )
+        np.testing.assert_allclose(got, ref, rtol=1e-12, atol=0.0)
