@@ -25,8 +25,8 @@ def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     Parameters
     ----------
     t:
-        Normalised evaluation points, shape (n,).  Values outside [0, 1] are
-        accepted; the caller is responsible for clamping if needed.
+        Normalised evaluation points, shape (n,).  The caller is responsible
+        for validating that all entries lie in ``[0, 1]``.
     k:
         Polynomial degree.  Returns k+1 basis functions.
 
@@ -41,6 +41,26 @@ def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     return cast(
         NDArray[np.float64], binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i)
     )
+
+
+def _normalize_and_validate_support(
+    y: NDArray[np.float64], support: tuple[float, float]
+) -> NDArray[np.float64]:
+    """Map ``y`` from ``support`` to ``[0, 1]`` after validating support."""
+    y_arr = np.asarray(y, dtype=float).ravel()
+    if y_arr.size == 0:
+        return y_arr
+
+    a, b = support
+    y_min = float(np.min(y_arr))
+    y_max = float(np.max(y_arr))
+    if y_min < a or y_max > b:
+        raise ValueError(
+            f"y contains values outside support [{a}, {b}]. "
+            f"Adjust BernsteinBasis(support=...) accordingly. "
+            f"(min={y_min:.4g}, max={y_max:.4g})"
+        )
+    return (y_arr - a) / (b - a)
 
 
 # ---------------------------------------------------------------------------
@@ -83,14 +103,19 @@ class BernsteinBasis:
         Parameters
         ----------
         y:
-            Observations, shape (n,).
+            Observations, shape (n,).  Must lie in the closed interval
+            ``[support[0], support[1]]``.
 
         Returns
         -------
         NDArray of shape (n, order+1).  Row i is [B_{0,k}(y_i), …, B_{k,k}(y_i)].
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
         """
-        a, b = self.support
-        t = np.clip((np.asarray(y, dtype=float).ravel() - a) / (b - a), 0.0, 1.0)
+        t = _normalize_and_validate_support(y, self.support)
         return _bernstein_matrix(t, self.order)
 
     def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
@@ -110,20 +135,27 @@ class BernsteinBasis:
         Parameters
         ----------
         y:
-            Observations, shape (n,).
+            Observations, shape (n,).  Must lie in the closed interval
+            ``[support[0], support[1]]``.
         order:
             Derivative order: 1 (default) or 2.
 
         Returns
         -------
         NDArray of shape (n, self.order+1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1 or 2, or if any observation lies outside
+            ``support``.
         """
         if order not in (1, 2):
             raise ValueError(f"order must be 1 or 2, got {order}")
 
         k = self.order
         a, b = self.support
-        t = np.clip((np.asarray(y, dtype=float).ravel() - a) / (b - a), 0.0, 1.0)
+        t = _normalize_and_validate_support(y, self.support)
         n = len(t)
 
         if order == 1:
@@ -160,15 +192,21 @@ class BernsteinBasis:
         Parameters
         ----------
         y:
-            Observations, shape (n,).
+            Observations, shape (n,).  Must lie in the closed interval
+            ``[support[0], support[1]]``.
 
         Returns
         -------
         NDArray of shape (n, order+1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
         """
         k = self.order
         a, b = self.support
-        t = np.clip((np.asarray(y, dtype=float).ravel() - a) / (b - a), 0.0, 1.0)
+        t = _normalize_and_validate_support(y, self.support)
 
         i = np.arange(k + 1)  # shape (k+1,)
         a_param = (i + 1).astype(float)  # shape (k+1,)

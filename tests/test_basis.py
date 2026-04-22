@@ -100,6 +100,12 @@ class TestEvaluate:
         M = b.evaluate(np.array([0.5]))
         assert M.shape == (1, 4)
 
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(y)
+
     @given(
         order=st.integers(1, 15),
         a=st.floats(-100, 100, allow_nan=False, allow_infinity=False),
@@ -148,6 +154,12 @@ class TestDerivative:
         D2 = b.derivative(np.array([0.3, 0.7]), order=2)
         assert D2.shape == (2, 2)
         np.testing.assert_allclose(D2, 0.0, atol=1e-15)
+
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.derivative(y, order=1)
 
     def test_derivative1_vs_finite_difference(self):
         """Analytical 1st derivative matches central finite difference."""
@@ -241,6 +253,12 @@ class TestIntegrate:
         a, _ = b.support
         integral_sum = b.integrate(y).sum(axis=1)
         np.testing.assert_allclose(integral_sum, y - a, atol=1e-11)
+
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.integrate(y)
 
     @given(
         order=st.integers(1, 10),
