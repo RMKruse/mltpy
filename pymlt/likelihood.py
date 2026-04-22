@@ -707,7 +707,7 @@ def _grad_left(
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = -B_c.T @ [f(h)/F(h)]
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        inv_mills = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
+        inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         grad[:p] -= B_c.T @ inv_mills
         if X_c is not None:
             grad[p:] -= X_c.T @ inv_mills
@@ -892,7 +892,7 @@ def _ll_and_grad_left(
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_Fc = _logcdf(h_c)
         ll += float(np.sum(log_Fc))
-        inv_mills = np.exp(dist.logpdf(h_c) - log_Fc)
+        inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
         grad[:p] -= B_c.T @ inv_mills
         if X_c is not None:
             grad[p:] -= X_c.T @ inv_mills
@@ -1057,7 +1057,7 @@ def _scores_left(
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         # ∂ℓ_i/∂h = µ(h) = f(h)/F(h)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        inv_mills = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
+        inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         scores[mask_c, :p] = B_c * inv_mills[:, None]
         if X_c is not None:
             scores[mask_c, p:] = X_c * inv_mills[:, None]

@@ -360,7 +360,9 @@ class TestBaseDistributionValidation:
             return _NORM_OPS
 
         def fail_likelihood_get_dist(base_distribution):
-            raise AssertionError("_get_dist should not run inside optimize() evaluations")
+            raise AssertionError(
+                "_get_dist should not run inside optimize() evaluations"
+            )
 
         monkeypatch.setattr("pymlt.optimizer._get_dist", count_optimizer_get_dist)
         monkeypatch.setattr("pymlt.likelihood._get_dist", fail_likelihood_get_dist)

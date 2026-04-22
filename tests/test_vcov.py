@@ -240,9 +240,9 @@ class TestModelVcovAPI:
         n = 80
         X = rng.normal(0, 1, (n, 2))
         y = 0.5 * X[:, 0] + rng.normal(0, 1, n)
-        m = MLT(
-            order=4, support=(float(y.min() - 0.1), float(y.max() + 0.1))
-        ).fit(y, X=X)
+        m = MLT(order=4, support=(float(y.min() - 0.1), float(y.max() + 0.1))).fit(
+            y, X=X
+        )
         ef_before = m.estfun().copy()
         y[:] = 0.0
         X[:] = 0.0
