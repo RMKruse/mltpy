@@ -661,9 +661,16 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        RuntimeError
+            If the cached score matrix is unexpectedly missing after
+            fitting (e.g. a prior ``fit()`` call failed partway through).
         """
         self._check_is_fitted()
-        assert self._estfun_cache_ is not None  # guaranteed by fit()
+        if self._estfun_cache_ is None:
+            raise RuntimeError(
+                "_estfun_cache_ is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
         return self._estfun_cache_
 
     # R/sandwich-style alias.  Kept as a method (not a bare attribute) so it
