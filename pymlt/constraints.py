@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -175,10 +175,37 @@ class BoundaryConstraint:
 # ---------------------------------------------------------------------------
 
 
+@overload
 def build_constraints(
     n_params: int,
     lower: float | None = None,
     upper: float | None = None,
+    *,
+    solver: Literal["slsqp"] = "slsqp",
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> list[dict[str, Any]]: ...
+
+
+@overload
+def build_constraints(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
+    solver: Literal["trust-constr"],
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> list[LinearConstraint]: ...
+
+
+def build_constraints(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
     total_params: int | None = None,
     nonneg_lower: bool = False,
