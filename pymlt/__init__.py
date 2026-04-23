@@ -17,13 +17,7 @@ from pymlt.model import (
 )
 from pymlt.optimizer import OptimizerConfig
 from pymlt.tram import BoxCox, Colr, Coxph, Lm
-from pymlt.variables import (
-    CensoredData,
-    CensoringType,
-    NumericVariable,
-    OrderedVariable,
-    SurvivalVariable,
-)
+from pymlt.variables import CensoredData, CensoringType
 
 __version__ = "0.1.0"
 
@@ -51,9 +45,6 @@ __all__ = [
     # Data types
     "CensoredData",
     "CensoringType",
-    "NumericVariable",
-    "OrderedVariable",
-    "SurvivalVariable",
     # Config
     "OptimizerConfig",
     "__version__",

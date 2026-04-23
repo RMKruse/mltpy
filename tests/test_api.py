@@ -19,10 +19,7 @@ def test_public_api_importable() -> None:
         ConvergenceWarning,
         Coxph,
         NotFittedError,
-        NumericVariable,
         OptimizerConfig,
-        OrderedVariable,
-        SurvivalVariable,
     )
 
     # Silence unused-import warnings from linters — we are testing importability.
@@ -38,9 +35,6 @@ def test_public_api_importable() -> None:
             ConvergenceWarning,
             CensoredData,
             CensoringType,
-            NumericVariable,
-            OrderedVariable,
-            SurvivalVariable,
             OptimizerConfig,
         ]
     )

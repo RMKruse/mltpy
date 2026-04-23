@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pymlt.basis import BernsteinBasis, monotone_trafo
+from pymlt.basis import BernsteinBasis
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -272,36 +272,6 @@ class TestIntegrate:
         y = np.linspace(a, a + width, 25)
         running = b.integrate(y).sum(axis=1)
         assert np.all(np.diff(running) >= -1e-12)
-
-
-# ---------------------------------------------------------------------------
-# monotone_trafo
-# ---------------------------------------------------------------------------
-
-
-class TestMonotoneTrafo:
-    def test_basic(self):
-        b = make_basis(order=3)
-        y = linspace_in(b, 10)
-        M = b.evaluate(y)
-        theta = np.array([0.0, 1.0, 2.0, 3.0])
-        result = monotone_trafo(theta, M)
-        np.testing.assert_allclose(result, M @ theta)
-
-    def test_shape(self):
-        b = make_basis(order=4)
-        M = b.evaluate(linspace_in(b, 15))
-        theta = np.ones(5)
-        assert monotone_trafo(theta, M).shape == (15,)
-
-    def test_constant_theta_equals_evaluate_sum(self):
-        """For theta = c*ones, h(y) = c * sum_i B_{i,k}(y) = c (partition of unity)."""
-        b = make_basis(order=5)
-        y = linspace_in(b, 20)
-        M = b.evaluate(y)
-        c = 3.7
-        result = monotone_trafo(c * np.ones(6), M)
-        np.testing.assert_allclose(result, c, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------

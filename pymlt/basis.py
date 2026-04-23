@@ -216,31 +216,3 @@ class BernsteinBasis:
         # t[:, None]: (n, 1),  a_param/b_param: (k+1,)  →  result: (n, k+1)
         result = betainc(a_param[None, :], b_param[None, :], t[:, None])
         return cast(NDArray[np.float64], result * (b - a) / (k + 1))
-
-
-# ---------------------------------------------------------------------------
-# Module-level convenience function
-# ---------------------------------------------------------------------------
-
-
-def monotone_trafo(
-    theta: NDArray[np.float64], basis_matrix: NDArray[np.float64]
-) -> NDArray[np.float64]:
-    """Evaluate the transformation h(y) = basis_matrix @ theta.
-
-    Monotone iff `theta` is non-decreasing.  This function does **not**
-    enforce that constraint — enforcement is handled by ``constraints.py``
-    (Step 3).
-
-    Parameters
-    ----------
-    theta:
-        Coefficient vector, shape (order+1,).
-    basis_matrix:
-        Design matrix from ``BernsteinBasis.evaluate``, shape (n, order+1).
-
-    Returns
-    -------
-    NDArray of shape (n,).
-    """
-    return basis_matrix @ theta
