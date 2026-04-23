@@ -389,7 +389,28 @@ class TestMakeObjectivePenalty:
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])  # strictly decreasing
         val, grad = obj(theta_bad)
         assert val == 1e10
-        np.testing.assert_array_equal(grad, np.zeros_like(theta_bad))
+        # Gradient must point away from infeasibility: a small step along the
+        # descent direction -grad should reduce the monotonicity violation.
+        assert np.any(grad != 0.0)
+        D = MonotonicityConstraint(n_params=theta_bad.size).as_matrix()
+        violation_before = np.sum(np.minimum(D @ theta_bad, 0.0) ** 2)
+        theta_step = theta_bad - 1e-3 * grad
+        violation_after = np.sum(np.minimum(D @ theta_step, 0.0) ** 2)
+        assert violation_after < violation_before
+
+    def test_infeasible_theta_with_beta_grad_zero_on_beta_block(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        X = np.array([[1.0], [2.0], [3.0]])
+        obj = _make_objective(basis, y, X, CensoringType.NONE, use_gradient=True)
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0, 0.25])  # last entry is beta
+        val, grad = obj(theta_bad)
+        assert val == 1e10
+        assert grad.shape == theta_bad.shape
+        # Beta slice must be zero — beta does not enter monotonicity.
+        assert grad[-1] == 0.0
+        # Theta_b slice must be non-trivial.
+        assert np.any(grad[:-1] != 0.0)
 
     def test_infeasible_theta_nograd_returns_penalty(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
@@ -398,6 +419,26 @@ class TestMakeObjectivePenalty:
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
         val = obj(theta_bad)
         assert val == 1e10
+
+    def test_infeasible_subgradient_does_not_stall(self):
+        """Gradient descent using only the closure's infeasibility-path
+        output must drive a deeply non-monotone theta back into the feasible
+        cone.  Regression guard: the previous zero-gradient fallback left
+        gradient descent stationary forever."""
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        y = np.array([0.2, 0.4, 0.6, 0.8])
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
+        D = MonotonicityConstraint(n_params=basis.order + 1).as_matrix()
+
+        theta = np.array([5.0, 4.0, 3.0, 2.0, 1.0])  # strictly decreasing
+        step = 0.5
+        for _ in range(200):
+            violation = np.minimum(D @ theta, 0.0)
+            if np.all(violation == 0.0):
+                break
+            _, grad = obj(theta)
+            theta = theta - step * grad
+        assert np.all(D @ theta >= -1e-9)
 
 
 # ---------------------------------------------------------------------------

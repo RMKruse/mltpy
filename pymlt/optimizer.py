@@ -176,6 +176,12 @@ def _make_objective(
     """
     _BIG = 1e10
     resolved_dist = _get_dist(base_distribution) if dist is None else dist
+    n_params = basis.order + 1
+    # Forward-difference matrix D: monotonicity is D @ theta_b >= 0.  Identical
+    # to MonotonicityConstraint(n_params).as_matrix(); built inline to avoid a
+    # cross-module coupling in the hot path.  Shape (n_params-1, n_params);
+    # empty when n_params < 2 (order=0 — monotonicity is vacuous).
+    _D = np.diff(np.eye(n_params), axis=0) if n_params >= 2 else None
 
     if use_gradient:
 
@@ -191,7 +197,19 @@ def _make_objective(
                     dist=resolved_dist,
                 )
             except InfeasibleParameterError:
-                return _BIG, np.zeros_like(theta)
+                # Subgradient of the quadratic monotonicity-violation penalty
+                # P(theta_b) = 0.5 · ||max(0, -(D @ theta_b))||².
+                # Gives SLSQP a descent direction toward the monotone cone
+                # instead of the stationary-point signal a zero gradient
+                # conveys.  Magnitude is left unscaled (natural units: adjacent
+                # theta_b differences) — pairing _BIG with a huge gradient
+                # would misrepresent the local slope.  Beta block stays zero
+                # because beta does not enter the monotonicity constraint.
+                grad = np.zeros_like(theta)
+                if _D is not None:
+                    g = _D @ theta[:n_params]
+                    grad[:n_params] = _D.T @ np.minimum(g, 0.0)
+                return _BIG, grad
     else:
 
         def obj(theta: NDArray[np.float64]) -> Any:
