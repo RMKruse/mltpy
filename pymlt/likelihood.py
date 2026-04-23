@@ -409,7 +409,7 @@ def _ll_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> float:
+) -> np.float64:
     """Computes the log-likelihood for exactly observed (uncensored) data.
 
     Formula
@@ -445,7 +445,7 @@ def _ll_none(
     with np.errstate(invalid="ignore", divide="ignore"):
         # np.log(hp) produces -inf/nan when hp <= 0 (monotonicity violated).
         # log_likelihood() detects and raises ValueError after this call.
-        return float(np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
+        return cast(np.float64, np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
 
 
 def _ll_right(
@@ -454,7 +454,7 @@ def _ll_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> float:
+) -> np.float64:
     """Computes the log-likelihood for right-censored data.
 
     Formula
@@ -482,7 +482,7 @@ def _ll_right(
     """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -492,7 +492,7 @@ def _ll_right(
         D_e = basis.derivative(y_e, order=1)
         h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
@@ -500,7 +500,7 @@ def _ll_right(
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        ll += float(np.sum(dist.logsf(h_c)))
+        ll += np.sum(dist.logsf(h_c))
 
     return ll
 
@@ -511,7 +511,7 @@ def _ll_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> float:
+) -> np.float64:
     """Computes the log-likelihood for left-censored data.
 
     Formula
@@ -538,7 +538,7 @@ def _ll_left(
     """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -548,7 +548,7 @@ def _ll_left(
         D_e = basis.derivative(y_e, order=1)
         h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
@@ -557,7 +557,7 @@ def _ll_left(
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        ll += float(np.sum(_logcdf(h_c)))
+        ll += np.sum(_logcdf(h_c))
 
     return ll
 
@@ -568,11 +568,11 @@ def _ll_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> float:
+) -> np.float64:
     """ℓ = Σ log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -582,7 +582,7 @@ def _ll_interval(
         D_e = basis.derivative(y_e, order=1)
         h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
@@ -594,7 +594,7 @@ def _ll_interval(
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        ll += float(np.sum(_log_diff_ndtr(h_lo, h_hi, dist=dist)))
+        ll += np.sum(_log_diff_ndtr(h_lo, h_hi, dist=dist))
 
     return ll
 
@@ -785,7 +785,7 @@ def _ll_and_grad_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> tuple[float, NDArray[np.float64]]:
+) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
@@ -800,7 +800,7 @@ def _ll_and_grad_none(
         # hp ≤ 0 (monotonicity violation) → log(hp) is -inf/nan, 1/hp is ±inf.
         # The non-finite ll is caught by InfeasibleParameterError downstream;
         # the gradient is discarded in that case.
-        ll = float(np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
+        ll = np.sum(dist.logpdf(h)) + np.sum(np.log(hp))
         grad_b = B.T @ ns - D.T @ (1.0 / hp)
     if X is not None and beta is not None:
         grad = np.concatenate([grad_b, X.T @ ns])
@@ -815,12 +815,12 @@ def _ll_and_grad_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> tuple[float, NDArray[np.float64]]:
+) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
     grad = np.zeros(p + q)
 
     mask_e = cd.is_exact_mask
@@ -833,7 +833,7 @@ def _ll_and_grad_right(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
             grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
         if X_e is not None:
             grad[p:] += X_e.T @ ns
@@ -844,7 +844,7 @@ def _ll_and_grad_right(
         X_c = X[mask_c] if X is not None else None
         B_c = basis.evaluate(y_c)
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        ll += float(np.sum(dist.logsf(h_c)))
+        ll += np.sum(dist.logsf(h_c))
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         grad[:p] += B_c.T @ hazard
@@ -860,12 +860,12 @@ def _ll_and_grad_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> tuple[float, NDArray[np.float64]]:
+) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
     grad = np.zeros(p + q)
 
     mask_e = cd.is_exact_mask
@@ -878,7 +878,7 @@ def _ll_and_grad_left(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
             grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
         if X_e is not None:
             grad[p:] += X_e.T @ ns
@@ -891,7 +891,7 @@ def _ll_and_grad_left(
         h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_Fc = _logcdf(h_c)
-        ll += float(np.sum(log_Fc))
+        ll += np.sum(log_Fc)
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
         grad[:p] -= B_c.T @ inv_mills
         if X_c is not None:
@@ -906,12 +906,12 @@ def _ll_and_grad_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
-) -> tuple[float, NDArray[np.float64]]:
+) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
     p = basis.order + 1
     q = X.shape[1] if X is not None else 0
     theta_b, beta = _split_theta(theta, p, X)
-    ll = 0.0
+    ll = np.float64(0.0)
     grad = np.zeros(p + q)
 
     mask_e = cd.is_exact_mask
@@ -924,7 +924,7 @@ def _ll_and_grad_interval(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += float(np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e)))
+            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
             grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
         if X_e is not None:
             grad[p:] += X_e.T @ ns
@@ -941,7 +941,7 @@ def _ll_and_grad_interval(
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
         log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        ll += float(np.sum(log_p))
+        ll += np.sum(log_p)
         with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
             w_hi = np.exp(dist.logpdf(h_hi) - log_p)
             w_lo = np.exp(dist.logpdf(h_lo) - log_p)
@@ -1378,7 +1378,7 @@ def _log_likelihood_from_dist(
             "violates monotonicity (h'(y) ≤ 0), observations outside basis "
             "support, or extreme h values despite clipping."
         )
-    return result
+    return float(result)
 
 
 def _negative_log_likelihood_from_dist(
@@ -1415,7 +1415,7 @@ def _negative_log_likelihood_from_dist(
             "support, or extreme h values despite clipping."
         )
 
-    return -ll, grad
+    return float(-ll), grad
 
 
 def log_likelihood(
