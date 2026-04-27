@@ -47,7 +47,9 @@ def _normalize_and_validate_support(
     y: NDArray[np.float64], support: tuple[float, float]
 ) -> NDArray[np.float64]:
     """Map ``y`` from ``support`` to ``[0, 1]`` after validating support."""
-    y_arr = np.asarray(y, dtype=float).ravel()
+    y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+    if y_arr.ndim != 1:
+        raise ValueError(f"y must be 1-D, got shape {y_arr.shape}")
     if y_arr.size == 0:
         return y_arr
 
