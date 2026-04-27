@@ -486,33 +486,51 @@ class ConditionalTransformationModel:
 
         if what == "trafo":
             return h
+
+        # Clip h to ±_H_CLIP before distribution calls — the same bound
+        # likelihood.py and confband() use everywhere else — and warn when
+        # the clip actually bites so the caller knows the returned values
+        # at those points are saturated at a floor/ceiling rather than the
+        # true asymptotic limit.
+        if np.any(np.abs(h) > _H_CLIP):
+            warnings.warn(
+                f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
+                "one or more points; clipping for numerical stability. "
+                "Values at these points are saturated, not the true "
+                "asymptotic limit.",
+                stacklevel=2,
+            )
+        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+
         if what == "distribution":
-            return cast(NDArray[np.float64], dist.cdf(h))
+            return cast(NDArray[np.float64], dist.cdf(h_c))
         if what == "logdistribution":
-            return cast(NDArray[np.float64], dist.logcdf(h))
+            return cast(NDArray[np.float64], dist.logcdf(h_c))
         if what == "survivor":
-            return cast(NDArray[np.float64], dist.sf(h))
+            return cast(NDArray[np.float64], dist.sf(h_c))
         if what == "logsurvivor":
-            return cast(NDArray[np.float64], dist.logsf(h))
+            return cast(NDArray[np.float64], dist.logsf(h_c))
         if what == "density":
-            return cast(NDArray[np.float64], dist.pdf(h) * hp_pos)
+            return cast(NDArray[np.float64], dist.pdf(h_c) * hp_pos)
         if what == "logdensity":
-            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp)
+            return cast(NDArray[np.float64], dist.logpdf(h_c) + log_hp)
         if what == "hazard":
             return cast(
                 NDArray[np.float64],
-                dist.pdf(h) * hp_pos / np.maximum(dist.sf(h), 1e-300),
+                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp_pos,
             )
         if what == "loghazard":
-            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp - dist.logsf(h))
+            return cast(
+                NDArray[np.float64], dist.logpdf(h_c) + log_hp - dist.logsf(h_c)
+            )
         if what == "cumhazard":
-            return cast(NDArray[np.float64], -dist.logsf(h))
+            return cast(NDArray[np.float64], -dist.logsf(h_c))
         if what == "logcumhazard":
-            return cast(NDArray[np.float64], np.log(-dist.logsf(h)))
+            return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
         if what == "odds":
-            return cast(NDArray[np.float64], np.exp(dist.logcdf(h) - dist.logsf(h)))
+            return cast(NDArray[np.float64], np.exp(dist.logcdf(h_c) - dist.logsf(h_c)))
         # logodds
-        return cast(NDArray[np.float64], dist.logcdf(h) - dist.logsf(h))
+        return cast(NDArray[np.float64], dist.logcdf(h_c) - dist.logsf(h_c))
 
     def _predict_quantile(
         self,

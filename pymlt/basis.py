@@ -90,6 +90,8 @@ class BernsteinBasis:
     def __post_init__(self) -> None:
         if self.order < 0:
             raise ValueError(f"order must be >= 0, got {self.order}")
+        if not (np.isfinite(self.support[0]) and np.isfinite(self.support[1])):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
         if self.support[0] >= self.support[1]:
             raise ValueError(f"support must satisfy a < b, got {self.support}")
 
