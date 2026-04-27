@@ -50,6 +50,20 @@ class TestBernsteinBasisConstruction:
         with pytest.raises(ValueError, match="support"):
             BernsteinBasis(order=3, support=(1.0, 1.0))
 
+    @pytest.mark.parametrize(
+        "support",
+        [
+            (-np.inf, 1.0),
+            (0.0, np.inf),
+            (-np.inf, np.inf),
+            (np.nan, 1.0),
+            (0.0, np.nan),
+        ],
+    )
+    def test_non_finite_support_raises(self, support):
+        with pytest.raises(ValueError, match="finite"):
+            BernsteinBasis(order=3, support=support)
+
 
 # ---------------------------------------------------------------------------
 # evaluate() — shape, partition of unity, boundary, non-negativity
