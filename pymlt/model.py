@@ -25,7 +25,7 @@ from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import brentq
+from scipy.special import comb
 from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
@@ -560,26 +560,43 @@ class ConditionalTransformationModel:
         NDArray of same length as ``probs``.
         """
         a, b = self.basis.support
+        k = self.basis.order
+        theta_b = np.asarray(theta_b, dtype=float)
+
+        n_probs = len(probs)
+        if n_probs == 0:
+            return np.empty(0, dtype=float)
+
         # Bracket-clip range for h_baseline — independent of xbeta.
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
-        def _h_scalar(q: float) -> float:
-            return float(self.basis.evaluate(np.array([q]))[0] @ theta_b)
-
         dist = _get_dist(self.base_distribution)
-        quantiles = np.empty(len(probs))
-        for i, p in enumerate(probs):
-            shift = 0.0 if xbeta is None else float(xbeta[i])
-            z = float(np.clip(dist.ppf(p) - shift, z_min, z_max))
-            quantiles[i] = brentq(
-                lambda q, z=z: _h_scalar(q) - z,
-                a,
-                b,
-                xtol=1e-6,
-                full_output=False,
-            )
-        return cast(NDArray[np.float64], quantiles)
+        shift = 0.0 if xbeta is None else np.asarray(xbeta, dtype=float)
+        z = np.clip(dist.ppf(probs) - shift, z_min, z_max)
+
+        # Precomputed Bernstein constants: h(q) = sum_i binom(k,i) t^i (1-t)^(k-i) θ_i
+        # with t = (q - a) / (b - a). Folding binom·θ once avoids recomputation.
+        i_arr = np.arange(k + 1, dtype=float)
+        j_arr = k - i_arr
+        binom_theta = comb(k, i_arr, exact=False) * theta_b
+        inv_width = 1.0 / (b - a)
+
+        def _h_vec(q: NDArray[np.float64]) -> NDArray[np.float64]:
+            t = (q - a) * inv_width
+            T = (t[:, None] ** i_arr) * ((1.0 - t)[:, None] ** j_arr)
+            return cast(NDArray[np.float64], T @ binom_theta)
+
+        # Vectorised bisection. 60 iters bracket-shrink: (b-a) · 2^-60 ≪ 1e-6
+        # for any practically-sized support.
+        lo = np.full(n_probs, a, dtype=float)
+        hi = np.full(n_probs, b, dtype=float)
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            below = _h_vec(mid) < z
+            lo = np.where(below, mid, lo)
+            hi = np.where(below, hi, mid)
+        return cast(NDArray[np.float64], 0.5 * (lo + hi))
 
     def score(
         self,
