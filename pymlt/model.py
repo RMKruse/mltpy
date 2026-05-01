@@ -573,7 +573,18 @@ class ConditionalTransformationModel:
 
         dist = _get_dist(self.base_distribution)
         shift = 0.0 if xbeta is None else np.asarray(xbeta, dtype=float)
-        z = np.clip(dist.ppf(probs) - shift, z_min, z_max)
+        z_raw = dist.ppf(probs) - shift
+        if np.any((z_raw < z_min) | (z_raw > z_max)):
+            warnings.warn(
+                "predict(what='quantile'): F⁻¹(p) − xβ exceeds the basis "
+                f"bracket [θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] "
+                "at one or more points; clipping for numerical stability. "
+                "Quantiles at these points are saturated at the basis "
+                "endpoints, not the true asymptotic limit. Consider widening "
+                "the basis support or restricting probs away from 0/1.",
+                stacklevel=2,
+            )
+        z = np.clip(z_raw, z_min, z_max)
 
         # Precomputed Bernstein constants: h(q) = sum_i binom(k,i) t^i (1-t)^(k-i) θ_i
         # with t = (q - a) / (b - a). Folding binom·θ once avoids recomputation.

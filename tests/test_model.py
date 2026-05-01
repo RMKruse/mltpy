@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import warnings
 
 import numpy as np
 import pytest
@@ -230,6 +231,17 @@ class TestPredict:
     def test_quantile_empty_probs_returns_empty(self):
         out = self.model.predict(np.array([]), what="quantile")
         assert out.shape == (0,)
+
+    def test_quantile_warns_when_bracket_clip_bites(self):
+        probs = np.array([1e-15, 1.0 - 1e-15])
+        with pytest.warns(UserWarning, match="saturated"):
+            self.model.predict(probs, what="quantile")
+
+    def test_quantile_no_warning_for_well_behaved_probs(self):
+        probs = np.linspace(0.1, 0.9, 9)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.model.predict(probs, what="quantile")
 
     def test_invalid_what_raises(self):
         with pytest.raises(ValueError, match="is invalid"):
