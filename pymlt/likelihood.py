@@ -254,10 +254,13 @@ def _log_diff_ndtr(
     ratio_safe = np.minimum(ratio, -1e-15)
     wide = log_Fb + np.log1p(-np.exp(ratio_safe))
 
-    # Narrow-interval fallback: F(b)-F(a) ≈ f(mid)·(b−a)
+    # Narrow-interval fallback: F(b)-F(a) ≈ f(mid)·(b−a).
+    # Zero-width intervals (a == b) give true probability 0 → log = -inf.
     mid = 0.5 * (a + b)
-    width = np.maximum(b - a, np.finfo(float).tiny)
-    narrow = dist.logpdf(mid) + np.log(width)
+    width = b - a
+    with np.errstate(divide="ignore"):
+        log_width = np.log(width)
+    narrow = dist.logpdf(mid) + log_width
 
     # Use fallback when ratio > -1e-6  (i.e. F(a)/F(b) > 1-1e-6)
     return cast(NDArray[np.float64], np.where(ratio < -1e-6, wide, narrow))
