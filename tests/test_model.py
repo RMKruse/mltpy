@@ -247,6 +247,27 @@ class TestPredict:
         with pytest.raises(ValueError, match="is invalid"):
             self.model.predict(self.y_grid, what="banana")
 
+    @pytest.mark.parametrize("what", ["density", "logdensity", "hazard", "loghazard"])
+    def test_non_monotone_theta_raises_on_hp_dependent_what(self, what):
+        """Manually corrupting theta_ to violate monotonicity must raise on
+        any predict path that uses h'(y), not silently floor to log(tiny)."""
+        from pymlt.likelihood import InfeasibleParameterError
+
+        bad = self.model.theta_.copy()
+        bad[: self.model.basis.order + 1] = bad[0]
+        self.model.theta_ = bad
+        with pytest.raises(InfeasibleParameterError, match="h'.y."):
+            self.model.predict(self.y_grid, what=what)
+
+    def test_non_monotone_theta_does_not_raise_on_h_only_what(self):
+        """Distribution-only paths do not depend on h'(y); they should remain
+        callable even when monotonicity is marginal."""
+        bad = self.model.theta_.copy()
+        bad[: self.model.basis.order + 1] = bad[0]
+        self.model.theta_ = bad
+        # Should not raise — hp is unused by the distribution path.
+        self.model.predict(self.y_grid, what="distribution")
+
     def test_hazard_any_censoring(self):
         """Hazard is a pure functional of h; no censoring restriction."""
         h = self.model.predict(self.y_grid, what="hazard")
@@ -303,6 +324,11 @@ class TestSimulate:
         samples = model.simulate(50, random_state=42)
         assert samples.shape == (50,)
 
+    # Fixture's fitted θ_b spans ≈ [-2.15, 2.12], narrower than ppf(1-1e-10) ≈
+    # 6.36, so simulate's u-clip cannot avoid bracket saturation in
+    # _predict_quantile.  The warning is a real production signal but
+    # irrelevant to what this test asserts (samples within basis support).
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_values_in_support(self):
         model = make_ctm()
         model.fit(simple_y())
@@ -413,6 +439,11 @@ class TestSimulateConditional:
         with pytest.raises(ValueError, match="X_new must be provided"):
             model.simulate(10, random_state=0)
 
+    # Fixture's fitted θ_b spans ≈ [-4.93, 3.18], narrower than ppf(1-1e-10) ≈
+    # 6.36, so simulate's u-clip cannot avoid bracket saturation in
+    # _predict_quantile.  The warning is a real production signal but
+    # irrelevant to what this test asserts (covariate-group mean separation).
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_simulate_recovers_shift(self):
         """Simulated samples should separate by covariate group.
 

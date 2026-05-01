@@ -32,6 +32,7 @@ from pymlt.basis import BernsteinBasis
 from pymlt.likelihood import (
     _H_CLIP,
     BaseDistribution,
+    InfeasibleParameterError,
     _get_dist,
     _neg_score,
     log_likelihood,
@@ -90,8 +91,8 @@ _VALID_CONFBAND_WHAT = (
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
 
-# Floor for log(h') to avoid log(0) at boundaries where monotonicity is marginal
-_LOG_HP_FLOOR = np.finfo(np.float64).tiny
+# `what` values whose formula involves h'(y) and therefore require hp > 0.
+_HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
 
 def _extract_feature_names(X: object) -> list[str] | None:
@@ -481,8 +482,14 @@ class ConditionalTransformationModel:
             h = h + X_arr @ beta
 
         dist = _get_dist(self.base_distribution)
-        hp_pos = np.maximum(hp, 0.0)
-        log_hp = np.log(np.maximum(hp, _LOG_HP_FLOOR))
+        if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
+            raise InfeasibleParameterError(
+                f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
+                f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
+                "one or more requested points.  This indicates a non-monotone "
+                "transformation — fit() should have rejected this parameter; "
+                "if you see this, the model state is inconsistent."
+            )
 
         if what == "trafo":
             return h
@@ -511,17 +518,18 @@ class ConditionalTransformationModel:
         if what == "logsurvivor":
             return cast(NDArray[np.float64], dist.logsf(h_c))
         if what == "density":
-            return cast(NDArray[np.float64], dist.pdf(h_c) * hp_pos)
+            return cast(NDArray[np.float64], dist.pdf(h_c) * hp)
         if what == "logdensity":
-            return cast(NDArray[np.float64], dist.logpdf(h_c) + log_hp)
+            return cast(NDArray[np.float64], dist.logpdf(h_c) + np.log(hp))
         if what == "hazard":
             return cast(
                 NDArray[np.float64],
-                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp_pos,
+                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
             )
         if what == "loghazard":
             return cast(
-                NDArray[np.float64], dist.logpdf(h_c) + log_hp - dist.logsf(h_c)
+                NDArray[np.float64],
+                dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c),
             )
         if what == "cumhazard":
             return cast(NDArray[np.float64], -dist.logsf(h_c))
