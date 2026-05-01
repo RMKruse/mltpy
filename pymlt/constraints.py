@@ -291,8 +291,8 @@ def build_constraints(
         if X is None:
             if total > n_params:
                 raise ValueError(
-                    "X must be provided when nonneg_lower=True and"
-                    "total_params > n_params so support-feasibility"
+                    "X must be provided when nonneg_lower=True and "
+                    "total_params > n_params so support-feasibility "
                     "constraints can include the regression coefficients."
                 )
             support_rows = np.zeros((1, total))
