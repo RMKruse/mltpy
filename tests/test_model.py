@@ -227,6 +227,10 @@ class TestPredict:
         cdf_back = self.model.predict(q, what="distribution")
         np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
 
+    def test_quantile_empty_probs_returns_empty(self):
+        out = self.model.predict(np.array([]), what="quantile")
+        assert out.shape == (0,)
+
     def test_invalid_what_raises(self):
         with pytest.raises(ValueError, match="is invalid"):
             self.model.predict(self.y_grid, what="banana")
