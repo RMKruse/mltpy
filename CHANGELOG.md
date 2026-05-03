@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Observation weights and offset support across the full model pipeline
+  (`fit`, `predict`, `score`, `confband`, `residuals`, `estfun`):
+  - `fit(y, X=None, weights=None, offset=None)` — weighted log-likelihood
+    `Σ w_i·ℓ_i`; offset adds a per-observation constant to `h(y|x)` before
+    all distribution calls.  Weights and offset are stored as `weights_` /
+    `offset_` and snapshotted as `_weights_train_` / `_offset_train_` for
+    later use by `residuals()`.
+  - `predict(..., offset_new=None)` — offset shifts `h` at prediction time.
+  - `score(..., weights=None, offset=None)` — evaluates the weighted LL at any
+    (y, X) pair.
+  - `confband(..., offset=None)` — offset shifts `h` before the delta-method
+    band is computed; the Jacobian is unaffected (offset is constant in θ).
+  - `Coxph.survival(y, X, offset=None)` and `Coxph.hazard(y, X, offset=None)`.
+  - New public helper `_validate_weights_offset(weights, offset, n)` in
+    `likelihood.py` — raises `ValueError` for wrong shapes, negative weights,
+    or non-finite values.
+  - R reference generation extended with weighted BoxCox / Colr / Coxph fits
+    (`reference/generate_reference.R`), producing `weights_<model>_*.txt` files.
+  - Full test coverage in `tests/test_weights_offset.py` (41 tests): input
+    validation, identity (`weights=ones ≡ no weights`, `offset=zeros ≡ no
+    offset`), uniform-doubling invariance, replication invariance, offset-shifts-
+    trafo, quantile-with-offset, R-parity (skipped until R files are generated).
+
 - `residuals(type=...)` method on `ConditionalTransformationModel` —
   per-observation diagnostics mirroring R `mlt::residuals`.  Three types:
   `"score"` (default; ∂(-ℓ_i)/∂α at α=0 for an artificial intercept
