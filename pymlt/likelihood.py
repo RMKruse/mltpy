@@ -1652,3 +1652,179 @@ def score_matrix(
             "basis support, or extreme h values despite clipping."
         )
     return result
+
+
+def intercept_score(
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None = None,
+    censoring: CensoringType = CensoringType.NONE,
+    base_distribution: BaseDistribution = "normal",
+) -> NDArray[np.float64]:
+    """Per-observation score w.r.t. an artificial intercept on ``h(y|x)``.
+
+    For each observation ``i``, returns ``∂ℓ_i/∂α`` evaluated at ``α = 0``,
+    where ``α`` is a hypothetical intercept added to the transformation:
+    ``h̃(y|x) = h(y|x) + α``.  This is the per-observation diagnostic
+    quantity returned by R's ``mlt::residuals()`` (the "score residual").
+
+    The closed forms by censoring type are:
+
+    * **exact** ``y_i``:           ``ψ(h_i) = d log f(h_i)/dh``
+    * **right-censored**:           ``-f(h_i)/S(h_i)`` (negative hazard)
+    * **left-censored**:            ``f(h_i)/F(h_i)`` (inverse Mills ratio)
+    * **interval-censored** [a,b]:  ``(f(h_b) - f(h_a)) / (F(h_b) - F(h_a))``
+
+    Parameters
+    ----------
+    theta, basis, y, X, censoring, base_distribution:
+        Same as :func:`score_matrix`.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Vector of length ``n``.
+
+    Raises
+    ------
+    InfeasibleParameterError
+        If any entry is non-finite (typically because ``theta`` violates
+        monotonicity).
+    ValueError
+        If ``base_distribution`` is not supported.
+    """
+    dist = _get_dist(base_distribution)
+    p = basis.order + 1
+    theta_b, beta = _split_theta(theta, p, X)
+
+    if isinstance(y, np.ndarray):
+        y_arr = np.asarray(y, dtype=float).ravel()
+        result = _intercept_score_exact(y_arr, theta_b, basis, X, beta, dist)
+    elif censoring is CensoringType.NONE:
+        result = _intercept_score_exact(y.exact, theta_b, basis, X, beta, dist)
+    elif censoring is CensoringType.RIGHT:
+        result = _intercept_score_right(y, theta_b, basis, X, beta, dist)
+    elif censoring is CensoringType.LEFT:
+        result = _intercept_score_left(y, theta_b, basis, X, beta, dist)
+    else:
+        result = _intercept_score_interval(y, theta_b, basis, X, beta, dist)
+
+    if not np.all(np.isfinite(result)):
+        raise InfeasibleParameterError(
+            "intercept_score() produced non-finite entries.  Possible causes: "
+            "theta violates monotonicity (h'(y) ≤ 0), observations outside "
+            "basis support, or extreme h values despite clipping."
+        )
+    return result
+
+
+def _intercept_score_exact(
+    y: NDArray[np.float64],
+    theta_b: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    B = basis.evaluate(y)
+    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    return -_neg_score(h, dist)
+
+
+def _intercept_score_right(
+    cd: CensoredData,
+    theta_b: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    out = np.zeros(cd.n, dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        X_e = X[mask_e] if X is not None else None
+        out[mask_e] = _intercept_score_exact(
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+        )
+
+    mask_c = cd.is_right_censored_mask
+    if mask_c.any():
+        y_c = cd.lower[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        out[mask_c] = -np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+
+    return out
+
+
+def _intercept_score_left(
+    cd: CensoredData,
+    theta_b: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    out = np.zeros(cd.n, dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        X_e = X[mask_e] if X is not None else None
+        out[mask_e] = _intercept_score_exact(
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+        )
+
+    mask_c = cd.is_left_censored_mask
+    if mask_c.any():
+        y_c = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        B_c = basis.evaluate(y_c)
+        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        log_inv_mills = dist.logpdf(h_c) - _logcdf(h_c)
+        out[mask_c] = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
+
+    return out
+
+
+def _intercept_score_interval(
+    cd: CensoredData,
+    theta_b: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    out = np.zeros(cd.n, dtype=np.float64)
+
+    mask_e = cd.is_exact_mask
+    if mask_e.any():
+        X_e = X[mask_e] if X is not None else None
+        out[mask_e] = _intercept_score_exact(
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+        )
+
+    mask_i = cd.is_interval_censored_mask
+    if mask_i.any():
+        lo = cd.lower[mask_i]
+        hi = cd.upper[mask_i]
+        X_i = X[mask_i] if X is not None else None
+        B_lo = basis.evaluate(lo)
+        B_hi = basis.evaluate(hi)
+        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
+        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+
+        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
+            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
+        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
+        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+        out[mask_i] = w_hi - w_lo
+
+    return out
