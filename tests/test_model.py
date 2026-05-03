@@ -1180,6 +1180,23 @@ class TestAnova:
         with pytest.raises(ValueError, match="parameter counts"):
             anova(m1, m2)
 
+    def test_negative_deviance_warns(self):
+        """Non-nested models can produce D < 0; anova should warn rather than
+        silently return an impossible LR statistic."""
+        import dataclasses
+
+        y = simple_y(n=80)
+        small = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        large = MLT(order=5, support=(0.0, 1.0)).fit(y)
+        # Force the larger model's ll below the smaller's to guarantee D < 0.
+        large.result_ = dataclasses.replace(
+            large.result_,
+            log_likelihood=small.result_.log_likelihood - 1.0,
+        )
+        with pytest.warns(UserWarning, match="negative"):
+            result = anova(small, large)
+        assert result.deviance[1] is not None and result.deviance[1] < 0
+
 
 # ---------------------------------------------------------------------------
 # R reference integration test

@@ -1421,6 +1421,18 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
                 f"model {i}: k={n_params[i]})."
             )
         d = 2.0 * (log_lik[i] - log_lik[i - 1])
+        if d < 0.0:
+            warnings.warn(
+                f"anova: deviance between model {i - 1} "
+                f"(k={n_params[i - 1]}, ll={log_lik[i - 1]:.4f}) and "
+                f"model {i} (k={n_params[i]}, ll={log_lik[i]:.4f}) is "
+                f"negative (D={d:.4g}).  The larger model fits worse — "
+                "possible causes: models are not nested, or the larger "
+                "model failed to converge.  The p-value is computed with "
+                "D clamped to 0 and is not meaningful.",
+                UserWarning,
+                stacklevel=2,
+            )
         # Negative deviance can occur if the larger model failed to converge
         # to a strictly higher likelihood; clamp at 0 for the chi2 tail.
         d_clamped = max(d, 0.0)
