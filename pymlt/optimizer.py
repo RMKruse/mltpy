@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Optional, cast
+from typing import Any, Callable, Literal, cast
 
 import numpy as np
 from numpy.linalg import LinAlgError
@@ -324,9 +324,9 @@ def _perturb_and_project(
 def optimize(
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
-    X: Optional[NDArray[np.float64]] = None,
+    X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
-    config: Optional[OptimizerConfig] = None,
+    config: OptimizerConfig | None = None,
     base_distribution: BaseDistribution = "normal",
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
