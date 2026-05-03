@@ -1,4 +1,5 @@
 """Tests for pymlt.basis — Bernstein basis, derivatives, and integration."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -6,11 +7,12 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pymlt.basis import BernsteinBasis, monotone_trafo
+from pymlt.basis import BernsteinBasis
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 def make_basis(order: int = 4, support: tuple = (0.0, 1.0)) -> BernsteinBasis:
     return BernsteinBasis(order=order, support=support)
@@ -24,6 +26,7 @@ def linspace_in(basis: BernsteinBasis, n: int = 50) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Construction validation
 # ---------------------------------------------------------------------------
+
 
 class TestBernsteinBasisConstruction:
     def test_valid(self):
@@ -47,10 +50,25 @@ class TestBernsteinBasisConstruction:
         with pytest.raises(ValueError, match="support"):
             BernsteinBasis(order=3, support=(1.0, 1.0))
 
+    @pytest.mark.parametrize(
+        "support",
+        [
+            (-np.inf, 1.0),
+            (0.0, np.inf),
+            (-np.inf, np.inf),
+            (np.nan, 1.0),
+            (0.0, np.nan),
+        ],
+    )
+    def test_non_finite_support_raises(self, support):
+        with pytest.raises(ValueError, match="finite"):
+            BernsteinBasis(order=3, support=support)
+
 
 # ---------------------------------------------------------------------------
 # evaluate() — shape, partition of unity, boundary, non-negativity
 # ---------------------------------------------------------------------------
+
 
 class TestEvaluate:
     def test_shape(self):
@@ -96,6 +114,17 @@ class TestEvaluate:
         M = b.evaluate(np.array([0.5]))
         assert M.shape == (1, 4)
 
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(y)
+
+    def test_2d_input_raises(self):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="1-D"):
+            b.evaluate(np.array([[0.2, 0.4], [0.6, 0.8]]))
+
     @given(
         order=st.integers(1, 15),
         a=st.floats(-100, 100, allow_nan=False, allow_infinity=False),
@@ -113,6 +142,7 @@ class TestEvaluate:
 # ---------------------------------------------------------------------------
 # derivative() — shape, analytical vs finite difference, edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestDerivative:
     def test_shape_order1(self):
@@ -143,6 +173,17 @@ class TestDerivative:
         D2 = b.derivative(np.array([0.3, 0.7]), order=2)
         assert D2.shape == (2, 2)
         np.testing.assert_allclose(D2, 0.0, atol=1e-15)
+
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.derivative(y, order=1)
+
+    def test_2d_input_raises(self):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="1-D"):
+            b.derivative(np.array([[0.2, 0.4], [0.6, 0.8]]))
 
     def test_derivative1_vs_finite_difference(self):
         """Analytical 1st derivative matches central finite difference."""
@@ -193,6 +234,7 @@ class TestDerivative:
 # integrate() — shape, value at full domain, monotonicity
 # ---------------------------------------------------------------------------
 
+
 class TestIntegrate:
     def test_shape(self):
         b = make_basis(order=4)
@@ -236,6 +278,17 @@ class TestIntegrate:
         integral_sum = b.integrate(y).sum(axis=1)
         np.testing.assert_allclose(integral_sum, y - a, atol=1e-11)
 
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.integrate(y)
+
+    def test_2d_input_raises(self):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="1-D"):
+            b.integrate(np.array([[0.2, 0.4], [0.6, 0.8]]))
+
     @given(
         order=st.integers(1, 10),
         a=st.floats(-20, 20, allow_nan=False, allow_infinity=False),
@@ -251,37 +304,9 @@ class TestIntegrate:
 
 
 # ---------------------------------------------------------------------------
-# monotone_trafo
-# ---------------------------------------------------------------------------
-
-class TestMonotoneTrafo:
-    def test_basic(self):
-        b = make_basis(order=3)
-        y = linspace_in(b, 10)
-        M = b.evaluate(y)
-        theta = np.array([0.0, 1.0, 2.0, 3.0])
-        result = monotone_trafo(theta, M)
-        np.testing.assert_allclose(result, M @ theta)
-
-    def test_shape(self):
-        b = make_basis(order=4)
-        M = b.evaluate(linspace_in(b, 15))
-        theta = np.ones(5)
-        assert monotone_trafo(theta, M).shape == (15,)
-
-    def test_constant_theta_equals_evaluate_sum(self):
-        """For theta = c*ones, h(y) = c * sum_i B_{i,k}(y) = c (partition of unity)."""
-        b = make_basis(order=5)
-        y = linspace_in(b, 20)
-        M = b.evaluate(y)
-        c = 3.7
-        result = monotone_trafo(c * np.ones(6), M)
-        np.testing.assert_allclose(result, c, atol=1e-12)
-
-
-# ---------------------------------------------------------------------------
 # Reference .npy comparison (skip if file absent)
 # ---------------------------------------------------------------------------
+
 
 def test_reference_npy(tmp_path):
     """Compare evaluate() against R basefun::Bernstein_basis reference values.
@@ -291,6 +316,7 @@ def test_reference_npy(tmp_path):
     column order, matching pymlt's convention).
     """
     import pathlib
+
     ref_path = (
         pathlib.Path(__file__).parent.parent / "reference" / "bernstein_reference.txt"
     )

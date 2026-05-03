@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import cast
 
@@ -17,89 +17,6 @@ class CensoringType(Enum):
     LEFT = auto()  # left-censored:   actual value < observed threshold
     RIGHT = auto()  # right-censored:  actual value > observed threshold
     INTERVAL = auto()  # interval-censored: lower <= actual value <= upper
-
-
-@dataclass
-class NumericVariable:
-    """Continuous numeric variable with a defined support interval.
-
-    Parameters
-    ----------
-    name:
-        Variable name.
-    support:
-        Closed interval (a, b) defining the domain for the Bernstein basis.
-        Must satisfy a < b.
-    bounds:
-        Optional narrower observation bounds (a, b) with a < b.
-        If None, `support` is used as bounds.
-    log_first:
-        If True, apply log-transform before Bernstein evaluation.
-    """
-
-    name: str
-    support: tuple[float, float]
-    bounds: tuple[float, float] | None = None
-    log_first: bool = False
-
-    def __post_init__(self) -> None:
-        if self.support[0] >= self.support[1]:
-            raise ValueError(f"support must satisfy a < b, got {self.support}")
-        if self.bounds is not None and self.bounds[0] >= self.bounds[1]:
-            raise ValueError(f"bounds must satisfy a < b, got {self.bounds}")
-
-
-@dataclass
-class OrderedVariable:
-    """Ordinal categorical variable.
-
-    Parameters
-    ----------
-    name:
-        Variable name.
-    levels:
-        Ordered list of level labels, from lowest to highest.
-        At least two levels are required.
-    """
-
-    name: str
-    levels: list[str]
-
-    def __post_init__(self) -> None:
-        if len(self.levels) < 2:
-            raise ValueError(
-                f"OrderedVariable requires at least 2 levels, got {len(self.levels)}"
-            )
-        if len(self.levels) != len(set(self.levels)):
-            raise ValueError("OrderedVariable levels must be unique")
-
-    @property
-    def n_levels(self) -> int:
-        return len(self.levels)
-
-
-@dataclass
-class SurvivalVariable:
-    """Non-negative continuous variable for survival/time-to-event data.
-
-    Parameters
-    ----------
-    name:
-        Variable name.
-    support:
-        Interval (a, b) with a >= 0 and a < b.  Defaults to (0, inf).
-    """
-
-    name: str
-    support: tuple[float, float] = field(default_factory=lambda: (0.0, float("inf")))
-
-    def __post_init__(self) -> None:
-        if self.support[0] < 0.0:
-            raise ValueError(
-                f"SurvivalVariable support must start at >= 0, got {self.support[0]}"
-            )
-        if self.support[0] >= self.support[1]:
-            raise ValueError(f"support must satisfy a < b, got {self.support}")
 
 
 @dataclass
@@ -154,6 +71,11 @@ class CensoredData:
             self.trunc_upper = np.asarray(self.trunc_upper, dtype=float)
             if len(self.trunc_upper) != n:
                 raise ValueError("trunc_upper must have the same length as exact")
+        if self.trunc_lower is not None and self.trunc_upper is not None:
+            if np.any(self.trunc_lower > self.trunc_upper):
+                raise ValueError(
+                    "trunc_lower must be <= trunc_upper for every observation"
+                )
 
     # ------------------------------------------------------------------
     # Constructors

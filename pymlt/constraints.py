@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import numpy as np
 from numpy.typing import NDArray
@@ -175,10 +175,37 @@ class BoundaryConstraint:
 # ---------------------------------------------------------------------------
 
 
+@overload
 def build_constraints(
     n_params: int,
     lower: float | None = None,
     upper: float | None = None,
+    *,
+    solver: Literal["slsqp"] = "slsqp",
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> list[dict[str, Any]]: ...
+
+
+@overload
+def build_constraints(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
+    solver: Literal["trust-constr"],
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> list[LinearConstraint]: ...
+
+
+def build_constraints(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
     solver: Literal["slsqp", "trust-constr"] = "slsqp",
     total_params: int | None = None,
     nonneg_lower: bool = False,
@@ -262,20 +289,18 @@ def build_constraints(
     support_rows: NDArray[np.float64] | None = None
     if nonneg_lower:
         if X is None:
-            if total > n_params:  
-                raise ValueError(  
-                    "X must be provided when nonneg_lower=True and"  
-                    "total_params > n_params so support-feasibility"  
-                    "constraints can include the regression coefficients."  
+            if total > n_params:
+                raise ValueError(
+                    "X must be provided when nonneg_lower=True and "
+                    "total_params > n_params so support-feasibility "
+                    "constraints can include the regression coefficients."
                 )
             support_rows = np.zeros((1, total))
             support_rows[0, 0] = 1.0
         else:
             X_arr = np.asarray(X, dtype=np.float64)
             if X_arr.ndim != 2:
-                raise ValueError(
-                    f"X must be 2-D, got shape {X_arr.shape}"
-                )
+                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
             if total_params is None:
                 raise ValueError(
                     "total_params must be provided when nonneg_lower=True and "

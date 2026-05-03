@@ -9,7 +9,7 @@
     "delta_loglik": 4.792542540599243e-08,
     "max_delta_cdf": 6.811794294181439e-07,
     "max_delta_pdf": 4.143440237136531e-06,
-    "max_delta_quantile": 7.980844994093239e-05,
+    "max_delta_quantile": 7.980839087928793e-05,
     "max_delta_hazard": null,
     "max_delta_trafo": 4.548279423532975e-06,
     "max_delta_survivor": 6.811794293626328e-07,
@@ -22,7 +22,7 @@
     "max_delta_logcumhazard": 7.994487448481635e-06,
     "max_delta_logodds": 8.210900716232317e-06,
     "converged": true,
-    "runtime_s": 0.0043,
+    "runtime_s": 0.0034,
     "failure_reason": null,
     "expected_failure": false
   }

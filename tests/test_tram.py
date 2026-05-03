@@ -1,7 +1,9 @@
-"""Tests for pymlt.tram — BoxCox, Coxph, Colr."""
+"""Tests for pymlt.tram — BoxCox, Coxph, Colr, Lm."""
+
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -13,12 +15,13 @@ from scipy.stats import norm
 
 import pymlt
 from pymlt.model import MLT
-from pymlt.tram import BoxCox, Colr, Coxph, _TramModel
+from pymlt.tram import BoxCox, Colr, Coxph, Lm, _TramModel
 from pymlt.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def simple_y(n: int = 80, seed: int = 0) -> np.ndarray:
     return np.random.default_rng(seed).uniform(0.05, 0.95, n)
@@ -34,6 +37,7 @@ def simple_survival(n: int = 80, seed: int = 0):
 # ---------------------------------------------------------------------------
 # Smoke tests — fit + predict, no errors, correct shapes
 # ---------------------------------------------------------------------------
+
 
 class TestBoxCoxSmoke:
     def test_instantiate(self):
@@ -65,6 +69,7 @@ class TestBoxCoxSmoke:
 
     def test_fitted_transformation_before_fit_raises(self):
         from pymlt.model import NotFittedError
+
         model = BoxCox(support=(0.0, 1.0))
         with pytest.raises(NotFittedError):
             model.fitted_transformation(simple_y())
@@ -136,6 +141,7 @@ class TestColrSmoke:
 # BoxCox: fitted_transformation is monotone (Hypothesis)
 # ---------------------------------------------------------------------------
 
+
 @settings(max_examples=15, deadline=8000)
 @given(seed=st.integers(min_value=0, max_value=99))
 def test_boxcox_fitted_transformation_monotone(seed: int):
@@ -151,6 +157,7 @@ def test_boxcox_fitted_transformation_monotone(seed: int):
 # Coxph: survival properties
 # ---------------------------------------------------------------------------
 
+
 class TestCoxphSurvival:
     def setup_method(self):
         times, censored = simple_survival(seed=7)
@@ -165,7 +172,9 @@ class TestCoxphSurvival:
 
     def test_survival_monotone_decreasing(self):
         s = self.model.survival(self.grid)
-        assert np.all(np.diff(s) <= 1e-6), f"survival not monotone: {np.diff(s).max():.2e}"
+        assert np.all(np.diff(s) <= 1e-6), (
+            f"survival not monotone: {np.diff(s).max():.2e}"
+        )
 
     def test_hazard_matches_predict(self):
         h1 = self.model.hazard(self.grid)
@@ -177,11 +186,12 @@ class TestCoxphSurvival:
 # Colr uses logistic distribution (different theta from BoxCox)
 # ---------------------------------------------------------------------------
 
+
 def test_colr_uses_logistic_distribution():
     """Colr and BoxCox on the same data must produce different theta_."""
     y = simple_y(seed=42)
     boxcox = BoxCox(support=(0.0, 1.0), order=4).fit(y)
-    colr   = Colr(support=(0.0, 1.0), order=4).fit(y)
+    colr = Colr(support=(0.0, 1.0), order=4).fit(y)
     # Theta vectors differ because base distributions differ
     assert not np.allclose(boxcox.theta_, colr.theta_, atol=1e-3), (
         "BoxCox and Colr produced identical theta — logistic distribution not applied"
@@ -191,6 +201,7 @@ def test_colr_uses_logistic_distribution():
 # ---------------------------------------------------------------------------
 # Colr: prediction uses logistic distribution
 # ---------------------------------------------------------------------------
+
 
 class TestColrPredictLogistic:
     """Colr.predict() must use the logistic distribution, not normal."""
@@ -265,6 +276,7 @@ class TestColrPredictLogistic:
 # Logistic hazard — base_distribution="logistic" with RIGHT censoring
 # ---------------------------------------------------------------------------
 
+
 class TestLogisticHazard:
     """predict(what='hazard') must use logistic pdf/sf for logistic-family models.
 
@@ -279,7 +291,8 @@ class TestLogisticHazard:
         censored = rng.random(100) < 0.3
         cd = CensoredData.right_censored(y, censored)
         self.model = MLT(
-            order=5, support=(0.0, 1.0),
+            order=5,
+            support=(0.0, 1.0),
             base_distribution="logistic",
             censoring=CensoringType.RIGHT,
         ).fit(cd)
@@ -319,6 +332,7 @@ class TestLogisticHazard:
 # summary()
 # ---------------------------------------------------------------------------
 
+
 class TestSummary:
     def test_summary_before_fit(self):
         model = BoxCox(support=(0.0, 1.0))
@@ -353,6 +367,7 @@ class TestSummary:
 # __repr__
 # ---------------------------------------------------------------------------
 
+
 class TestRepr:
     def test_repr_shows_boxcox(self):
         assert "BoxCox" in repr(BoxCox(support=(0.0, 1.0)))
@@ -376,6 +391,7 @@ class TestRepr:
 # plot()
 # ---------------------------------------------------------------------------
 
+
 class TestPlot:
     def setup_method(self):
         pytest.importorskip("matplotlib")
@@ -384,6 +400,7 @@ class TestPlot:
 
     def teardown_method(self):
         import matplotlib.pyplot as plt
+
         plt.close("all")
 
     def test_plot_no_ax_returns_two_axes(self):
@@ -398,6 +415,7 @@ class TestPlot:
 
     def test_plot_with_axes_tuple_returns_list(self):
         import matplotlib.pyplot as plt
+
         fig, (ax1, ax2) = plt.subplots(1, 2)
         result = self.model.plot(self.y, ax=(ax1, ax2))
         assert result == [ax1, ax2]
@@ -405,6 +423,7 @@ class TestPlot:
 
     def test_plot_with_axes_tuple_plots_both(self):
         import matplotlib.pyplot as plt
+
         fig, (ax1, ax2) = plt.subplots(1, 2)
         self.model.plot(self.y, ax=(ax1, ax2))
         assert len(ax1.lines) > 0, "CDF axis has no lines"
@@ -413,6 +432,7 @@ class TestPlot:
 
     def test_plot_single_axes_plots_cdf_only(self):
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots()
         ret = self.model.plot(self.y, ax=ax)
         assert ret is ax
@@ -422,6 +442,7 @@ class TestPlot:
 
     def test_plot_one_tuple_raises_type_error(self):
         import matplotlib.pyplot as plt
+
         fig, ax = plt.subplots()
         with pytest.raises(TypeError, match="2-tuple"):
             self.model.plot(self.y, ax=(ax,))
@@ -429,6 +450,7 @@ class TestPlot:
 
     def test_plot_three_tuple_raises_type_error(self):
         import matplotlib.pyplot as plt
+
         fig, axes = plt.subplots(1, 3)
         with pytest.raises(TypeError, match="2-tuple"):
             self.model.plot(self.y, ax=tuple(axes))
@@ -445,9 +467,217 @@ class TestPlot:
 # Top-level pymlt import
 # ---------------------------------------------------------------------------
 
+
 def test_pymlt_top_level_import():
     assert hasattr(pymlt, "BoxCox")
     assert hasattr(pymlt, "Coxph")
     assert hasattr(pymlt, "Colr")
+    assert hasattr(pymlt, "Lm")
     model = pymlt.BoxCox(support=(0.0, 1.0))
     assert isinstance(model, BoxCox)
+
+
+# ---------------------------------------------------------------------------
+# Lm — linear model as a CTM
+# ---------------------------------------------------------------------------
+
+REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference"
+
+
+def _support_from_y(y: np.ndarray, pad: float = 0.1) -> tuple[float, float]:
+    return (float(y.min()) - pad, float(y.max()) + pad)
+
+
+class TestLmSmoke:
+    def test_instantiate(self):
+        model = Lm(support=(0.0, 1.0))
+        assert isinstance(model, Lm)
+        assert isinstance(model, _TramModel)
+
+    def test_censoring_is_none(self):
+        assert Lm(support=(0.0, 1.0)).censoring is CensoringType.NONE
+
+    def test_base_distribution_normal(self):
+        assert Lm(support=(0.0, 1.0)).base_distribution == "normal"
+
+    def test_order_is_one(self):
+        model = Lm(support=(0.0, 1.0))
+        assert model.basis.order == 1
+
+    def test_order_kwarg_rejected(self):
+        with pytest.raises(TypeError):
+            Lm(support=(0.0, 1.0), order=2)  # type: ignore[call-arg]
+
+    def test_fit_predict_shape_and_range(self):
+        rng = np.random.default_rng(0)
+        y = rng.normal(loc=1.0, scale=0.3, size=120)
+        model = Lm(support=_support_from_y(y)).fit(y)
+        cdf = model.predict(y, what="distribution")
+        assert cdf.shape == (len(y),)
+        assert np.all(cdf >= 0.0) and np.all(cdf <= 1.0)
+
+    def test_theta_is_monotone(self):
+        rng = np.random.default_rng(1)
+        y = rng.normal(size=80)
+        model = Lm(support=_support_from_y(y)).fit(y)
+        assert model.theta_ is not None
+        assert model.theta_[1] > model.theta_[0]
+
+    def test_fitted_transformation_shape(self):
+        rng = np.random.default_rng(2)
+        y = rng.normal(size=60)
+        model = Lm(support=_support_from_y(y)).fit(y)
+        h = model.fitted_transformation(y)
+        assert h.shape == (len(y),)
+
+
+class TestLmAccessors:
+    def setup_method(self):
+        rng = np.random.default_rng(3)
+        self.x = rng.normal(size=200)
+        self.y = 2.0 + 3.0 * self.x + rng.normal(scale=0.5, size=200)
+        self.support = _support_from_y(self.y)
+
+    def test_sigma_positive_and_finite(self):
+        model = Lm(support=self.support).fit(self.y)
+        assert np.isfinite(model.sigma_)
+        assert model.sigma_ > 0.0
+
+    def test_intercept_finite(self):
+        model = Lm(support=self.support).fit(self.y)
+        assert np.isfinite(model.intercept_)
+
+    def test_coef_empty_without_covariates(self):
+        model = Lm(support=self.support).fit(self.y)
+        assert model.coef_.shape == (0,)
+
+    def test_coef_shape_with_covariate(self):
+        model = Lm(support=self.support).fit(self.y, X=self.x.reshape(-1, 1))
+        assert model.coef_.shape == (1,)
+
+    def test_accessors_before_fit_raise(self):
+        model = Lm(support=(0.0, 1.0))
+        with pytest.raises(pymlt.NotFittedError):
+            _ = model.sigma_
+        with pytest.raises(pymlt.NotFittedError):
+            _ = model.intercept_
+        with pytest.raises(pymlt.NotFittedError):
+            _ = model.coef_
+        with pytest.raises(pymlt.NotFittedError):
+            model.fitted_transformation(self.y)
+
+    def test_degenerate_theta_raises(self):
+        model = Lm(support=self.support).fit(self.y, X=self.x.reshape(-1, 1))
+        model.theta_[1] = model.theta_[0]
+        with pytest.raises(RuntimeError, match="Degenerate"):
+            _ = model.sigma_
+        with pytest.raises(RuntimeError, match="Degenerate"):
+            _ = model.intercept_
+        with pytest.raises(RuntimeError, match="Degenerate"):
+            _ = model.coef_
+
+    def test_accessors_support_invariant(self):
+        a, b = self.support
+        s1 = (a, b)
+        s2 = (a - 1.0, b + 1.0)
+        m1 = Lm(support=s1).fit(self.y, X=self.x.reshape(-1, 1))
+        m2 = Lm(support=s2).fit(self.y, X=self.x.reshape(-1, 1))
+        # theta_ is support-dependent
+        assert not np.allclose(m1.theta_[:2], m2.theta_[:2], atol=1e-3)
+        # Derived quantities are support-invariant
+        np.testing.assert_allclose(m1.sigma_, m2.sigma_, atol=1e-4)
+        np.testing.assert_allclose(m1.intercept_, m2.intercept_, atol=1e-4)
+        np.testing.assert_allclose(m1.coef_, m2.coef_, atol=1e-4)
+
+
+@pytest.mark.skipif(
+    not (REFERENCE_DIR / "lm_uni_theta.txt").exists(),
+    reason="R reference data not generated; run Rscript reference/generate_reference.R",
+)
+class TestLmReference:
+    """Validate Lm against R tram::Lm() and base R lm() output."""
+
+    def test_univariate_matches_r(self):
+        y = np.loadtxt(REFERENCE_DIR / "lm_uni_y.txt")
+        a, b = np.loadtxt(REFERENCE_DIR / "lm_uni_support.txt")
+        intercept_r, sigma_r_ols = np.loadtxt(REFERENCE_DIR / "lm_uni_lm_coef.txt")
+
+        model = Lm(support=(float(a), float(b))).fit(y)
+
+        n, p = len(y), 1
+        sigma_r_mle = float(sigma_r_ols) * np.sqrt((n - p) / n)
+
+        np.testing.assert_allclose(model.intercept_, intercept_r, atol=1e-4)
+        np.testing.assert_allclose(model.sigma_, sigma_r_mle, atol=1e-4)
+
+    def test_covariate_matches_r(self):
+        y = np.loadtxt(REFERENCE_DIR / "lm_cov_y.txt")
+        x = np.loadtxt(REFERENCE_DIR / "lm_cov_x.txt")
+        a, b = np.loadtxt(REFERENCE_DIR / "lm_cov_support.txt")
+        intercept_r, slope_r, sigma_r_ols = np.loadtxt(
+            REFERENCE_DIR / "lm_cov_lm_coef.txt"
+        )
+
+        model = Lm(support=(float(a), float(b))).fit(y, X=x.reshape(-1, 1))
+
+        n, p = len(y), 2
+        sigma_r_mle = float(sigma_r_ols) * np.sqrt((n - p) / n)
+
+        np.testing.assert_allclose(model.intercept_, intercept_r, atol=1e-4)
+        np.testing.assert_allclose(model.sigma_, sigma_r_mle, atol=1e-4)
+        np.testing.assert_allclose(model.coef_[0], slope_r, atol=1e-4)
+
+
+class TestLmEquivalence:
+    """Cross-check Lm accessors against numpy.linalg.lstsq on synthetic data."""
+
+    def test_matches_ols_lstsq(self):
+        rng = np.random.default_rng(2026)
+        n = 400
+        x = rng.normal(size=n)
+        y = 2.0 + 3.0 * x + rng.normal(scale=0.5, size=n)
+        support = _support_from_y(y)
+
+        model = Lm(support=support).fit(y, X=x.reshape(-1, 1))
+
+        A = np.c_[np.ones(n), x]
+        beta_ols, *_ = np.linalg.lstsq(A, y, rcond=None)
+        residuals = y - A @ beta_ols
+        # MLE sigma (divide by n), not OLS (divide by n-p) — CTM is MLE-based
+        sigma_mle = float(np.sqrt(residuals @ residuals / n))
+
+        np.testing.assert_allclose(model.intercept_, beta_ols[0], atol=0.02)
+        np.testing.assert_allclose(model.coef_[0], beta_ols[1], atol=0.02)
+        np.testing.assert_allclose(model.sigma_, sigma_mle, atol=0.02)
+
+
+@pytest.mark.skipif(
+    not (REFERENCE_DIR / "predict_quantile_coxph_expected.txt").exists(),
+    reason="R reference data not generated; run Rscript reference/generate_reference.R",
+)
+class TestCoxphPredictQuantileReference:
+    """Validate conditional quantile prediction against R tram::Coxph."""
+
+    def test_conditional_quantile_matches_r(self):
+        y = np.loadtxt(REFERENCE_DIR / "vcov_coxph_y.txt")
+        event = np.loadtxt(REFERENCE_DIR / "vcov_coxph_event.txt").astype(bool)
+        x = np.loadtxt(REFERENCE_DIR / "vcov_coxph_x.txt")
+        a, b = np.loadtxt(REFERENCE_DIR / "vcov_coxph_support.txt")
+
+        X_grid = np.loadtxt(REFERENCE_DIR / "predict_quantile_coxph_X.txt")
+        probs = np.loadtxt(REFERENCE_DIR / "predict_quantile_coxph_probs.txt")
+        expected = np.loadtxt(
+            REFERENCE_DIR / "predict_quantile_coxph_expected.txt"
+        ).reshape(len(X_grid), len(probs))
+
+        # CensoredData uses censored-mask (True = censored), complement of event.
+        cd = CensoredData.right_censored(y, ~event)
+        model = Coxph(support=(float(a), float(b)), order=4).fit(cd, X=x.reshape(-1, 1))
+
+        # For each X value, compute quantile vector at all probs (rows of expected).
+        got = np.empty_like(expected)
+        for i, xv in enumerate(X_grid):
+            X_new = np.full((len(probs), 1), float(xv))
+            got[i] = model.predict(probs, X_new=X_new, what="quantile")
+
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-6)

@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `Lm` class — `_TramModel` subclass fixing `order=1`, normal base, and
+  uncensored data; exposes `sigma_`, `intercept_`, `coef_`, and
+  `fitted_transformation(y)`. Re-exported via `pymlt.Lm`.
+  R-validated against `tram::Lm` and `lm()` for both the intercept-only and
+  single-covariate cases (`tram.py`, `reference/lm_*`, `tests/test_tram.py`)
+- Analytical observed information / variance–covariance machinery:
+  new private `_d2_logpdf` and per-censoring `_hess_*` / `_scores_*` in
+  `likelihood.py`; public top-level `hessian()` and `score_matrix()`;
+  eager Hessian computation in `fit()`; new model methods `vcov()`,
+  `estfun()` / `score_contributions()`, and `standard_errors()`.
+  `_TramModel.summary()` now emits a Wald coefficient table for β.
+  R-validated against `vcov(as.mlt(fit))` and `sandwich::estfun(fit)` for
+  BoxCox / Colr / Coxph fits (`likelihood.py`, `model.py`, `tram.py`,
+  `reference/vcov_*`, `tests/test_vcov.py`)
+- Wald confidence intervals (`confint(level, parm)`) and pointwise
+  delta-method confidence bands (`confband(y_grid, X, level, what)`) on
+  `ConditionalTransformationModel`. `confband` supports
+  `what ∈ {trafo, distribution, survivor, density, hazard}` — the Wald
+  interval is computed on the appropriate linear-predictor scale (``h`` for
+  the first three; ``log f(h) + log h'`` with an optional ``− log S(h)``
+  term for density / hazard) and back-transformed so probability bands
+  stay in `[0, 1]` and density / hazard bands stay positive.
+  R-validated via hand-computed delta-method bands on a baseline MLT fit
+  plus Wald CIs for BoxCox / Colr / Coxph (`model.py`,
+  `reference/confint_*`, `reference/confband_baseline_*`,
+  `tests/test_confidence.py`)
+
 ### Changed
 
 - GitHub Actions workflows are temporarily deactivated while the repository is

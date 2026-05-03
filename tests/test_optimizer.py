@@ -1,4 +1,5 @@
 """Tests for pymlt.optimizer — convergence, feasibility, result structure."""
+
 from __future__ import annotations
 
 import warnings
@@ -23,6 +24,7 @@ from pymlt.variables import CensoredData, CensoringType
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_basis(order: int = 3, support: tuple = (0.0, 1.0)) -> BernsteinBasis:
     return BernsteinBasis(order=order, support=support)
 
@@ -36,6 +38,7 @@ def simple_data(n: int = 60, seed: int = 0) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # OptimizerConfig defaults
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizerConfig:
     def test_defaults(self):
@@ -57,6 +60,7 @@ class TestOptimizerConfig:
 # ---------------------------------------------------------------------------
 # OptimizationResult structure
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizationResultFields:
     def test_all_fields_present(self):
@@ -95,6 +99,7 @@ class TestOptimizationResultFields:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
 
 class TestProjectToFeasible:
     def test_already_sorted(self):
@@ -151,6 +156,7 @@ class TestPerturbAndProject:
 # optimize() — convergence and feasibility
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizeConvergence:
     def test_converges_on_simple_data(self):
         basis = make_basis(order=3)
@@ -164,13 +170,12 @@ class TestOptimizeConvergence:
         result = optimize(basis, y)
         n_params = basis.order + 1
         theta_b = result.theta[:n_params]
-        assert np.all(np.diff(theta_b) >= -1e-6), (
-            f"theta not non-decreasing: {theta_b}"
-        )
+        assert np.all(np.diff(theta_b) >= -1e-6), f"theta not non-decreasing: {theta_b}"
 
     def test_nll_decreased_from_init(self):
         """Optimised NLL ≤ initial NLL."""
         from pymlt.likelihood import negative_log_likelihood
+
         basis = make_basis(order=3)
         y = simple_data(n=60)
         theta_init = _initial_theta(basis.order + 1, None)
@@ -184,8 +189,10 @@ class TestOptimizeConvergence:
         y = simple_data(n=100)
         result = optimize(basis, y)
         D = MonotonicityConstraint(basis.order + 1).as_matrix()
-        violations = D @ result.theta[:basis.order + 1]
-        assert np.all(violations >= -1e-6), f"Constraint violated: {violations.min():.2e}"
+        violations = D @ result.theta[: basis.order + 1]
+        assert np.all(violations >= -1e-6), (
+            f"Constraint violated: {violations.min():.2e}"
+        )
 
     def test_log_likelihood_is_finite(self):
         basis = make_basis(order=3)
@@ -226,7 +233,7 @@ class TestOptimizeWithCovariates:
         assert result.theta.shape == (basis.order + 1 + q,)
         assert np.isfinite(result.log_likelihood)
         # Only the basis part must be monotone
-        assert np.all(np.diff(result.theta[:basis.order + 1]) >= -1e-6)
+        assert np.all(np.diff(result.theta[: basis.order + 1]) >= -1e-6)
 
 
 class TestOptimizeSolvers:
@@ -273,9 +280,37 @@ class TestOptimizeRestarts:
             assert result.n_restarts == 0
 
 
+class TestOptimizeReproducibility:
+    """`OptimizerConfig.random_state` controls the restart-perturbation RNG."""
+
+    def _run(self, random_state):
+        cfg = OptimizerConfig(
+            max_iter=1, max_restarts=3, random_state=random_state, verbose=False
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return optimize(make_basis(), simple_data(), config=cfg)
+
+    def test_same_seed_same_theta(self):
+        r1 = self._run(42)
+        r2 = self._run(42)
+        np.testing.assert_allclose(r1.theta, r2.theta)
+
+    def test_different_seed_different_theta(self):
+        r1 = self._run(1)
+        r2 = self._run(2)
+        assert not np.allclose(r1.theta, r2.theta)
+
+    def test_generator_instance_accepted(self):
+        r_int = self._run(7)
+        r_gen = self._run(np.random.default_rng(7))
+        np.testing.assert_allclose(r_int.theta, r_gen.theta)
+
+
 # ---------------------------------------------------------------------------
 # base_distribution validation in optimize()
 # ---------------------------------------------------------------------------
+
 
 class TestBaseDistributionValidation:
     def test_invalid_raises_value_error(self):
@@ -309,17 +344,39 @@ class TestBaseDistributionValidation:
 
     def test_exponential_accepted_and_nonnegative_lower(self):
         """Exponential fit must respect h(y_min) = theta_b[0] >= 0."""
-        result = optimize(
-            make_basis(), simple_data(), base_distribution="exponential"
-        )
+        result = optimize(make_basis(), simple_data(), base_distribution="exponential")
         assert isinstance(result, OptimizationResult)
         # Feasibility (within SLSQP tolerance): theta_b[0] >= 0
         assert result.theta[0] >= -1e-6
+
+    def test_optimize_resolves_distribution_once(self, monkeypatch):
+        calls = 0
+
+        def count_optimizer_get_dist(base_distribution):
+            nonlocal calls
+            calls += 1
+            from pymlt.likelihood import _NORM_OPS
+
+            return _NORM_OPS
+
+        def fail_likelihood_get_dist(base_distribution):
+            raise AssertionError(
+                "_get_dist should not run inside optimize() evaluations"
+            )
+
+        monkeypatch.setattr("pymlt.optimizer._get_dist", count_optimizer_get_dist)
+        monkeypatch.setattr("pymlt.likelihood._get_dist", fail_likelihood_get_dist)
+
+        result = optimize(make_basis(order=2), simple_data(n=20))
+
+        assert isinstance(result, OptimizationResult)
+        assert calls == 1
 
 
 # ---------------------------------------------------------------------------
 # _make_objective — ValueError fallback penalty
 # ---------------------------------------------------------------------------
+
 
 class TestMakeObjectivePenalty:
     """Infeasible theta (h' ≤ 0) must trigger the ValueError catch that
@@ -328,34 +385,75 @@ class TestMakeObjectivePenalty:
     def test_infeasible_theta_grad_returns_penalty(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         y = np.array([0.3, 0.5, 0.7])
-        obj = _make_objective(
-            basis, y, None, CensoringType.NONE, use_gradient=True
-        )
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])  # strictly decreasing
         val, grad = obj(theta_bad)
         assert val == 1e10
-        np.testing.assert_array_equal(grad, np.zeros_like(theta_bad))
+        # Gradient must point away from infeasibility: a small step along the
+        # descent direction -grad should reduce the monotonicity violation.
+        assert np.any(grad != 0.0)
+        D = MonotonicityConstraint(n_params=theta_bad.size).as_matrix()
+        violation_before = np.sum(np.minimum(D @ theta_bad, 0.0) ** 2)
+        theta_step = theta_bad - 1e-3 * grad
+        violation_after = np.sum(np.minimum(D @ theta_step, 0.0) ** 2)
+        assert violation_after < violation_before
+
+    def test_infeasible_theta_with_beta_grad_zero_on_beta_block(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        X = np.array([[1.0], [2.0], [3.0]])
+        obj = _make_objective(basis, y, X, CensoringType.NONE, use_gradient=True)
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0, 0.25])  # last entry is beta
+        val, grad = obj(theta_bad)
+        assert val == 1e10
+        assert grad.shape == theta_bad.shape
+        # Beta slice must be zero — beta does not enter monotonicity.
+        assert grad[-1] == 0.0
+        # Theta_b slice must be non-trivial.
+        assert np.any(grad[:-1] != 0.0)
 
     def test_infeasible_theta_nograd_returns_penalty(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         y = np.array([0.3, 0.5, 0.7])
-        obj = _make_objective(
-            basis, y, None, CensoringType.NONE, use_gradient=False
-        )
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=False)
         theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
         val = obj(theta_bad)
         assert val == 1e10
+
+    def test_infeasible_subgradient_does_not_stall(self):
+        """Gradient descent using only the closure's infeasibility-path
+        output must drive a deeply non-monotone theta back into the feasible
+        cone.  Regression guard: the previous zero-gradient fallback left
+        gradient descent stationary forever."""
+        basis = BernsteinBasis(order=4, support=(0.0, 1.0))
+        y = np.array([0.2, 0.4, 0.6, 0.8])
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
+        D = MonotonicityConstraint(n_params=basis.order + 1).as_matrix()
+
+        theta = np.array([5.0, 4.0, 3.0, 2.0, 1.0])  # strictly decreasing
+        step = 0.5
+        for _ in range(200):
+            violation = np.minimum(D @ theta, 0.0)
+            if np.all(violation == 0.0):
+                break
+            _, grad = obj(theta)
+            theta = theta - step * grad
+        assert np.all(D @ theta >= -1e-9)
 
 
 # ---------------------------------------------------------------------------
 # optimize() — scipy-exception / all-fail fallback
 # ---------------------------------------------------------------------------
 
+
 class TestOptimizeExceptionFallback:
-    def test_all_attempts_raise_returns_initial(self, monkeypatch):
-        """Every scipy call raises → fallback returns initial theta, unconverged."""
+    def test_linalg_error_retries_and_falls_back(self, monkeypatch):
+        """Every scipy call raises LinAlgError → fallback returns initial theta."""
+        from numpy.linalg import LinAlgError
+
         def boom(*args, **kwargs):
-            raise RuntimeError("scipy blew up")
+            raise LinAlgError("singular matrix")
+
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(max_restarts=2)
@@ -364,26 +462,79 @@ class TestOptimizeExceptionFallback:
 
         assert not result.converged
         assert result.n_iter == 0
-        assert "exception" in result.solver_message.lower()
-        np.testing.assert_allclose(
-            result.theta, np.linspace(0.0, 1.0, basis.order + 1)
-        )
+        assert "linalgerror" in result.solver_message.lower()
+        np.testing.assert_allclose(result.theta, np.linspace(0.0, 1.0, basis.order + 1))
         assert np.isfinite(result.log_likelihood)
 
-    def test_exception_with_verbose_warns(self, monkeypatch):
-        """verbose=True → RuntimeWarning emitted from the except branch."""
+    def test_unrelated_exception_propagates(self, monkeypatch):
+        """A non-LinAlgError from minimize must bubble out — not be silenced."""
+
         def boom(*args, **kwargs):
             raise RuntimeError("scipy blew up")
+
+        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+
+        cfg = OptimizerConfig(max_restarts=2)
+        with pytest.raises(RuntimeError, match="scipy blew up"):
+            optimize(make_basis(order=3), simple_data(), config=cfg)
+
+    def test_linalg_error_with_verbose_warns(self, monkeypatch):
+        """verbose=True → RuntimeWarning emitted on each LinAlgError retry."""
+        from numpy.linalg import LinAlgError
+
+        def boom(*args, **kwargs):
+            raise LinAlgError("singular matrix")
+
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(max_restarts=0, verbose=True)
-        with pytest.warns(RuntimeWarning, match="raised"):
+        with pytest.warns(RuntimeWarning, match="hit"):
             optimize(make_basis(), simple_data(), config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# _make_objective — narrow catch (infeasibility only)
+# ---------------------------------------------------------------------------
+
+
+class TestMakeObjectiveNarrowCatch:
+    """Only InfeasibleParameterError is absorbed into the penalty; other
+    ValueErrors — e.g. a shape bug or an unsupported distribution — must
+    propagate out so that genuine bugs are surfaced."""
+
+    def test_unrelated_value_error_propagates_grad(self, monkeypatch):
+        basis = make_basis(order=3)
+        y = simple_data()
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=True)
+
+        def bad_nll(*args, **kwargs):
+            raise ValueError("bad shape")
+
+        monkeypatch.setattr(
+            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+        )
+        with pytest.raises(ValueError, match="bad shape"):
+            obj(np.linspace(0.0, 1.0, basis.order + 1))
+
+    def test_unrelated_value_error_propagates_nograd(self, monkeypatch):
+        basis = make_basis(order=3)
+        y = simple_data()
+        obj = _make_objective(basis, y, None, CensoringType.NONE, use_gradient=False)
+
+        def bad_nll(*args, **kwargs):
+            raise ValueError("bad shape")
+
+        monkeypatch.setattr(
+            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+        )
+        with pytest.raises(ValueError, match="bad shape"):
+            obj(np.linspace(0.0, 1.0, basis.order + 1))
 
 
 # ---------------------------------------------------------------------------
 # optimize() — verbose warning on genuine non-convergence
 # ---------------------------------------------------------------------------
+
 
 class TestOptimizeVerboseNonConvergence:
     def test_verbose_warns_on_non_convergence(self):
@@ -391,4 +542,3 @@ class TestOptimizeVerboseNonConvergence:
         cfg = OptimizerConfig(max_iter=1, max_restarts=3, verbose=True)
         with pytest.warns(RuntimeWarning, match="did not converge"):
             optimize(make_basis(order=3), simple_data(n=80), config=cfg)
-

@@ -19,16 +19,30 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import brentq
-from scipy.stats import chi2
+from scipy.special import comb
+from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import BaseDistribution, _get_dist, log_likelihood
+from pymlt.likelihood import (
+    _H_CLIP,
+    BaseDistribution,
+    InfeasibleParameterError,
+    _get_dist,
+    _neg_score,
+    log_likelihood,
+)
+from pymlt.likelihood import (
+    hessian as _hessian,
+)
+from pymlt.likelihood import (
+    score_matrix as _score_matrix,
+)
 from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
 from pymlt.variables import CensoredData, CensoringType
 
@@ -66,11 +80,40 @@ _VALID_WHAT = (
     "quantile",
 )
 
+_VALID_CONFBAND_WHAT = (
+    "trafo",
+    "distribution",
+    "survivor",
+    "density",
+    "hazard",
+)
+
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
 
-# Floor for log(h') to avoid log(0) at boundaries where monotonicity is marginal
-_LOG_HP_FLOOR = np.finfo(np.float64).tiny
+# simulate(): clip Uniform(0,1) draws to [_SIMULATE_U_EPS, 1 − _SIMULATE_U_EPS]
+# before inverting through F⁻¹ in _predict_quantile.  At u = 0 / u = 1 the
+# base CDF inverse returns ∓∞, which would propagate as NaN through the
+# Bernstein bisection.  1e-10 keeps the saturation tail to ppf(1e-10) ≈ ±6.4
+# (normal) — well inside _H_CLIP — while losing < 0.0000001% of the
+# distribution at each end.  Bracket saturation beyond this is reported by
+# _predict_quantile's own warning, not silenced here.
+_SIMULATE_U_EPS = 1e-10
+
+# `what` values whose formula involves h'(y) and therefore require hp > 0.
+_HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
+
+
+def _extract_feature_names(X: object) -> list[str] | None:
+    """Extract column names from a pandas DataFrame, else ``None``.
+
+    Kept as a free function so no pandas import is required at module load
+    time — we only touch pandas attributes by duck-typing.
+    """
+    columns = getattr(X, "columns", None)
+    if columns is None:
+        return None
+    return [str(c) for c in columns]
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +177,21 @@ class ConditionalTransformationModel:
         an inequality and does not reduce the parameter count.  ``None``
         before :meth:`fit`."""
 
+        self.hessian_: NDArray[np.float64] | None = None
+        """Observed information matrix — analytical Hessian of the *negative*
+        log-likelihood evaluated at :attr:`theta_`.  Shape ``(p+q, p+q)``.
+        Computed eagerly at the end of :meth:`fit`.  ``None`` before
+        :meth:`fit`."""
+
+        self.feature_names_in_: list[str] | None = None
+        """Names of the covariate columns supplied to :meth:`fit`, if any.
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.  ``None`` when the model was fit
+        without covariates."""
+
+        # Score matrix — computed eagerly at the end of fit().
+        self._estfun_cache_: NDArray[np.float64] | None = None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -141,7 +199,7 @@ class ConditionalTransformationModel:
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
         if not self.is_fitted_:
-            raise NotFittedError("Modell wurde noch nicht gefittet. Rufe fit(y) auf.")
+            raise NotFittedError("Model has not been fitted yet. Call fit(y) first.")
 
     def _validate_input(
         self,
@@ -177,18 +235,22 @@ class ConditionalTransformationModel:
             for vals, name in [(fin_lo, "lower"), (fin_hi, "upper")]:
                 if len(vals) and (vals.min() < a or vals.max() > b):
                     raise ValueError(
-                        f"CensoredData.{name} enthält Werte außerhalb support "
-                        f"[{a}, {b}]. Passe BernsteinBasis(support=...) an."
+                        f"CensoredData.{name} contains values outside support "
+                        f"[{a}, {b}]. Adjust BernsteinBasis(support=...) accordingly."
                     )
             n = y.n
             y_clean: NDArray[np.float64] | CensoredData = y
         else:
             # Coerce without importing pandas: np.asarray handles pd.Series
             y_arr = np.asarray(y, dtype=float).ravel()
+            if y_arr.size == 0:
+                raise ValueError(
+                    "y must contain at least one observation, got empty array"
+                )
             if y_arr.min() < a or y_arr.max() > b:
                 raise ValueError(
-                    f"y enthält Werte außerhalb support [{a}, {b}]. "
-                    f"Passe BernsteinBasis(support=...) an. "
+                    f"y contains values outside support [{a}, {b}]. "
+                    f"Adjust BernsteinBasis(support=...) accordingly. "
                     f"(min={y_arr.min():.4g}, max={y_arr.max():.4g})"
                 )
             n = len(y_arr)
@@ -201,8 +263,8 @@ class ConditionalTransformationModel:
                 X_clean = X_clean[:, None]
             if X_clean.shape[0] != n:
                 raise ValueError(
-                    f"X hat {X_clean.shape[0]} Zeilen, y hat aber {n} "
-                    "Beobachtungen. Beide müssen übereinstimmen."
+                    f"X has {X_clean.shape[0]} rows, but y has {n} "
+                    "observations. Both must match."
                 )
 
         return y_clean, X_clean
@@ -240,6 +302,7 @@ class ConditionalTransformationModel:
         ValueError
             If ``y`` contains values outside ``basis.support``.
         """
+        feature_names = _extract_feature_names(X)
         y_clean, X_clean = self._validate_input(y, X)
 
         result = optimize(
@@ -253,10 +316,9 @@ class ConditionalTransformationModel:
 
         if not result.converged:
             warnings.warn(
-                f"Optimierung nicht konvergiert nach {result.n_restarts} "
-                f"Restarts. Solver-Meldung: {result.solver_message}. "
-                "Ergebnis ist das beste gefundene, aber möglicherweise "
-                "nicht das MLE.",
+                f"Optimization did not converge after {result.n_restarts}"
+                f"restarts. Solver message: {result.solver_message}."
+                "The result is the best found, but may not be the MLE.",
                 ConvergenceWarning,
                 stacklevel=2,
             )
@@ -268,6 +330,37 @@ class ConditionalTransformationModel:
             int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         )
         self.n_free_params_ = int(result.theta.size)
+
+        # Feature names for the covariate block of theta_.
+        if X_clean is not None:
+            q = X_clean.shape[1]
+            if feature_names is None or len(feature_names) != q:
+                feature_names = [f"X{j + 1}" for j in range(q)]
+            self.feature_names_in_ = feature_names
+        else:
+            self.feature_names_in_ = None
+
+        # Observed information and score matrix — computed eagerly so that
+        # later mutations of the caller's ``y``/``X`` cannot affect
+        # ``vcov()`` or ``estfun()`` results.  Failures here indicate a real
+        # modelling problem (degenerate basis, constraint-binding fit);
+        # surface them.
+        self.hessian_ = _hessian(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            self.censoring,
+            base_distribution=self.base_distribution,
+        )
+        self._estfun_cache_ = _score_matrix(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            self.censoring,
+            base_distribution=self.base_distribution,
+        )
         return self
 
     def predict(
@@ -345,11 +438,11 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
 
         if what not in _VALID_WHAT:
-            raise ValueError(f"what={what!r} ist ungültig. Erlaubt: {_VALID_WHAT}")
+            raise ValueError(f"what={what!r} is invalid. Allowed: {_VALID_WHAT}")
 
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
@@ -362,7 +455,27 @@ class ConditionalTransformationModel:
                 X_arr = X_arr[:, None]
 
         if what == "quantile":
-            return self._predict_quantile(y_arr, theta_b)
+            xbeta: NDArray[np.float64] | None = None
+            if len(self.theta_) > p:
+                if X_arr is None:
+                    raise ValueError(
+                        "Model was fitted with covariates; X_new must be "
+                        "provided for conditional quantile prediction."
+                    )
+                if X_arr.shape[0] != y_arr.shape[0]:
+                    raise ValueError(
+                        f"X_new has {X_arr.shape[0]} rows but y_new has "
+                        f"{y_arr.shape[0]} elements; they must match for "
+                        "quantile prediction."
+                    )
+                beta = self.theta_[p:]
+                if X_arr.shape[1] != beta.shape[0]:
+                    raise ValueError(
+                        f"X_new has {X_arr.shape[1]} columns but the fitted "
+                        f"model has {beta.shape[0]} covariate coefficients."
+                    )
+                xbeta = X_arr @ beta
+            return self._predict_quantile(y_arr, theta_b, xbeta=xbeta)
 
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -375,47 +488,76 @@ class ConditionalTransformationModel:
             h = h + X_arr @ beta
 
         dist = _get_dist(self.base_distribution)
-        hp_pos = np.maximum(hp, 0.0)
-        log_hp = np.log(np.maximum(hp, _LOG_HP_FLOOR))
+        if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
+            raise InfeasibleParameterError(
+                f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
+                f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
+                "one or more requested points.  This indicates a non-monotone "
+                "transformation — fit() should have rejected this parameter; "
+                "if you see this, the model state is inconsistent."
+            )
 
         if what == "trafo":
             return h
+
+        # Clip h to ±_H_CLIP before distribution calls — the same bound
+        # likelihood.py and confband() use everywhere else — and warn when
+        # the clip actually bites so the caller knows the returned values
+        # at those points are saturated at a floor/ceiling rather than the
+        # true asymptotic limit.
+        if np.any(np.abs(h) > _H_CLIP):
+            warnings.warn(
+                f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
+                "one or more points; clipping for numerical stability. "
+                "Values at these points are saturated, not the true "
+                "asymptotic limit.",
+                stacklevel=2,
+            )
+        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+
         if what == "distribution":
-            return cast(NDArray[np.float64], dist.cdf(h))
+            return cast(NDArray[np.float64], dist.cdf(h_c))
         if what == "logdistribution":
-            return cast(NDArray[np.float64], dist.logcdf(h))
+            return cast(NDArray[np.float64], dist.logcdf(h_c))
         if what == "survivor":
-            return cast(NDArray[np.float64], dist.sf(h))
+            return cast(NDArray[np.float64], dist.sf(h_c))
         if what == "logsurvivor":
-            return cast(NDArray[np.float64], dist.logsf(h))
+            return cast(NDArray[np.float64], dist.logsf(h_c))
         if what == "density":
-            return cast(NDArray[np.float64], dist.pdf(h) * hp_pos)
+            return cast(NDArray[np.float64], dist.pdf(h_c) * hp)
         if what == "logdensity":
-            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp)
+            return cast(NDArray[np.float64], dist.logpdf(h_c) + np.log(hp))
         if what == "hazard":
             return cast(
                 NDArray[np.float64],
-                dist.pdf(h) * hp_pos / np.maximum(dist.sf(h), 1e-300),
+                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
             )
         if what == "loghazard":
-            return cast(NDArray[np.float64], dist.logpdf(h) + log_hp - dist.logsf(h))
+            return cast(
+                NDArray[np.float64],
+                dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c),
+            )
         if what == "cumhazard":
-            return cast(NDArray[np.float64], -dist.logsf(h))
+            return cast(NDArray[np.float64], -dist.logsf(h_c))
         if what == "logcumhazard":
-            return cast(NDArray[np.float64], np.log(-dist.logsf(h)))
+            return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
         if what == "odds":
-            return cast(NDArray[np.float64], np.exp(dist.logcdf(h) - dist.logsf(h)))
+            return cast(NDArray[np.float64], np.exp(dist.logcdf(h_c) - dist.logsf(h_c)))
         # logodds
-        return cast(NDArray[np.float64], dist.logcdf(h) - dist.logsf(h))
+        return cast(NDArray[np.float64], dist.logcdf(h_c) - dist.logsf(h_c))
 
     def _predict_quantile(
-        self, probs: NDArray[np.float64], theta_b: NDArray[np.float64]
+        self,
+        probs: NDArray[np.float64],
+        theta_b: NDArray[np.float64],
+        xbeta: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
-        """Numerically invert h(q) = F⁻¹(p) via brentq for each p.
+        """Numerically invert the conditional transformation via brentq.
 
-        F⁻¹ is the quantile function (``dist.ppf``) of the base distribution
-        selected by ``self.base_distribution`` (see ``likelihood._get_dist``
-        for the full list of supported distributions).
+        Solves ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i]`` for each ``i``,
+        where ``h_baseline(y) = B_k(y) · theta_b`` and ``F⁻¹`` is the
+        quantile function of the base distribution.  When ``xbeta is None``
+        this reduces to the marginal inversion ``h_baseline(q) = F⁻¹(p)``.
 
         Parameters
         ----------
@@ -423,31 +565,63 @@ class ConditionalTransformationModel:
             Probabilities in (0, 1).
         theta_b:
             Bernstein coefficient vector of length ``order + 1``.
+        xbeta:
+            Per-row linear predictor ``X @ beta`` of shape ``(len(probs),)``,
+            or ``None`` for the baseline (no-covariate) case.
 
         Returns
         -------
         NDArray of same length as ``probs``.
         """
         a, b = self.basis.support
-        # Clip z into the range that brentq can bracket
+        k = self.basis.order
+        theta_b = np.asarray(theta_b, dtype=float)
+
+        n_probs = len(probs)
+        if n_probs == 0:
+            return np.empty(0, dtype=float)
+
+        # Bracket-clip range for h_baseline — independent of xbeta.
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
-        def _h_scalar(q: float) -> float:
-            return float(self.basis.evaluate(np.array([q]))[0] @ theta_b)
-
         dist = _get_dist(self.base_distribution)
-        quantiles = np.empty(len(probs))
-        for i, p in enumerate(probs):
-            z = float(np.clip(dist.ppf(p), z_min, z_max))
-            quantiles[i] = brentq(
-                lambda q, z=z: _h_scalar(q) - z,
-                a,
-                b,
-                xtol=1e-6,
-                full_output=False,
+        shift = 0.0 if xbeta is None else np.asarray(xbeta, dtype=float)
+        z_raw = dist.ppf(probs) - shift
+        if np.any((z_raw < z_min) | (z_raw > z_max)):
+            warnings.warn(
+                "predict(what='quantile'): F⁻¹(p) − xβ exceeds the basis "
+                f"bracket [θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] "
+                "at one or more points; clipping for numerical stability. "
+                "Quantiles at these points are saturated at the basis "
+                "endpoints, not the true asymptotic limit. Consider widening "
+                "the basis support or restricting probs away from 0/1.",
+                stacklevel=2,
             )
-        return cast(NDArray[np.float64], quantiles)
+        z = np.clip(z_raw, z_min, z_max)
+
+        # Precomputed Bernstein constants: h(q) = sum_i binom(k,i) t^i (1-t)^(k-i) θ_i
+        # with t = (q - a) / (b - a). Folding binom·θ once avoids recomputation.
+        i_arr = np.arange(k + 1, dtype=float)
+        j_arr = k - i_arr
+        binom_theta = comb(k, i_arr, exact=False) * theta_b
+        inv_width = 1.0 / (b - a)
+
+        def _h_vec(q: NDArray[np.float64]) -> NDArray[np.float64]:
+            t = (q - a) * inv_width
+            T = (t[:, None] ** i_arr) * ((1.0 - t)[:, None] ** j_arr)
+            return cast(NDArray[np.float64], T @ binom_theta)
+
+        # Vectorised bisection. 60 iters bracket-shrink: (b-a) · 2^-60 ≪ 1e-6
+        # for any practically-sized support.
+        lo = np.full(n_probs, a, dtype=float)
+        hi = np.full(n_probs, b, dtype=float)
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            below = _h_vec(mid) < z
+            lo = np.where(below, mid, lo)
+            hi = np.where(below, hi, mid)
+        return cast(NDArray[np.float64], 0.5 * (lo + hi))
 
     def score(
         self,
@@ -477,7 +651,7 @@ class ConditionalTransformationModel:
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError(
-                "Modellparameter (theta_) fehlen unerwartet nach dem Fitten."
+                "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         y_clean, X_clean = self._validate_input(y, X)
         return log_likelihood(
@@ -487,6 +661,416 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+        )
+
+    def vcov(self) -> NDArray[np.float64]:
+        """Asymptotic variance–covariance matrix of :attr:`theta_`.
+
+        Returns the inverse of the observed information matrix
+        :attr:`hessian_` (Hessian of the *negative* log-likelihood at the
+        MLE).  Under standard regularity conditions, this is a consistent
+        estimator of the asymptotic covariance of the maximum-likelihood
+        estimator.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Symmetric ``(p+q, p+q)`` matrix.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            If the Hessian is singular or not positive definite (e.g. a
+            constraint is active at the MLE, or the basis is degenerate for
+            the given data).  ``np.linalg.LinAlgError`` is wrapped so callers
+            do not have to special-case the linalg module.
+        """
+        self._check_is_fitted()
+        if self.hessian_ is None:
+            raise RuntimeError(
+                "hessian_ is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
+        try:
+            return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "vcov() could not be computed: the Hessian matrix is singular "
+                "or ill-conditioned.  Possible causes: active monotonicity "
+                "constraint at the MLE, basis order too high relative to "
+                "sample size, or collinear covariates."
+            ) from exc
+
+    def estfun(self) -> NDArray[np.float64]:
+        """Per-observation score contributions, ``(n, p+q)``.
+
+        Equivalent to R's ``sandwich::estfun(mlt_fit)``: row ``i`` is
+        ``∂ℓ_i/∂θ`` evaluated at :attr:`theta_`.  At the MLE the column sums
+        are zero up to optimiser tolerance.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Matrix of shape ``(n_obs_, p+q)``.  Computed eagerly in
+            :meth:`fit` and cached; subsequent mutations of the original
+            ``y``/``X`` cannot affect the returned matrix.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            If the cached score matrix is unexpectedly missing after
+            fitting (e.g. a prior ``fit()`` call failed partway through).
+        """
+        self._check_is_fitted()
+        if self._estfun_cache_ is None:
+            raise RuntimeError(
+                "_estfun_cache_ is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
+        return self._estfun_cache_
+
+    # R/sandwich-style alias.  Kept as a method (not a bare attribute) so it
+    # dispatches on subclass overrides if any.
+    def score_contributions(self) -> NDArray[np.float64]:
+        """Alias for :meth:`estfun`.  See that method for details."""
+        return self.estfun()
+
+    def standard_errors(self) -> NDArray[np.float64]:
+        """Vector of asymptotic standard errors for :attr:`theta_`.
+
+        Computed as ``sqrt(diag(vcov()))``.  Length equals ``len(theta_)``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            Propagated from :meth:`vcov` if the Hessian is singular.
+        """
+        diag = np.diag(self.vcov())
+        if np.any(diag < 0):
+            raise RuntimeError(
+                "vcov() contains negative diagonal entries — the Hessian "
+                "matrix is not positive definite.  The model may not be "
+                "identified or the optimisation may have stalled at a "
+                "saddle point."
+            )
+        return cast(NDArray[np.float64], np.sqrt(diag))
+
+    def confint(
+        self,
+        level: float = 0.95,
+        parm: Sequence[int] | None = None,
+    ) -> NDArray[np.float64]:
+        """Wald confidence intervals for :attr:`theta_`.
+
+        Computes the symmetric normal-approximation interval
+
+        .. math::
+            \\hat\\theta_j \\pm z_{1-\\alpha/2}\\,\\sqrt{V_{jj}},
+
+        where :math:`V = \\mathrm{vcov}()` is the inverse observed information
+        matrix and :math:`z_{1-\\alpha/2}` is the standard normal quantile for
+        confidence ``level`` :math:`= 1-\\alpha`.  Matches R
+        ``confint.default(mlt_fit, level=level)``.
+
+        Parameters
+        ----------
+        level:
+            Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
+        parm:
+            Optional sequence of integer indices selecting a subset of
+            parameters.  ``None`` returns intervals for all entries of
+            :attr:`theta_`.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Array of shape ``(k, 2)`` with columns ``[lower, upper]``; ``k``
+            equals ``len(theta_)`` when ``parm is None`` else ``len(parm)``.
+            Row order matches the requested index order.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``level`` is outside ``(0, 1)`` or ``parm`` contains indices
+            outside ``[0, len(theta_))``.
+        RuntimeError
+            Propagated from :meth:`vcov` on singular Hessians.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1)).fit(y)
+        >>> ci = model.confint(level=0.95)  # shape (p, 2)
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are unexpectedly missing after fitting."
+            )
+        if not (0.0 < level < 1.0):
+            raise ValueError(f"level={level!r} is invalid. Expected: 0 < level < 1.")
+
+        se = self.standard_errors()
+        k = self.theta_.size
+        if parm is None:
+            idx = np.arange(k)
+        else:
+            idx = np.asarray(parm, dtype=int).ravel()
+            if idx.size and (idx.min() < 0 or idx.max() >= k):
+                raise ValueError(
+                    f"parm contains indices outside [0, {k}). Received: "
+                    f"min={int(idx.min())}, max={int(idx.max())}."
+                )
+
+        z = float(norm.ppf(0.5 * (1.0 + level)))
+        est = self.theta_[idx]
+        half = z * se[idx]
+        return np.column_stack((est - half, est + half))
+
+    def confband(
+        self,
+        y_grid: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        level: float = 0.95,
+        what: Literal[
+            "trafo", "distribution", "survivor", "density", "hazard"
+        ] = "distribution",
+    ) -> NDArray[np.float64]:
+        """Pointwise delta-method confidence band for a predicted curve.
+
+        For each grid point ``y_i`` (with an optional covariate profile
+        ``x``), compute a "linear-predictor" scale ``η_i`` together with its
+        asymptotic variance via the delta method
+
+        .. math::
+            \\eta_i = g(y_i, x;\\,\\theta),\\qquad
+            \\mathrm{Var}(\\eta_i) = J_i\\,V\\,J_i^\\top,\\quad
+            J_i = \\partial\\eta_i/\\partial\\theta,
+
+        form the Wald interval ``η_i ± z · sqrt(Var(η_i))``, and
+        back-transform the endpoints to the requested ``what`` scale.  The
+        intervals are *pointwise*, not simultaneous.
+
+        The linear predictor and back-transform depend on ``what``:
+
+        * ``"trafo"``        — ``η = h``; back-transform = identity
+        * ``"distribution"`` — ``η = h``; back-transform = ``F_base(·)``
+        * ``"survivor"``     — ``η = h``; back-transform = ``1 − F_base(·)``
+          (endpoints swapped, since ``1 − F`` is decreasing)
+        * ``"density"``      — ``η = log f(h) + log h'``; back-transform = ``exp(·)``
+        * ``"hazard"``       — ``η = log f(h) + log h' − log S(h)``;
+          back-transform = ``exp(·)``
+
+        Parameters
+        ----------
+        y_grid:
+            Response values at which to evaluate the band.  Must lie within
+            ``basis.support``.
+        X:
+            Covariate profile for a single curve.  Accepts a 1D array of
+            length ``q`` or a 2D ``(1, q)`` array; broadcast across
+            ``y_grid``.  Required when the model was fit with covariates;
+            must be ``None`` when it was not.
+        level:
+            Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
+        what:
+            One of ``"trafo"``, ``"distribution"``, ``"survivor"``,
+            ``"density"``, ``"hazard"``.  Defaults to ``"distribution"``.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Array of shape ``(len(y_grid), 3)`` with columns
+            ``[estimate, lower, upper]`` on the ``what`` scale.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``level`` is outside ``(0, 1)``, ``what`` is not supported,
+            or the shape/presence of ``X`` is inconsistent with the fitted
+            model.
+        RuntimeError
+            Propagated from :meth:`vcov` on singular Hessians, or if the
+            fitted basis violates monotonicity at a grid point
+            (``h'(y) ≤ 0``), which would make the ``density``/``hazard``
+            linear predictor ill-defined.
+
+        Notes
+        -----
+        Working on the transformation scale before back-transforming keeps
+        probability bands in ``[0, 1]`` and density/hazard bands positive.
+        The reference R routine ``mlt::confband`` builds *simultaneous*
+        bands via multivariate-normal quantiles; this implementation is
+        pointwise to match the Wald construction used in most applied
+        survival plots.
+
+        Examples
+        --------
+        >>> model = Coxph(support=(0.01, t.max())).fit(cd, X=X)
+        >>> grid = np.linspace(0.1, t.max(), 100)
+        >>> band = model.confband(grid, X=X[:1], what="survivor")
+        >>> ax.fill_between(grid, band[:, 1], band[:, 2], alpha=0.2)
+        >>> ax.plot(grid, band[:, 0])
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are unexpectedly missing after fitting."
+            )
+        if not (0.0 < level < 1.0):
+            raise ValueError(f"level={level!r} is invalid. Expected: 0 < level < 1.")
+        if what not in _VALID_CONFBAND_WHAT:
+            raise ValueError(
+                f"what={what!r} is invalid. Allowed: {_VALID_CONFBAND_WHAT}."
+            )
+
+        p = self.basis.order + 1
+        q = self.theta_.size - p
+        theta_b = self.theta_[:p]
+        beta = self.theta_[p:] if q > 0 else None
+
+        # Validate X versus the fitted parameter layout
+        if q == 0:
+            if X is not None:
+                raise ValueError(
+                    "The model was fitted without covariates; X must be None."
+                )
+            x_row: NDArray[np.float64] | None = None
+        else:
+            if X is None:
+                raise ValueError(
+                    f"The model was fitted with {q} covariates; X is "
+                    "required (shape (q,) or (1, q))."
+                )
+            X_arr = np.asarray(X, dtype=float)
+            if X_arr.ndim == 1:
+                X_arr = X_arr[None, :]
+            if X_arr.shape != (1, q):
+                raise ValueError(
+                    f"X has shape {X_arr.shape}, expected (q,) or (1, q) with q={q}."
+                )
+            x_row = X_arr[0]
+
+        y_arr = np.asarray(y_grid, dtype=float).ravel()
+        m = y_arr.size
+        V = self.vcov()
+
+        B = self.basis.evaluate(y_arr)  # (m, p)
+        D = self.basis.derivative(y_arr, order=1)  # (m, p)
+        h = B @ theta_b
+        hp = D @ theta_b
+        if x_row is not None and beta is not None:
+            h = h + float(x_row @ beta)
+
+        # Assemble per-grid-point Jacobian J of shape (m, p+q).
+        # For scales whose η involves log h', also validate h' > 0.
+        if what in ("density", "hazard") and np.any(hp <= 0.0):
+            raise RuntimeError(
+                "h'(y) <= 0 at at least one grid point — the "
+                f"{what} target involves a log h' term and the "
+                "confidence-band formula is undefined. Check monotonicity "
+                "of the fit or choose a different what."
+            )
+
+        dist = _get_dist(self.base_distribution)
+
+        if what in ("trafo", "distribution", "survivor"):
+            # η = h;  J_b = B(y),  J_β = x_row  (broadcast)
+            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
+            J = np.empty((m, p + q), dtype=np.float64)
+            J[:, :p] = B
+            if q > 0 and x_row is not None:
+                J[:, p:] = x_row[None, :]
+            eta = h
+        else:
+            # "density" or "hazard":
+            #   density:  η = log f(h) + log h'
+            #   hazard :  η = log f(h) + log h' - log S(h)
+            #   ∂/∂h  of log f(h)   = ψ(h)
+            #   ∂/∂h  of (-log S(h)) = λ(h) = f(h)/S(h)
+            # So:
+            #   dη/dθ_b = coeff * B(y) + D(y) / h'
+            #   dη/dβ   = coeff * x_row
+            # with coeff = ψ(h)         (density)
+            #      coeff = ψ(h) + λ(h)  (hazard)
+            # At extreme |h|, logsf(h) → -∞ for light-tailed bases (normal,
+            # min/max extreme value), so ψ and λ = exp(logpdf − logsf) can
+            # overflow and propagate inf into J and η.  Clip to ±_H_CLIP
+            # (the same bound likelihood.py uses on every h) and warn when
+            # the clip actually bites so the caller knows the band tails
+            # are saturated rather than silently infinite.
+            if np.any(np.abs(h) > _H_CLIP):
+                warnings.warn(
+                    f"confband(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} "
+                    "at one or more grid points; clipping for numerical "
+                    "stability. The band at these points is a floor/ceiling, "
+                    "not a true asymptotic interval. Consider restricting "
+                    "y_grid to values where the CDF is not saturated.",
+                    stacklevel=2,
+                )
+            h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+            psi = -_neg_score(h_c, dist)  # ψ(h) = d log f(h)/dh
+            if what == "hazard":
+                # λ(h) = f(h)/S(h); compute in log-space for tail stability.
+                lam = np.exp(dist.logpdf(h_c) - dist.logsf(h_c))
+                coeff = psi + lam
+            else:
+                coeff = psi
+
+            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
+            J = np.empty((m, p + q), dtype=np.float64)
+            J[:, :p] = coeff[:, None] * B + D / hp[:, None]
+            if q > 0 and x_row is not None:
+                J[:, p:] = coeff[:, None] * x_row[None, :]
+
+            if what == "density":
+                eta = dist.logpdf(h_c) + np.log(hp)
+            else:  # hazard
+                eta = dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
+
+        # Var(η_i) = J_i · V · J_i^T, vectorised across grid points.
+        var_eta = np.einsum("ij,jk,ik->i", J, V, J)
+        var_eta = np.maximum(var_eta, 0.0)
+        se_eta = np.sqrt(var_eta)
+
+        z = float(norm.ppf(0.5 * (1.0 + level)))
+        lo_eta = eta - z * se_eta
+        hi_eta = eta + z * se_eta
+
+        if what == "trafo":
+            est, lo, hi = eta, lo_eta, hi_eta
+        elif what == "distribution":
+            est = dist.cdf(h)
+            lo = dist.cdf(lo_eta)
+            hi = dist.cdf(hi_eta)
+        elif what == "survivor":
+            est = dist.sf(h)
+            # 1 − F is monotone decreasing → swap endpoints
+            lo = dist.sf(hi_eta)
+            hi = dist.sf(lo_eta)
+        else:  # density or hazard: both back-transformed with exp
+            est = np.exp(eta)
+            lo = np.exp(lo_eta)
+            hi = np.exp(hi_eta)
+
+        return cast(
+            NDArray[np.float64],
+            np.column_stack(
+                (
+                    np.asarray(est, dtype=np.float64),
+                    np.asarray(lo, dtype=np.float64),
+                    np.asarray(hi, dtype=np.float64),
+                )
+            ),
         )
 
     def aic(self) -> float:
@@ -518,7 +1102,7 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.result_ is None or self.n_free_params_ is None:
-            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+            raise RuntimeError("Model state is unexpectedly missing after fitting.")
         return -2.0 * self.result_.log_likelihood + 2.0 * self.n_free_params_
 
     def bic(self) -> float:
@@ -549,7 +1133,7 @@ class ConditionalTransformationModel:
         """
         self._check_is_fitted()
         if self.result_ is None or self.n_free_params_ is None or self.n_obs_ is None:
-            raise RuntimeError("Modellzustand fehlt unerwartet nach dem Fitten.")
+            raise RuntimeError("Model state is unexpectedly missing after fitting.")
         return (
             -2.0 * self.result_.log_likelihood
             + math.log(self.n_obs_) * self.n_free_params_
@@ -571,7 +1155,9 @@ class ConditionalTransformationModel:
         n:
             Number of samples to draw.
         X:
-            Optional covariate matrix of shape ``(n, q)``.
+            Covariate matrix of shape ``(n, q)``.  Each row yields one
+            conditional draw; must be supplied when the model was fitted
+            with covariates.  Pass ``None`` only for covariate-free fits.
         random_state:
             Seed or :class:`numpy.random.Generator` for reproducibility.
 
@@ -583,17 +1169,32 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        ValueError
+            If ``X`` is provided but its number of rows does not equal ``n``.
         """
         self._check_is_fitted()
+
+        if X is not None:
+            X_arr = np.asarray(X, dtype=float)
+            if X_arr.ndim == 1:
+                X_arr = X_arr[:, None]
+            if X_arr.shape[0] != n:
+                raise ValueError(
+                    f"X has {X_arr.shape[0]} rows but n={n}; simulate() "
+                    "draws one observation per row of X, so the counts "
+                    "must match."
+                )
+        else:
+            X_arr = None
 
         if isinstance(random_state, np.random.Generator):
             rng = random_state
         else:
             rng = np.random.default_rng(random_state)
 
-        # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf
-        u = np.clip(rng.uniform(size=n), 1e-10, 1 - 1e-10)
-        return self.predict(u, X_new=X, what="quantile")
+        # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf.
+        u = np.clip(rng.uniform(size=n), _SIMULATE_U_EPS, 1.0 - _SIMULATE_U_EPS)
+        return self.predict(u, X_new=X_arr, what="quantile")
 
     def __repr__(self) -> str:
         name = type(self).__name__
@@ -602,7 +1203,7 @@ class ConditionalTransformationModel:
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(
-                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                    "Result (result_) is unexpectedly missing after fitting."
                 )
             ll = self.result_.log_likelihood
             return (
@@ -665,7 +1266,7 @@ class MLT(ConditionalTransformationModel):
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(
-                    "Ergebnis (result_) fehlt unerwartet nach dem Fitten."
+                    "Result (result_) is unexpectedly missing after fitting."
                 )
             ll = self.result_.log_likelihood
             return (
@@ -718,8 +1319,9 @@ class AnovaResult:
     p_value: tuple[float | None, ...]
 
     def __repr__(self) -> str:
+        w = max(max(len(n) for n in self.model_names), len("Model"))
         header = (
-            f"{'Model':<24} {'n_par':>5} {'logLik':>12} "
+            f"{'Model':<{w}} {'n_par':>5} {'logLik':>12} "
             f"{'df':>4} {'Deviance':>12} {'Pr(>Chisq)':>12}"
         )
         rows = [header, "-" * len(header)]
@@ -728,7 +1330,7 @@ class AnovaResult:
             dev_str = "" if self.deviance[i] is None else f"{self.deviance[i]:>12.4f}"
             p_str = "" if self.p_value[i] is None else f"{self.p_value[i]:>12.4g}"
             rows.append(
-                f"{self.model_names[i]:<24} "
+                f"{self.model_names[i]:<{w}} "
                 f"{self.n_params[i]:>5} "
                 f"{self.log_lik[i]:>12.4f} "
                 f"{df_str:>4} "
@@ -781,20 +1383,18 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
     """
     if len(models) < 2:
         raise ValueError(
-            f"anova() benötigt mindestens 2 Modelle, erhalten: {len(models)}."
+            f"anova() requires at least 2 models, received: {len(models)}."
         )
     for i, m in enumerate(models):
         if not m.is_fitted_:
-            raise ValueError(
-                f"Modell #{i} ist nicht gefittet. Rufe fit() vor anova() auf."
-            )
+            raise ValueError(f"Model #{i} is not fitted. Call fit() before anova().")
 
     n_obs_ref = models[0].n_obs_
     for i, m in enumerate(models):
         if m.n_obs_ != n_obs_ref:
             raise ValueError(
-                f"Modelle müssen auf derselben Stichprobengröße gefittet sein. "
-                f"Modell #0 hat n={n_obs_ref}, Modell #{i} hat n={m.n_obs_}."
+                f"Models must be fitted on the same sample size. "
+                f"Model #0 has n={n_obs_ref}, model #{i} has n={m.n_obs_}."
             )
 
     # Label each model by its caller-input position *before* sorting, so that
@@ -816,11 +1416,23 @@ def anova(*models: ConditionalTransformationModel) -> AnovaResult:
         ddf = n_params[i] - n_params[i - 1]
         if ddf <= 0:
             raise ValueError(
-                "Aufeinanderfolgende Modelle müssen eine echt unterschiedliche "
-                f"Parameterzahl haben (Modell {i - 1}: k={n_params[i - 1]}, "
-                f"Modell {i}: k={n_params[i]})."
+                "Consecutive models must have strictly different parameter "
+                f"counts (model {i - 1}: k={n_params[i - 1]}, "
+                f"model {i}: k={n_params[i]})."
             )
         d = 2.0 * (log_lik[i] - log_lik[i - 1])
+        if d < 0.0:
+            warnings.warn(
+                f"anova: deviance between model {i - 1} "
+                f"(k={n_params[i - 1]}, ll={log_lik[i - 1]:.4f}) and "
+                f"model {i} (k={n_params[i]}, ll={log_lik[i]:.4f}) is "
+                f"negative (D={d:.4g}).  The larger model fits worse — "
+                "possible causes: models are not nested, or the larger "
+                "model failed to converge.  The p-value is computed with "
+                "D clamped to 0 and is not meaningful.",
+                UserWarning,
+                stacklevel=2,
+            )
         # Negative deviance can occur if the larger model failed to converge
         # to a strictly higher likelihood; clamp at 0 for the chi2 tail.
         d_clamped = max(d, 0.0)

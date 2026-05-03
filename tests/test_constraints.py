@@ -1,4 +1,5 @@
 """Tests for pymlt.constraints — monotonicity and boundary constraints."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -17,6 +18,7 @@ from pymlt.constraints import (
 # MonotonicityConstraint — matrix
 # ---------------------------------------------------------------------------
 
+
 class TestMonotonicityMatrix:
     def test_shape(self):
         D = MonotonicityConstraint(4).as_matrix()
@@ -24,11 +26,14 @@ class TestMonotonicityMatrix:
 
     def test_exact_values_n4(self):
         D = MonotonicityConstraint(4).as_matrix()
-        expected = np.array([
-            [-1,  1,  0,  0],
-            [ 0, -1,  1,  0],
-            [ 0,  0, -1,  1],
-        ], dtype=float)
+        expected = np.array(
+            [
+                [-1, 1, 0, 0],
+                [0, -1, 1, 0],
+                [0, 0, -1, 1],
+            ],
+            dtype=float,
+        )
         np.testing.assert_array_equal(D, expected)
 
     def test_shape_general(self):
@@ -67,6 +72,7 @@ class TestMonotonicityMatrix:
 # MonotonicityConstraint — scipy_constraint dict
 # ---------------------------------------------------------------------------
 
+
 class TestMonotonicityScipyConstraint:
     def test_type_is_ineq(self):
         c = MonotonicityConstraint(4).as_scipy_constraint()
@@ -103,6 +109,7 @@ class TestMonotonicityScipyConstraint:
 # MonotonicityConstraint — LinearConstraint
 # ---------------------------------------------------------------------------
 
+
 class TestMonotonicityLinearConstraint:
     def test_returns_linear_constraint(self):
         lc = MonotonicityConstraint(4).as_LinearConstraint()
@@ -119,13 +126,15 @@ class TestMonotonicityLinearConstraint:
     def test_A_equals_matrix(self):
         mc = MonotonicityConstraint(5)
         lc = mc.as_LinearConstraint()
-        np.testing.assert_array_equal(lc.A.toarray() if hasattr(lc.A, "toarray") else lc.A,
-                                      mc.as_matrix())
+        np.testing.assert_array_equal(
+            lc.A.toarray() if hasattr(lc.A, "toarray") else lc.A, mc.as_matrix()
+        )
 
 
 # ---------------------------------------------------------------------------
 # BoundaryConstraint
 # ---------------------------------------------------------------------------
+
 
 class TestBoundaryConstraint:
     def test_both_none_raises(self):
@@ -194,6 +203,7 @@ class TestBoundaryConstraint:
 # build_constraints
 # ---------------------------------------------------------------------------
 
+
 class TestBuildConstraints:
     def test_slsqp_returns_list_of_dicts(self):
         result = build_constraints(4, solver="slsqp")
@@ -257,8 +267,11 @@ class TestBuildConstraints:
             return 2 * (t - target)
 
         result = minimize(
-            obj, x0=np.zeros(4), jac=grad,
-            method="trust-constr", constraints=constraints
+            obj,
+            x0=np.zeros(4),
+            jac=grad,
+            method="trust-constr",
+            constraints=constraints,
         )
         assert result.success or result.status in (1, 2)
         assert np.all(np.diff(result.x) >= -1e-5)
@@ -275,8 +288,11 @@ class TestBuildConstraints:
             return 2 * (t - target)
 
         result = minimize(
-            obj, x0=np.array([0.0, 0.3, 0.6, 1.0]),
-            jac=grad, method="SLSQP", constraints=constraints
+            obj,
+            x0=np.array([0.0, 0.3, 0.6, 1.0]),
+            jac=grad,
+            method="SLSQP",
+            constraints=constraints,
         )
         assert result.success, result.message
         assert np.all(np.diff(result.x) >= -1e-6)
@@ -287,6 +303,7 @@ class TestBuildConstraints:
 # ---------------------------------------------------------------------------
 # nonneg_lower support for exponential base distribution
 # ---------------------------------------------------------------------------
+
 
 class TestNonnegLower:
     def test_no_covariates_single_row(self):
@@ -307,15 +324,20 @@ class TestNonnegLower:
         Row i encodes theta_b[0] + X_i @ beta >= 0.
         """
         n_params = 4
-        X = np.array([
-            [ 1.0, -0.5],
-            [-2.0,  0.3],
-            [ 0.5,  1.0],
-        ])
+        X = np.array(
+            [
+                [1.0, -0.5],
+                [-2.0, 0.3],
+                [0.5, 1.0],
+            ]
+        )
         total = n_params + X.shape[1]
         result = build_constraints(
-            n_params, solver="slsqp", total_params=total,
-            nonneg_lower=True, X=X,
+            n_params,
+            solver="slsqp",
+            total_params=total,
+            nonneg_lower=True,
+            X=X,
         )
         assert len(result) == 2  # monotonicity + support
         support = result[1]
@@ -342,8 +364,11 @@ class TestNonnegLower:
         X = np.array([[0.7, -1.2], [0.1, 2.0]])
         total = n_params + X.shape[1]
         result = build_constraints(
-            n_params, solver="slsqp", total_params=total,
-            nonneg_lower=True, X=X,
+            n_params,
+            solver="slsqp",
+            total_params=total,
+            nonneg_lower=True,
+            X=X,
         )
         support = result[1]
         theta = np.zeros(total)
@@ -360,8 +385,11 @@ class TestNonnegLower:
         X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, -1.0]])
         total = n_params + X.shape[1]
         result = build_constraints(
-            n_params, solver="trust-constr", total_params=total,
-            nonneg_lower=True, X=X,
+            n_params,
+            solver="trust-constr",
+            total_params=total,
+            nonneg_lower=True,
+            X=X,
         )
         # monotonicity + support
         assert len(result) == 2
@@ -374,22 +402,29 @@ class TestNonnegLower:
     def test_wrong_X_shape_raises(self):
         with pytest.raises(ValueError, match="X must be 2-D"):
             build_constraints(
-                3, solver="slsqp", total_params=5,
-                nonneg_lower=True, X=np.array([1.0, 2.0, 3.0]),
+                3,
+                solver="slsqp",
+                total_params=5,
+                nonneg_lower=True,
+                X=np.array([1.0, 2.0, 3.0]),
             )
 
     @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
     def test_missing_total_params_with_covariates_raises(self, solver):
         with pytest.raises(ValueError, match="total_params must be provided"):
             build_constraints(
-                3, solver=solver,
-                nonneg_lower=True, X=np.zeros((4, 2)),
+                3,
+                solver=solver,
+                nonneg_lower=True,
+                X=np.zeros((4, 2)),
             )
 
     def test_wrong_X_columns_raises(self):
         with pytest.raises(ValueError, match="columns"):
             build_constraints(
-                3, solver="slsqp", total_params=5,
+                3,
+                solver="slsqp",
+                total_params=5,
                 nonneg_lower=True,
                 X=np.zeros((4, 3)),  # 3 cols vs expected 5-3=2
             )
@@ -398,6 +433,7 @@ class TestNonnegLower:
 # ---------------------------------------------------------------------------
 # Property-based tests
 # ---------------------------------------------------------------------------
+
 
 @given(
     n_params=st.integers(2, 10),

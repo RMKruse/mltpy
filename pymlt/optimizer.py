@@ -7,24 +7,33 @@ This module contains no mathematical logic — it only orchestrates calls to
 Analogue to R's ``mltoptim.R`` (sequential solver attempts) and the ``maxtry``
 restart mechanism in ``mlt()``.
 """
+
 from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Optional, cast
+from typing import Any, Callable, Literal, cast
 
 import numpy as np
+from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import build_constraints
-from pymlt.likelihood import BaseDistribution, _get_dist, negative_log_likelihood
+from pymlt.likelihood import (
+    BaseDistribution,
+    DistOps,
+    InfeasibleParameterError,
+    _get_dist,
+    _negative_log_likelihood_from_dist,
+)
 from pymlt.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class OptimizerConfig:
@@ -50,6 +59,11 @@ class OptimizerConfig:
         Set to ``False`` only for debugging.
     verbose:
         If ``True``, print a warning on each failed attempt.
+    random_state:
+        If an ``int``, seeds the RNG used to perturb restart starting points
+        so repeated fits with the same config and data are bit-identical.
+        If a :class:`numpy.random.Generator`, it is used directly.
+        If ``None`` (default), draws are non-reproducible across runs.
     """
 
     solver: Literal["slsqp", "trust-constr"] = "slsqp"
@@ -58,6 +72,7 @@ class OptimizerConfig:
     max_restarts: int = 3
     use_gradient: bool = True
     verbose: bool = False
+    random_state: int | np.random.Generator | None = None
 
 
 @dataclass
@@ -92,6 +107,7 @@ class OptimizationResult:
 # Private helpers
 # ---------------------------------------------------------------------------
 
+
 def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     """Project an arbitrary vector to the monotone-non-decreasing cone.
 
@@ -118,6 +134,8 @@ def _make_objective(
     censoring: CensoringType,
     use_gradient: bool,
     base_distribution: BaseDistribution = "normal",
+    *,
+    dist: DistOps | None = None,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -125,8 +143,11 @@ def _make_objective(
     ``jac=True`` should be passed to scipy.  When False it returns a scalar
     and ``jac=None`` should be used.
 
-    ValueError from infeasible theta (h' ≤ 0) is caught and replaced by a
-    large penalty so that the optimiser can back off rather than crash.
+    :class:`~pymlt.likelihood.InfeasibleParameterError` from an infeasible
+    ``theta`` (h' ≤ 0) is caught and replaced by a large penalty so that the
+    optimiser can back off rather than crash.  Any other exception — including
+    plain ``ValueError`` for unsupported ``base_distribution`` or shape
+    mismatches — propagates out so that genuine bugs are not silenced.
 
     Parameters
     ----------
@@ -142,6 +163,10 @@ def _make_objective(
         If True, return analytical gradients along with the negative log-likelihood.
     base_distribution : BaseDistribution, default="normal"
         The base distribution to estimate transformations against.
+    dist : DistOps | None, default=None
+        Optional pre-resolved distribution wrapper. When provided,
+        objective evaluations reuse it instead of re-dispatching from
+        ``base_distribution`` on every call.
 
     Returns
     -------
@@ -150,24 +175,55 @@ def _make_objective(
         negative log-likelihood (and optionally its gradient vector).
     """
     _BIG = 1e10
+    resolved_dist = _get_dist(base_distribution) if dist is None else dist
+    n_params = basis.order + 1
+    # Forward-difference matrix D: monotonicity is D @ theta_b >= 0.  Identical
+    # to MonotonicityConstraint(n_params).as_matrix(); built inline to avoid a
+    # cross-module coupling in the hot path.  Shape (n_params-1, n_params);
+    # empty when n_params < 2 (order=0 — monotonicity is vacuous).
+    _D = np.diff(np.eye(n_params), axis=0) if n_params >= 2 else None
 
     if use_gradient:
+
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
-                return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=True,
-                    base_distribution=base_distribution,
+                return _negative_log_likelihood_from_dist(
+                    theta,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=True,
+                    dist=resolved_dist,
                 )
-            except ValueError:
-                return _BIG, np.zeros_like(theta)
+            except InfeasibleParameterError:
+                # Subgradient of the quadratic monotonicity-violation penalty
+                # P(theta_b) = 0.5 · ||max(0, -(D @ theta_b))||².
+                # Gives SLSQP a descent direction toward the monotone cone
+                # instead of the stationary-point signal a zero gradient
+                # conveys.  Magnitude is left unscaled (natural units: adjacent
+                # theta_b differences) — pairing _BIG with a huge gradient
+                # would misrepresent the local slope.  Beta block stays zero
+                # because beta does not enter the monotonicity constraint.
+                grad = np.zeros_like(theta)
+                if _D is not None:
+                    g = _D @ theta[:n_params]
+                    grad[:n_params] = _D.T @ np.minimum(g, 0.0)
+                return _BIG, grad
     else:
+
         def obj(theta: NDArray[np.float64]) -> Any:
             try:
-                return negative_log_likelihood(
-                    theta, basis, y, X, censoring, gradient=False,
-                    base_distribution=base_distribution,
+                return _negative_log_likelihood_from_dist(
+                    theta,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=False,
+                    dist=resolved_dist,
                 )
-            except ValueError:
+            except InfeasibleParameterError:
                 return _BIG
 
     return obj
@@ -264,12 +320,13 @@ def _perturb_and_project(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def optimize(
     basis: BernsteinBasis,
     y: NDArray[np.float64] | CensoredData,
-    X: Optional[NDArray[np.float64]] = None,
+    X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
-    config: Optional[OptimizerConfig] = None,
+    config: OptimizerConfig | None = None,
     base_distribution: BaseDistribution = "normal",
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
@@ -299,7 +356,8 @@ def optimize(
         ``converged=False``.  The caller (``model.py``) decides whether to
         raise or warn.
     """
-    _get_dist(base_distribution)  # fail fast; raises ValueError for unsupported values
+    # Fail fast for unsupported base distributions before entering scipy.
+    dist = _get_dist(base_distribution)
     if config is None:
         config = OptimizerConfig()
 
@@ -316,11 +374,21 @@ def optimize(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
     )
-    obj = _make_objective(basis, y, X, censoring, config.use_gradient,
-                          base_distribution=base_distribution)
+    obj = _make_objective(
+        basis,
+        y,
+        X,
+        censoring,
+        config.use_gradient,
+        base_distribution=base_distribution,
+        dist=dist,
+    )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
-    rng = np.random.default_rng()
+    if isinstance(config.random_state, np.random.Generator):
+        rng = config.random_state
+    else:
+        rng = np.random.default_rng(config.random_state)
 
     theta_init = _initial_theta(n_params, X)
 
@@ -334,7 +402,10 @@ def optimize(
         else:
             n_restarts_used = attempt
             theta_try = _perturb_and_project(
-                theta_init, n_params, rng, nonneg_lower=nonneg_lower,
+                theta_init,
+                n_params,
+                rng,
+                nonneg_lower=nonneg_lower,
             )
 
         try:
@@ -346,10 +417,10 @@ def optimize(
                 constraints=constraints,
                 options=options,
             )
-        except Exception as exc:
+        except LinAlgError as exc:
             if config.verbose:
                 warnings.warn(
-                    f"optimizer.py: attempt {attempt + 1} raised {exc!r}",
+                    f"optimizer.py: attempt {attempt + 1} hit {exc!r}; retrying",
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -371,18 +442,28 @@ def optimize(
             )
 
     if best_scipy_result is None:
-        # All attempts raised exceptions — return the initial point as fallback
-        _nll = cast(float, negative_log_likelihood(
-            theta_init, basis, y, X, censoring,
-            base_distribution=base_distribution,
-        ))
+        # Every attempt hit a numerical linear-algebra failure — return the
+        # initial point as fallback so the caller can surface a
+        # ConvergenceWarning rather than re-raising.
+        _nll = cast(
+            float,
+            _negative_log_likelihood_from_dist(
+                theta_init,
+                basis,
+                y,
+                X,
+                censoring,
+                gradient=False,
+                dist=dist,
+            ),
+        )
         return OptimizationResult(
             theta=theta_init,
             log_likelihood=float(-_nll),
             converged=False,
             n_iter=0,
             n_restarts=n_restarts_used,
-            solver_message="All optimisation attempts raised an exception.",
+            solver_message="All optimisation attempts raised LinAlgError.",
         )
 
     return OptimizationResult(

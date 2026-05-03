@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import warnings
 
 import numpy as np
 import pytest
@@ -143,7 +144,7 @@ class TestValidateInput:
         model = make_ctm()
         y = simple_y(n=10)
         X = np.ones((5, 2))
-        with pytest.raises(ValueError, match="Zeilen"):
+        with pytest.raises(ValueError, match="rows"):
             model.fit(y, X=X)
 
     def test_pandas_series_accepted(self):
@@ -164,6 +165,11 @@ class TestValidateInput:
         )
         with pytest.raises(ValueError, match="upper"):
             model.fit(cd)
+
+    def test_empty_y_raises(self):
+        model = make_ctm()
+        with pytest.raises(ValueError, match="at least one observation"):
+            model.fit(np.array([], dtype=float))
 
     def test_x_1d_reshaped(self):
         """A 1-D X array is promoted to a column vector; fit must succeed."""
@@ -222,9 +228,45 @@ class TestPredict:
         cdf_back = self.model.predict(q, what="distribution")
         np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
 
+    def test_quantile_empty_probs_returns_empty(self):
+        out = self.model.predict(np.array([]), what="quantile")
+        assert out.shape == (0,)
+
+    def test_quantile_warns_when_bracket_clip_bites(self):
+        probs = np.array([1e-15, 1.0 - 1e-15])
+        with pytest.warns(UserWarning, match="saturated"):
+            self.model.predict(probs, what="quantile")
+
+    def test_quantile_no_warning_for_well_behaved_probs(self):
+        probs = np.linspace(0.1, 0.9, 9)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.model.predict(probs, what="quantile")
+
     def test_invalid_what_raises(self):
-        with pytest.raises(ValueError, match="ungültig"):
+        with pytest.raises(ValueError, match="is invalid"):
             self.model.predict(self.y_grid, what="banana")
+
+    @pytest.mark.parametrize("what", ["density", "logdensity", "hazard", "loghazard"])
+    def test_non_monotone_theta_raises_on_hp_dependent_what(self, what):
+        """Manually corrupting theta_ to violate monotonicity must raise on
+        any predict path that uses h'(y), not silently floor to log(tiny)."""
+        from pymlt.likelihood import InfeasibleParameterError
+
+        bad = self.model.theta_.copy()
+        bad[: self.model.basis.order + 1] = bad[0]
+        self.model.theta_ = bad
+        with pytest.raises(InfeasibleParameterError, match="h'.y."):
+            self.model.predict(self.y_grid, what=what)
+
+    def test_non_monotone_theta_does_not_raise_on_h_only_what(self):
+        """Distribution-only paths do not depend on h'(y); they should remain
+        callable even when monotonicity is marginal."""
+        bad = self.model.theta_.copy()
+        bad[: self.model.basis.order + 1] = bad[0]
+        self.model.theta_ = bad
+        # Should not raise — hp is unused by the distribution path.
+        self.model.predict(self.y_grid, what="distribution")
 
     def test_hazard_any_censoring(self):
         """Hazard is a pure functional of h; no censoring restriction."""
@@ -282,6 +324,11 @@ class TestSimulate:
         samples = model.simulate(50, random_state=42)
         assert samples.shape == (50,)
 
+    # Fixture's fitted θ_b spans ≈ [-2.15, 2.12], narrower than ppf(1-1e-10) ≈
+    # 6.36, so simulate's u-clip cannot avoid bracket saturation in
+    # _predict_quantile.  The warning is a real production signal but
+    # irrelevant to what this test asserts (samples within basis support).
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_values_in_support(self):
         model = make_ctm()
         model.fit(simple_y())
@@ -301,6 +348,116 @@ class TestSimulate:
         rng = np.random.default_rng(1)
         samples = model.simulate(10, random_state=rng)
         assert samples.shape == (10,)
+
+
+# ---------------------------------------------------------------------------
+# Conditional quantile prediction with covariates
+# ---------------------------------------------------------------------------
+
+
+def _fit_mlt_with_covariate(
+    seed: int = 0, n: int = 200, beta_true: float = 1.2
+) -> tuple[MLT, np.ndarray, np.ndarray]:
+    """Fit an MLT with a binary covariate and a strong shift effect.
+
+    Data-generating process: baseline normal errors, shifted by `beta_true * x`.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.integers(0, 2, size=n).astype(float)
+    z = rng.normal(size=n)
+    y = (z - beta_true * x - 3.0) / 2.0
+    support = (float(y.min()) - 0.2, float(y.max()) + 0.2)
+    model = MLT(order=5, support=support).fit(y, X=x.reshape(-1, 1))
+    return model, x, y
+
+
+class TestPredictQuantileConditional:
+    def test_requires_X_when_fit_with_covariates(self):
+        model, _, _ = _fit_mlt_with_covariate()
+        probs = np.array([0.25, 0.5, 0.75])
+        with pytest.raises(ValueError, match="X_new must be provided"):
+            model.predict(probs, what="quantile")
+
+    def test_row_count_mismatch_raises(self):
+        model, _, _ = _fit_mlt_with_covariate()
+        probs = np.array([0.25, 0.5, 0.75])
+        X_bad = np.zeros((2, 1))  # 2 rows vs 3 probs
+        with pytest.raises(ValueError, match="rows"):
+            model.predict(probs, X_new=X_bad, what="quantile")
+
+    def test_column_count_mismatch_raises(self):
+        model, _, _ = _fit_mlt_with_covariate()
+        probs = np.array([0.25, 0.5, 0.75])
+        X_bad = np.zeros((3, 2))  # 2 cols vs 1 beta
+        with pytest.raises(ValueError, match="columns"):
+            model.predict(probs, X_new=X_bad, what="quantile")
+
+    def test_X_actually_shifts_quantiles(self):
+        """Different X values must produce different quantiles.
+
+        Under the pre-fix bug the returned quantiles were identical across X.
+        """
+        model, _, _ = _fit_mlt_with_covariate(beta_true=1.5)
+        probs = np.full(2, 0.5)
+        X0 = np.array([[0.0], [0.0]])
+        X1 = np.array([[1.0], [1.0]])
+        q0 = model.predict(probs, X_new=X0, what="quantile")
+        q1 = model.predict(probs, X_new=X1, what="quantile")
+        # With a positive beta shift, the covariate=1 group has a *smaller* y
+        # at the median (baseline h(q) = F⁻¹(p) − β).
+        assert np.all(q1 != q0)
+        assert np.all(q1 < q0)
+
+    def test_conditional_cdf_round_trip(self):
+        """predict(quantile) then predict(distribution) at same X returns p."""
+        model, _, _ = _fit_mlt_with_covariate()
+        probs = np.array([0.2, 0.5, 0.8])
+        X = np.array([[0.0], [1.0], [0.0]])
+        q = model.predict(probs, X_new=X, what="quantile")
+        p_back = model.predict(q, X_new=X, what="distribution")
+        np.testing.assert_allclose(p_back, probs, atol=1e-4)
+
+    def test_no_covariates_unchanged(self):
+        """The baseline (no-X, no-beta) path is unaffected by the fix."""
+        model = make_ctm()
+        model.fit(simple_y())
+        probs = np.array([0.1, 0.5, 0.9])
+        q = model.predict(probs, what="quantile")
+        cdf_back = model.predict(q, what="distribution")
+        np.testing.assert_allclose(cdf_back, probs, atol=1e-4)
+
+
+class TestSimulateConditional:
+    def test_requires_X_row_count_matching_n(self):
+        model, _, _ = _fit_mlt_with_covariate()
+        X = np.zeros((5, 1))
+        with pytest.raises(ValueError, match="rows"):
+            model.simulate(10, X=X, random_state=0)
+
+    def test_requires_X_when_fit_with_covariates(self):
+        model, _, _ = _fit_mlt_with_covariate()
+        with pytest.raises(ValueError, match="X_new must be provided"):
+            model.simulate(10, random_state=0)
+
+    # Fixture's fitted θ_b spans ≈ [-4.93, 3.18], narrower than ppf(1-1e-10) ≈
+    # 6.36, so simulate's u-clip cannot avoid bracket saturation in
+    # _predict_quantile.  The warning is a real production signal but
+    # irrelevant to what this test asserts (covariate-group mean separation).
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_simulate_recovers_shift(self):
+        """Simulated samples should separate by covariate group.
+
+        With a positive β the X=1 group has smaller y values than X=0 (since
+        h_baseline(q) = F⁻¹(p) − β, a larger shift pulls q downward).
+        """
+        model, _, _ = _fit_mlt_with_covariate(beta_true=1.5, n=300, seed=11)
+        n = 2000
+        rng = np.random.default_rng(42)
+        x = rng.integers(0, 2, size=n).astype(float).reshape(-1, 1)
+        samples = model.simulate(n, X=x, random_state=rng)
+        mean0 = samples[x[:, 0] == 0].mean()
+        mean1 = samples[x[:, 0] == 1].mean()
+        assert mean1 < mean0 - 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -999,13 +1156,13 @@ class TestAnova:
 
     def test_too_few_models_raises(self):
         model = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
-        with pytest.raises(ValueError, match="mindestens 2"):
+        with pytest.raises(ValueError, match="at least 2"):
             anova(model)
 
     def test_unfitted_model_raises(self):
         small = MLT(order=3, support=(0.0, 1.0)).fit(simple_y())
         unfit = MLT(order=5, support=(0.0, 1.0))
-        with pytest.raises(ValueError, match="nicht gefittet"):
+        with pytest.raises(ValueError, match="is not fitted"):
             anova(small, unfit)
 
     def test_different_n_obs_raises(self):
@@ -1013,15 +1170,32 @@ class TestAnova:
         y2 = simple_y(n=80, seed=2)
         m1 = MLT(order=3, support=(0.0, 1.0)).fit(y1)
         m2 = MLT(order=5, support=(0.0, 1.0)).fit(y2)
-        with pytest.raises(ValueError, match="Stichprobengröße"):
+        with pytest.raises(ValueError, match="sample size"):
             anova(m1, m2)
 
     def test_equal_n_params_raises(self):
         y = simple_y(n=80)
         m1 = MLT(order=4, support=(0.0, 1.0)).fit(y)
         m2 = MLT(order=4, support=(0.0, 1.0)).fit(y)
-        with pytest.raises(ValueError, match="Parameterzahl"):
+        with pytest.raises(ValueError, match="parameter counts"):
             anova(m1, m2)
+
+    def test_negative_deviance_warns(self):
+        """Non-nested models can produce D < 0; anova should warn rather than
+        silently return an impossible LR statistic."""
+        import dataclasses
+
+        y = simple_y(n=80)
+        small = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        large = MLT(order=5, support=(0.0, 1.0)).fit(y)
+        # Force the larger model's ll below the smaller's to guarantee D < 0.
+        large.result_ = dataclasses.replace(
+            large.result_,
+            log_likelihood=small.result_.log_likelihood - 1.0,
+        )
+        with pytest.warns(UserWarning, match="negative"):
+            result = anova(small, large)
+        assert result.deviance[1] is not None and result.deviance[1] < 0
 
 
 # ---------------------------------------------------------------------------
@@ -1108,6 +1282,7 @@ def test_integration_r_reference():
 # reaches at least that log-likelihood.
 # ---------------------------------------------------------------------------
 
+
 class TestExponentialWithCovariates:
     """Exponential support ([0, ∞)) must hold per observation when covariates
     are present: ``h(y_i|x_i) >= 0`` for every training row ``i``.
@@ -1123,9 +1298,7 @@ class TestExponentialWithCovariates:
         y = rng.uniform(0.05, 0.95, n)
         X = rng.normal(0.0, 0.5, (n, q))
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
-        model = ConditionalTransformationModel(
-            basis, base_distribution="exponential"
-        )
+        model = ConditionalTransformationModel(basis, base_distribution="exponential")
         model.fit(y, X=X)
         return model, basis, y, X
 
@@ -1198,9 +1371,7 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
     from pymlt.likelihood import log_likelihood
 
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
-    ll_py_at_theta_r = log_likelihood(
-        theta_r, basis, y_ref, base_distribution=name
-    )
+    ll_py_at_theta_r = log_likelihood(theta_r, basis, y_ref, base_distribution=name)
     # Same formula, same data, same theta → exact agreement with R mlt
     np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-8)
 
