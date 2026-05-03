@@ -668,3 +668,88 @@ writeLines(format(dev_cx, digits = 15),
 
 cat(sprintf("residuals refs: boxcox (n=%d), colr (n=%d), coxph (n=%d) written.\n",
             length(score_bc), length(score_colr), length(score_cx)))
+
+# ---------------------------------------------------------------------------
+# Weights reference
+#
+# Re-uses the same data (y_bc / x_bc, y_colr / x_colr, y_cx / x_cx) and
+# support / order from the vcov block above.  For each model we:
+#   1. Draw integer weights w ~ Uniform{1,2,3,4}.
+#   2. Fit with those weights (maximise Σ w_i · ℓ_i).
+#   3. Record: the weights, theta, log-likelihood, and score matrix (estfun).
+#
+# R sandwich::estfun convention for weighted mlt models:
+#   row i = w_i · ∂ℓ_i/∂θ   (column sums ≈ 0 at MLE)
+# ---------------------------------------------------------------------------
+
+# --- BoxCox with weights --------------------------------------------------
+set.seed(200)
+w_bc_w <- sample(1L:4L, n_bc, replace = TRUE)
+fit_bc_w <- tram::BoxCox(y ~ x,
+                          data    = data.frame(y = y_bc, x = x_bc),
+                          support = c(a_bc, b_bc),
+                          order   = 4L,
+                          weights = w_bc_w)
+theta_bc_w   <- coef(fit_bc_w, with_baseline = TRUE)
+loglik_bc_w  <- as.numeric(logLik(as.mlt(fit_bc_w)))
+estfun_bc_w  <- sandwich::estfun(fit_bc_w)
+
+writeLines(format(w_bc_w,                          digits = 15),
+           con = file.path(out_dir, "weights_boxcox_w.txt"))
+writeLines(format(theta_bc_w,                       digits = 15),
+           con = file.path(out_dir, "weights_boxcox_theta.txt"))
+writeLines(format(loglik_bc_w,                      digits = 15),
+           con = file.path(out_dir, "weights_boxcox_ll.txt"))
+writeLines(format(flatten_row_major(estfun_bc_w),   digits = 15),
+           con = file.path(out_dir, "weights_boxcox_estfun.txt"))
+
+cat(sprintf("BoxCox weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_bc, sum(w_bc_w), length(theta_bc_w)))
+
+# --- Colr with weights ----------------------------------------------------
+set.seed(201)
+w_colr_w <- sample(1L:4L, n_colr, replace = TRUE)
+fit_colr_w <- tram::Colr(y ~ x,
+                          data    = data.frame(y = y_colr, x = x_colr),
+                          support = c(a_colr, b_colr),
+                          order   = 4L,
+                          weights = w_colr_w)
+theta_colr_w  <- coef(fit_colr_w, with_baseline = TRUE)
+loglik_colr_w <- as.numeric(logLik(as.mlt(fit_colr_w)))
+estfun_colr_w <- sandwich::estfun(fit_colr_w)
+
+writeLines(format(w_colr_w,                          digits = 15),
+           con = file.path(out_dir, "weights_colr_w.txt"))
+writeLines(format(theta_colr_w,                       digits = 15),
+           con = file.path(out_dir, "weights_colr_theta.txt"))
+writeLines(format(loglik_colr_w,                      digits = 15),
+           con = file.path(out_dir, "weights_colr_ll.txt"))
+writeLines(format(flatten_row_major(estfun_colr_w),   digits = 15),
+           con = file.path(out_dir, "weights_colr_estfun.txt"))
+
+cat(sprintf("Colr weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_colr, sum(w_colr_w), length(theta_colr_w)))
+
+# --- Coxph with weights ---------------------------------------------------
+set.seed(202)
+w_cx_w <- sample(1L:4L, n_cx, replace = TRUE)
+fit_cx_w <- tram::Coxph(Surv(y, event) ~ x,
+                         data    = data.frame(y = y_cx, event = event_cx, x = x_cx),
+                         support = c(a_cx, b_cx),
+                         order   = 4L,
+                         weights = w_cx_w)
+theta_cx_w   <- coef(fit_cx_w, with_baseline = TRUE)
+loglik_cx_w  <- as.numeric(logLik(as.mlt(fit_cx_w)))
+estfun_cx_w  <- sandwich::estfun(fit_cx_w)
+
+writeLines(format(w_cx_w,                          digits = 15),
+           con = file.path(out_dir, "weights_coxph_w.txt"))
+writeLines(format(theta_cx_w,                       digits = 15),
+           con = file.path(out_dir, "weights_coxph_theta.txt"))
+writeLines(format(loglik_cx_w,                      digits = 15),
+           con = file.path(out_dir, "weights_coxph_ll.txt"))
+writeLines(format(flatten_row_major(estfun_cx_w),   digits = 15),
+           con = file.path(out_dir, "weights_coxph_estfun.txt"))
+
+cat(sprintf("Coxph weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_cx, sum(w_cx_w), length(theta_cx_w)))
