@@ -593,3 +593,78 @@ writeLines(format(flatten_row_major(q_mat_pq), digits = 15),
 
 cat(sprintf("Coxph predict-quantile ref: %d X x %d probs\n",
             length(x_grid_pq), length(prob_grid_pq)))
+
+# ---------------------------------------------------------------------------
+# Residuals reference — reuses the BoxCox / Colr / Coxph fits from the
+# vcov_*_* block above.  For each fit we write three vectors:
+#
+#   residuals_<model>_score.txt    — score residual (R's mlt::residuals)
+#                                    = ∂ℓ_i/∂α at α = 0 for h̃ = h + α
+#   residuals_<model>_coxsnell.txt — −log S(y_i|x_i) at the observed point
+#   residuals_<model>_deviance.txt — sign(r-1) · sqrt(2·|r - log r - 1|)
+#
+# For Cox-Snell on the right-censored Coxph fit, the observed point for
+# censored obs is the censoring time (Surv$time).  This matches pymlt's
+# convention of evaluating S at the observed lower bound.
+# ---------------------------------------------------------------------------
+
+.cox_snell <- function(surv_vec) -log(surv_vec)
+
+.deviance_from_cs <- function(r) {
+  r_safe <- pmax(r, .Machine$double.xmin)
+  sign(r - 1) * sqrt(2 * abs(r - log(r_safe) - 1))
+}
+
+# --- BoxCox --------------------------------------------------------------
+score_bc <- as.numeric(residuals(fit_bc))
+surv_bc  <- predict(as.mlt(fit_bc),
+                    newdata = data.frame(y = y_bc, x = x_bc),
+                    type = "survivor")
+cs_bc    <- .cox_snell(surv_bc)
+dev_bc   <- .deviance_from_cs(cs_bc)
+writeLines(format(score_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_score.txt"))
+writeLines(format(cs_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_coxsnell.txt"))
+writeLines(format(dev_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_deviance.txt"))
+
+# --- Colr ----------------------------------------------------------------
+score_colr <- as.numeric(residuals(fit_colr))
+surv_colr  <- predict(as.mlt(fit_colr),
+                      newdata = data.frame(y = y_colr, x = x_colr),
+                      type = "survivor")
+cs_colr    <- .cox_snell(surv_colr)
+dev_colr   <- .deviance_from_cs(cs_colr)
+writeLines(format(score_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_score.txt"))
+writeLines(format(cs_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_coxsnell.txt"))
+writeLines(format(dev_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_deviance.txt"))
+
+# --- Coxph (right-censored) ----------------------------------------------
+score_cx <- as.numeric(residuals(fit_cx))
+# For the survivor, evaluate at the observed y (which is the censoring time
+# for censored obs).  predict.mlt requires a Surv() column when the fit was
+# made with one — wrap event=1 so it interprets y as exact for evaluation.
+surv_cx  <- predict(as.mlt(fit_cx),
+                    newdata = data.frame(y = y_cx, x = x_cx),
+                    q = y_cx,
+                    type = "survivor")
+# `predict` with `q = y_cx` returns a matrix (length(q), nrow(newdata)) when
+# q is a vector; pull the diagonal so each row uses its own y.
+if (is.matrix(surv_cx)) {
+  surv_cx <- diag(surv_cx)
+}
+cs_cx    <- .cox_snell(surv_cx)
+dev_cx   <- .deviance_from_cs(cs_cx)
+writeLines(format(score_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_score.txt"))
+writeLines(format(cs_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_coxsnell.txt"))
+writeLines(format(dev_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_deviance.txt"))
+
+cat(sprintf("residuals refs: boxcox (n=%d), colr (n=%d), coxph (n=%d) written.\n",
+            length(score_bc), length(score_colr), length(score_cx)))

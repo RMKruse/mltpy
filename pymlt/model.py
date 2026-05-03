@@ -41,6 +41,9 @@ from pymlt.likelihood import (
     hessian as _hessian,
 )
 from pymlt.likelihood import (
+    intercept_score as _intercept_score,
+)
+from pymlt.likelihood import (
     score_matrix as _score_matrix,
 )
 from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
@@ -191,6 +194,11 @@ class ConditionalTransformationModel:
 
         # Score matrix — computed eagerly at the end of fit().
         self._estfun_cache_: NDArray[np.float64] | None = None
+
+        # Training response/covariates retained for residuals().  Stored as
+        # copies so subsequent caller mutations cannot affect diagnostics.
+        self._y_train_: NDArray[np.float64] | CensoredData | None = None
+        self._X_train_: NDArray[np.float64] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -361,6 +369,29 @@ class ConditionalTransformationModel:
             self.censoring,
             base_distribution=self.base_distribution,
         )
+
+        # Snapshot the training response and covariates for diagnostics
+        # (residuals()).  Defensive copies so caller mutations of the
+        # original ``y``/``X`` cannot leak into later diagnostic calls.
+        if isinstance(y_clean, CensoredData):
+            self._y_train_ = CensoredData(
+                exact=y_clean.exact.copy(),
+                lower=y_clean.lower.copy(),
+                upper=y_clean.upper.copy(),
+                trunc_lower=(
+                    y_clean.trunc_lower.copy()
+                    if y_clean.trunc_lower is not None
+                    else None
+                ),
+                trunc_upper=(
+                    y_clean.trunc_upper.copy()
+                    if y_clean.trunc_upper is not None
+                    else None
+                ),
+            )
+        else:
+            self._y_train_ = y_clean.copy()
+        self._X_train_ = X_clean.copy() if X_clean is not None else None
         return self
 
     def predict(
@@ -738,6 +769,134 @@ class ConditionalTransformationModel:
     def score_contributions(self) -> NDArray[np.float64]:
         """Alias for :meth:`estfun`.  See that method for details."""
         return self.estfun()
+
+    def residuals(
+        self,
+        type: Literal["score", "cox-snell", "deviance"] = "score",
+    ) -> NDArray[np.float64]:
+        """Per-observation residuals for model diagnostics.
+
+        Computed at the training data passed to :meth:`fit`.  Mirrors R
+        ``mlt::residuals`` for ``type="score"``; the Cox-Snell and deviance
+        forms are derived from the fitted survivor function.
+
+        Parameters
+        ----------
+        type:
+            Which residual to compute.
+
+            * ``"score"`` (default) — score residual w.r.t. an artificial
+              intercept added to ``h(y|x)``: for exact ``-ψ(h_i)``; for
+              right-censored ``f(h)/S(h)``; for left-censored
+              ``-f(h)/F(h)``; for interval
+              ``-(f(h_b) - f(h_a)) / (F(h_b) - F(h_a))``.  Sign matches R
+              ``mlt::residuals`` (the negative of the positive-log-likelihood
+              score).  At the MLE the sum is zero up to optimiser tolerance.
+            * ``"cox-snell"`` — ``r_i = -log S(y_i|x_i)``.  Under a correctly
+              specified model these are approximately ``Exp(1)``.  For
+              censored observations ``y_i`` is the censoring threshold
+              (``lower`` for right-censored, ``upper`` for left-censored,
+              the midpoint for interval-censored); the resulting residuals
+              for those observations are themselves censored ``Exp(1)``
+              variates.
+            * ``"deviance"`` — ``sign(r_i - 1) · sqrt(2·|r_i - log(r_i) - 1|)``
+              where ``r_i`` is the Cox-Snell residual.  Under a correctly
+              specified model these are approximately standard normal.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Vector of length :attr:`n_obs_`.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``type`` is not one of the supported residual kinds.
+
+        Notes
+        -----
+        - ``type="score"`` matches R ``mlt::residuals(mlt_fit)`` exactly,
+          element-wise to ``rtol=1e-6``.
+        - ``type="cox-snell"`` uses the same evaluation point convention as
+          R's ``-log(predict(mlt_fit, type = "survivor"))``.
+        - ``r_i`` is clipped at ``np.finfo(float).tiny`` before
+          ``log(r_i)`` in the deviance formula to avoid ``-inf``.
+        """
+        self._check_is_fitted()
+        if type not in {"score", "cox-snell", "deviance"}:
+            raise ValueError(
+                f"type={type!r} is invalid. Allowed: 'score', 'cox-snell', 'deviance'."
+            )
+        if self.theta_ is None or self._y_train_ is None:
+            raise RuntimeError(
+                "Training data is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
+
+        if type == "score":
+            # R's ``mlt::residuals`` returns the negative of the
+            # positive-log-likelihood intercept score (so the residual is
+            # interpretable as ``∂(-ℓ_i)/∂α``).  Negate to match.
+            return -_intercept_score(
+                self.theta_,
+                self.basis,
+                self._y_train_,
+                self._X_train_,
+                self.censoring,
+                base_distribution=self.base_distribution,
+            )
+
+        # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per
+        # observation.  Pick the point per censoring status of each row.
+        y_eval = self._cox_snell_eval_points()
+        p = self.basis.order + 1
+        theta_b = self.theta_[:p]
+        B = self.basis.evaluate(y_eval)
+        h = B @ theta_b
+        if self._X_train_ is not None and len(self.theta_) > p:
+            beta = self.theta_[p:]
+            h = h + self._X_train_ @ beta
+        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+        dist = _get_dist(self.base_distribution)
+        r = -dist.logsf(h_c)
+
+        if type == "cox-snell":
+            return cast(NDArray[np.float64], r)
+
+        # deviance
+        r_safe = np.clip(r, np.finfo(float).tiny, None)
+        sign = np.sign(r - 1.0)
+        return cast(
+            NDArray[np.float64],
+            sign * np.sqrt(2.0 * np.abs(r - np.log(r_safe) - 1.0)),
+        )
+
+    def _cox_snell_eval_points(self) -> NDArray[np.float64]:
+        """Per-observation evaluation point for ``-log S`` residuals.
+
+        Exact obs: the observed value.  Right-censored: ``lower`` (censoring
+        time).  Left-censored: ``upper`` (censoring time).  Interval-censored:
+        midpoint of ``[lower, upper]``.
+        """
+        y = self._y_train_
+        if isinstance(y, np.ndarray):
+            return y
+        if not isinstance(y, CensoredData):
+            raise RuntimeError(
+                f"Unexpected stored training response type: {type(y).__name__!r}."
+            )
+        out = np.empty(y.n, dtype=np.float64)
+        mask_e = y.is_exact_mask
+        out[mask_e] = y.exact[mask_e]
+        mask_r = y.is_right_censored_mask
+        out[mask_r] = y.lower[mask_r]
+        mask_l = y.is_left_censored_mask
+        out[mask_l] = y.upper[mask_l]
+        mask_i = y.is_interval_censored_mask
+        out[mask_i] = 0.5 * (y.lower[mask_i] + y.upper[mask_i])
+        return out
 
     def standard_errors(self) -> NDArray[np.float64]:
         """Vector of asymptotic standard errors for :attr:`theta_`.
