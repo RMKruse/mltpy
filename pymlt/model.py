@@ -113,10 +113,7 @@ def _extract_feature_names(X: object) -> list[str] | None:
     columns = getattr(X, "columns", None)
     if columns is None:
         return None
-    try:
-        return [str(c) for c in columns]
-    except Exception:
-        return None
+    return [str(c) for c in columns]
 
 
 # ---------------------------------------------------------------------------
