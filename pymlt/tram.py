@@ -355,6 +355,7 @@ class Coxph(_TramModel):
         self,
         y: NDArray[np.float64],
         X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the survival function S(y) = 1 − F(y|x).
 
@@ -364,6 +365,8 @@ class Coxph(_TramModel):
             Time points within ``basis.support``.
         X:
             Optional covariate matrix of shape ``(m, q)``.
+        offset:
+            Optional per-observation offset added to ``h``.
 
         Returns
         -------
@@ -374,12 +377,13 @@ class Coxph(_TramModel):
         NotFittedError
             If called before :meth:`fit`.
         """
-        return 1.0 - self.predict(y, X_new=X, what="distribution")
+        return 1.0 - self.predict(y, X_new=X, what="distribution", offset_new=offset)
 
     def hazard(
         self,
         y: NDArray[np.float64],
         X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
 
@@ -389,6 +393,8 @@ class Coxph(_TramModel):
             Time points within ``basis.support``.
         X:
             Optional covariate matrix of shape ``(m, q)``.
+        offset:
+            Optional per-observation offset added to ``h``.
 
         Returns
         -------
@@ -399,7 +405,7 @@ class Coxph(_TramModel):
         NotFittedError
             If called before :meth:`fit`.
         """
-        return self.predict(y, X_new=X, what="hazard")
+        return self.predict(y, X_new=X, what="hazard", offset_new=offset)
 
 
 # ---------------------------------------------------------------------------
