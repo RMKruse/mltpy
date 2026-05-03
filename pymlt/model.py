@@ -1319,8 +1319,9 @@ class AnovaResult:
     p_value: tuple[float | None, ...]
 
     def __repr__(self) -> str:
+        w = max(max(len(n) for n in self.model_names), len("Model"))
         header = (
-            f"{'Model':<24} {'n_par':>5} {'logLik':>12} "
+            f"{'Model':<{w}} {'n_par':>5} {'logLik':>12} "
             f"{'df':>4} {'Deviance':>12} {'Pr(>Chisq)':>12}"
         )
         rows = [header, "-" * len(header)]
@@ -1329,7 +1330,7 @@ class AnovaResult:
             dev_str = "" if self.deviance[i] is None else f"{self.deviance[i]:>12.4f}"
             p_str = "" if self.p_value[i] is None else f"{self.p_value[i]:>12.4g}"
             rows.append(
-                f"{self.model_names[i]:<24} "
+                f"{self.model_names[i]:<{w}} "
                 f"{self.n_params[i]:>5} "
                 f"{self.log_lik[i]:>12.4f} "
                 f"{df_str:>4} "
