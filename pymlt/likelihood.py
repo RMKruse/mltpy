@@ -2,13 +2,15 @@
 
 All censoring types (exact, left, right, interval) are supported.
 Optional linear regression shift via covariate matrix X.
+Optional per-observation weights and fixed offset are supported.
 
 Mathematical convention
 -----------------------
 Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1):
 
     h(y)  = B_k(y) @ theta_b  [+ X @ beta  if covariates are present]
-    h'(y) = B_k'(y) @ theta_b  (first derivative; beta does not appear)
+              [+ offset         if offset is provided]
+    h'(y) = B_k'(y) @ theta_b  (first derivative; beta and offset do not appear)
 
 The target distribution Z follows one of:
 
@@ -28,6 +30,19 @@ The target distribution Z follows one of:
                              ``theta_b[0] + X_i · β >= 0`` is added for each
                              training observation (see
                              :func:`pymlt.constraints.build_constraints`).
+
+Weighted log-likelihood
+-----------------------
+With per-observation weights ``w_i ≥ 0`` and offset ``o_i ∈ ℝ``:
+
+    h_i   = B_i · θ_b + x_i · β + o_i     (offset enters as a constant)
+    ℓ(θ)  = Σ_i w_i ℓ_i(θ)
+    ∇ℓ    = Σ_i w_i s_i
+    ∇²ℓ   = Σ_i w_i H_i
+
+The score matrix (estfun) convention follows R ``sandwich``: row i = ``w_i · s_i``,
+so column sums equal the full gradient.  ``weights=None`` ≡ unit weights;
+``offset=None`` ≡ zero offset.
 
 Log-likelihood formulae
 -----------------------
@@ -422,6 +437,94 @@ def _d2_logpdf(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
     raise AssertionError(f"unhandled dist.kind={kind!r}")
 
 
+def _validate_weights_offset(
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    n: int,
+) -> tuple[NDArray[np.float64] | None, NDArray[np.float64] | None]:
+    """Validate and coerce per-observation weights and offset arrays.
+
+    Parameters
+    ----------
+    weights:
+        Per-observation weights. Must have shape ``(n,)``, be finite, and be
+        non-negative. ``None`` is equivalent to unit weights (no array
+        allocated).
+    offset:
+        Per-observation fixed linear predictor offset. Must have shape
+        ``(n,)`` and be finite. ``None`` is equivalent to zero offset.
+    n:
+        Expected number of observations.
+
+    Returns
+    -------
+    (weights, offset)
+        Validated, float64-cast arrays or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If ``weights`` or ``offset`` have the wrong shape, contain non-finite
+        values, or ``weights`` contains negative values.
+    """
+    if weights is not None:
+        weights = np.asarray(weights, dtype=np.float64)
+        if weights.shape != (n,):
+            raise ValueError(f"weights must have shape ({n},), got {weights.shape}.")
+        if not np.all(np.isfinite(weights)):
+            raise ValueError("weights must be finite (no NaN or inf).")
+        if np.any(weights < 0.0):
+            raise ValueError("weights must be non-negative.")
+        if not np.any(weights > 0.0):
+            raise ValueError(
+                "weights must have at least one positive entry; "
+                "all-zero weights provide no information."
+            )
+    if offset is not None:
+        offset = _validate_offset(offset, n)
+    return weights, offset
+
+
+def _validate_offset(
+    offset: NDArray[np.float64],
+    n: int,
+) -> NDArray[np.float64]:
+    """Validate and coerce a per-observation offset array.
+
+    Parameters
+    ----------
+    offset:
+        Array to validate.  Must have shape ``(n,)`` and be finite.
+    n:
+        Expected length.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Validated, float64-cast array of shape ``(n,)``.
+
+    Raises
+    ------
+    ValueError
+        If ``offset`` has the wrong shape or contains non-finite values.
+    """
+    offset = np.asarray(offset, dtype=np.float64)
+    if offset.shape != (n,):
+        raise ValueError(f"offset must have shape ({n},), got {offset.shape}.")
+    if not np.all(np.isfinite(offset)):
+        raise ValueError("offset must be finite (no NaN or inf).")
+    return offset
+
+
+def _inverse_hp(
+    hp: NDArray[np.float64], weights: NDArray[np.float64] | None
+) -> NDArray[np.float64]:
+    """Return ``1 / hp`` (or ``weights / hp``) while silencing divide warnings."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = (1.0 / hp) if weights is None else (weights / hp)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Private log-likelihood functions — one per censoring type
 # ---------------------------------------------------------------------------
@@ -433,12 +536,14 @@ def _ll_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for exactly observed (uncensored) data.
 
     Formula
     -------
-    ℓ = Σ [log f(h_i) + log h'_i]
+    ℓ = Σ w_i [log f(h_i) + log h'_i]
 
     Parameters
     ----------
@@ -452,6 +557,10 @@ def _ll_none(
         Covariates.
     dist : DistOps, default=:data:`_NORM_OPS`
         Base distribution.
+    weights : NDArray[np.float64] | None
+        Per-observation weights of shape ``(len(y),)``. ``None`` = unit weights.
+    offset : NDArray[np.float64] | None
+        Per-observation offset of shape ``(len(y),)``. ``None`` = zero offset.
 
     Returns
     -------
@@ -463,13 +572,17 @@ def _ll_none(
 
     B = basis.evaluate(y)  # (n, p)
     D = basis.derivative(y, order=1)  # (n, p)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
     hp = D @ theta_b  # h-prime; must be > 0
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        # np.log(hp) produces -inf/nan when hp <= 0 (monotonicity violated).
-        # log_likelihood() detects and raises ValueError after this call.
-        return cast(np.float64, np.sum(dist.logpdf(h)) + np.sum(np.log(hp)))
+        per_obs = dist.logpdf(h) + np.log(hp)
+        if weights is not None:
+            return cast(np.float64, np.dot(weights, per_obs))
+        return cast(np.float64, np.sum(per_obs))
 
 
 def _ll_right(
@@ -478,31 +591,15 @@ def _ll_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for right-censored data.
 
     Formula
     -------
-    ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log S(h)
+    ℓ = Σ_exact w_i [log f(h) + log h'] + Σ_censored w_i log S(h)
     where S(h) = 1 - F(h) is the survival function.
-
-    Parameters
-    ----------
-    cd : CensoredData
-        Object containing exact and censored bounds.
-    theta : NDArray[np.float64]
-        Concatenated parameter vector `[theta_b | beta]`.
-    basis : BernsteinBasis
-        Polynomial basis object.
-    X : NDArray[np.float64] | None
-        Covariates.
-    dist : DistOps, default=:data:`_NORM_OPS`
-        Base distribution.
-
-    Returns
-    -------
-    float
-        Computed log-likelihood.
     """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
@@ -512,19 +609,37 @@ def _ll_right(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
+        if w_e is not None:
+            ll += np.dot(w_e, per_obs_e)
+        else:
+            ll += np.sum(per_obs_e)
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]  # last known lower bound
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        ll += np.sum(dist.logsf(h_c))
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        logsf_c = dist.logsf(h_c)
+        if w_c is not None:
+            ll += np.dot(w_c, logsf_c)
+        else:
+            ll += np.sum(logsf_c)
 
     return ll
 
@@ -535,30 +650,14 @@ def _ll_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for left-censored data.
 
     Formula
     -------
-    ℓ = Σ_exact [log f(h) + log h'] + Σ_censored log F(h)
-
-    Parameters
-    ----------
-    cd : CensoredData
-        Object containing exact and censored bounds.
-    theta : NDArray[np.float64]
-        Concatenated parameter vector `[theta_b | beta]`.
-    basis : BernsteinBasis
-        Polynomial basis object.
-    X : NDArray[np.float64] | None
-        Covariates.
-    dist : DistOps, default=:data:`_NORM_OPS`
-        Base distribution.
-
-    Returns
-    -------
-    float
-        Computed log-likelihood.
+    ℓ = Σ_exact w_i [log f(h) + log h'] + Σ_censored w_i log F(h)
     """
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
@@ -568,20 +667,38 @@ def _ll_left(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
+        if w_e is not None:
+            ll += np.dot(w_e, per_obs_e)
+        else:
+            ll += np.sum(per_obs_e)
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]  # last known upper bound
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        ll += np.sum(_logcdf(h_c))
+        logcdf_c = _logcdf(h_c)
+        if w_c is not None:
+            ll += np.dot(w_c, logcdf_c)
+        else:
+            ll += np.sum(logcdf_c)
 
     return ll
 
@@ -592,8 +709,10 @@ def _ll_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> np.float64:
-    """ℓ = Σ log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
+    """ℓ = Σ w_i log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
     ll = np.float64(0.0)
@@ -602,23 +721,40 @@ def _ll_interval(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
-        ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
+        if w_e is not None:
+            ll += np.dot(w_e, per_obs_e)
+        else:
+            ll += np.sum(per_obs_e)
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        ll += np.sum(_log_diff_ndtr(h_lo, h_hi, dist=dist))
+        log_p_i = _log_diff_ndtr(h_lo, h_hi, dist=dist)
+        if w_i is not None:
+            ll += np.dot(w_i, log_p_i)
+        else:
+            ll += np.sum(log_p_i)
 
     return ll
 
@@ -635,6 +771,8 @@ def _grad_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
@@ -642,15 +780,20 @@ def _grad_none(
 
     B = basis.evaluate(y)  # (n, p)
     D = basis.derivative(y, order=1)  # (n, p)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
     hp = D @ theta_b
 
     ns = _neg_score(h, dist)  # -(∂ log f(h)/∂h)
-    grad_b = B.T @ ns - D.T @ (1.0 / hp)
+    # weighted: wns = w * ns; ihp = w / hp
+    wns = ns if weights is None else weights * ns
+    ihp = _inverse_hp(hp, weights)
+    grad_b = B.T @ wns - D.T @ ihp
 
     if X is not None and beta is not None:
-        grad_beta = X.T @ ns
-        return cast(NDArray[np.float64], np.concatenate([grad_b, grad_beta]))
+        return cast(NDArray[np.float64], np.concatenate([grad_b, X.T @ wns]))
     return grad_b
 
 
@@ -660,6 +803,8 @@ def _grad_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for right-censored data."""
     p = basis.order + 1
@@ -671,28 +816,40 @@ def _grad_right(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
-        grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
+        grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = +B_c.T @ [f(h)/F̄(h)]
-        # Cap the exponent to avoid overflow; consistent with logsf in the LL.
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
-        grad[:p] += B_c.T @ hazard
+        whazard = hazard if w_c is None else w_c * hazard
+        grad[:p] += B_c.T @ whazard
         if X_c is not None:
-            grad[p:] += X_c.T @ hazard
+            grad[p:] += X_c.T @ whazard
 
     return cast(NDArray[np.float64], grad)
 
@@ -703,6 +860,8 @@ def _grad_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for left-censored data."""
     p = basis.order + 1
@@ -714,27 +873,40 @@ def _grad_left(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
-        grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
+        grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         # ∂(-ℓ)/∂θ_b from censored = -B_c.T @ [f(h)/F(h)]
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
-        grad[:p] -= B_c.T @ inv_mills
+        winv = inv_mills if w_c is None else w_c * inv_mills
+        grad[:p] -= B_c.T @ winv
         if X_c is not None:
-            grad[p:] -= X_c.T @ inv_mills
+            grad[p:] -= X_c.T @ winv
 
     return cast(NDArray[np.float64], grad)
 
@@ -745,6 +917,8 @@ def _grad_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Gradient of -ℓ for interval-censored data."""
     p = basis.order + 1
@@ -756,23 +930,34 @@ def _grad_interval(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
-        grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
+        grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
@@ -786,6 +971,11 @@ def _grad_interval(
             w_lo = np.exp(dist.logpdf(h_lo) - log_p)
         w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
         w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Apply observation weights
+        if w_i is not None:
+            w_hi = w_i * w_hi
+            w_lo = w_i * w_lo
 
         with np.errstate(invalid="ignore"):
             grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
@@ -809,6 +999,8 @@ def _ll_and_grad_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for exact observations."""
     p = basis.order + 1
@@ -816,18 +1008,23 @@ def _ll_and_grad_none(
 
     B = basis.evaluate(y)
     D = basis.derivative(y, order=1)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
     hp = D @ theta_b
 
     ns = _neg_score(h, dist)
+    wns = ns if weights is None else weights * ns
+    ihp = _inverse_hp(hp, weights)
     with np.errstate(invalid="ignore", divide="ignore"):
-        # hp ≤ 0 (monotonicity violation) → log(hp) is -inf/nan, 1/hp is ±inf.
-        # The non-finite ll is caught by InfeasibleParameterError downstream;
-        # the gradient is discarded in that case.
-        ll = np.sum(dist.logpdf(h)) + np.sum(np.log(hp))
-        grad_b = B.T @ ns - D.T @ (1.0 / hp)
+        if weights is not None:
+            ll = np.dot(weights, dist.logpdf(h) + np.log(hp))
+        else:
+            ll = np.sum(dist.logpdf(h)) + np.sum(np.log(hp))
+        grad_b = B.T @ wns - D.T @ ihp
     if X is not None and beta is not None:
-        grad = np.concatenate([grad_b, X.T @ ns])
+        grad = np.concatenate([grad_b, X.T @ wns])
     else:
         grad = grad_b
     return ll, cast(NDArray[np.float64], grad)
@@ -839,6 +1036,8 @@ def _ll_and_grad_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
     p = basis.order + 1
@@ -851,29 +1050,49 @@ def _ll_and_grad_right(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+            if w_e is not None:
+                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
+            else:
+                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+            grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
-        ll += np.sum(dist.logsf(h_c))
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        logsf_c = dist.logsf(h_c)
+        if w_c is not None:
+            ll += np.dot(w_c, logsf_c)
+        else:
+            ll += np.sum(logsf_c)
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
-        grad[:p] += B_c.T @ hazard
+        whazard = hazard if w_c is None else w_c * hazard
+        grad[:p] += B_c.T @ whazard
         if X_c is not None:
-            grad[p:] += X_c.T @ hazard
+            grad[p:] += X_c.T @ whazard
 
     return ll, cast(NDArray[np.float64], grad)
 
@@ -884,6 +1103,8 @@ def _ll_and_grad_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
     p = basis.order + 1
@@ -896,30 +1117,49 @@ def _ll_and_grad_left(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+            if w_e is not None:
+                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
+            else:
+                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+            grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_Fc = _logcdf(h_c)
-        ll += np.sum(log_Fc)
+        if w_c is not None:
+            ll += np.dot(w_c, log_Fc)
+        else:
+            ll += np.sum(log_Fc)
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
-        grad[:p] -= B_c.T @ inv_mills
+        winv = inv_mills if w_c is None else w_c * inv_mills
+        grad[:p] -= B_c.T @ winv
         if X_c is not None:
-            grad[p:] -= X_c.T @ inv_mills
+            grad[p:] -= X_c.T @ winv
 
     return ll, cast(NDArray[np.float64], grad)
 
@@ -930,6 +1170,8 @@ def _ll_and_grad_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
     p = basis.order + 1
@@ -942,35 +1184,56 @@ def _ll_and_grad_interval(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         B_e = basis.evaluate(y_e)
         D_e = basis.derivative(y_e, order=1)
-        h_e = np.clip(_shift(B_e @ theta_b, X_e, beta), -_H_CLIP, _H_CLIP)
+        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
+        if o_e is not None:
+            h_raw_e = h_raw_e + o_e
+        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
+        wns = ns if w_e is None else w_e * ns
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
-            ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ ns - D_e.T @ (1.0 / hp_e)
+            if w_e is not None:
+                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
+            else:
+                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
+            grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
-            grad[p:] += X_e.T @ ns
+            grad[p:] += X_e.T @ wns
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
         log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        ll += np.sum(log_p)
+        if w_i is not None:
+            ll += np.dot(w_i, log_p)
+        else:
+            ll += np.sum(log_p)
         with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
             w_hi = np.exp(dist.logpdf(h_hi) - log_p)
             w_lo = np.exp(dist.logpdf(h_lo) - log_p)
         w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
         w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if w_i is not None:
+            w_hi = w_i * w_hi
+            w_lo = w_i * w_lo
 
         with np.errstate(invalid="ignore"):
             grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
@@ -984,6 +1247,7 @@ def _ll_and_grad_interval(
 # Private per-observation score functions — one per censoring type.
 # Each returns an (n, p+q) matrix of gradients of the POSITIVE log-likelihood
 # ℓ_i w.r.t. theta, with rows aligned to the input ordering.
+# Row i is multiplied by weights[i] when weights is provided (estfun convention).
 # ---------------------------------------------------------------------------
 
 
@@ -993,6 +1257,8 @@ def _scores_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for exact observations, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1001,7 +1267,10 @@ def _scores_none(
 
     B = basis.evaluate(y)  # (n, p)
     D = basis.derivative(y, order=1)  # (n, p)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
     hp = D @ theta_b  # (n,)
 
     psi = -_neg_score(h, dist)  # ψ(h) = d log f / dh, shape (n,)
@@ -1013,6 +1282,8 @@ def _scores_none(
     if X is not None:
         # ∂ℓ_i/∂β = x_i · ψ(h_i)
         scores[:, p:] = X * psi[:, None]
+    if weights is not None:
+        scores *= weights[:, None]
     return scores
 
 
@@ -1022,6 +1293,8 @@ def _scores_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for right-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1034,18 +1307,27 @@ def _scores_right(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        s_e = _scores_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        s_e = _scores_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
         scores[mask_e] = s_e
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         # ∂ℓ_i/∂h = -λ(h) = -f(h)/S(h)
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        if w_c is not None:
+            hazard = w_c * hazard
         scores[mask_c, :p] = -B_c * hazard[:, None]
         if X_c is not None:
             scores[mask_c, p:] = -X_c * hazard[:, None]
@@ -1059,6 +1341,8 @@ def _scores_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for left-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1071,17 +1355,28 @@ def _scores_left(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        scores[mask_e] = _scores_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        scores[mask_e] = _scores_none(
+            y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e
+        )
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         # ∂ℓ_i/∂h = µ(h) = f(h)/F(h)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
+        if w_c is not None:
+            inv_mills = w_c * inv_mills
         scores[mask_c, :p] = B_c * inv_mills[:, None]
         if X_c is not None:
             scores[mask_c, p:] = X_c * inv_mills[:, None]
@@ -1095,6 +1390,8 @@ def _scores_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation ∂ℓ/∂θ for interval-censored data, shape ``(n, p+q)``."""
     p = basis.order + 1
@@ -1107,16 +1404,24 @@ def _scores_interval(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        scores[mask_e] = _scores_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        scores[mask_e] = _scores_none(
+            y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e
+        )
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
@@ -1126,6 +1431,10 @@ def _scores_interval(
             w_lo = np.exp(dist.logpdf(h_lo) - log_p)
         w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
         w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if w_i is not None:
+            w_hi = w_i * w_hi
+            w_lo = w_i * w_lo
 
         # ∂ℓ_i/∂θ_b = B_hi_i · w_hi - B_lo_i · w_lo
         scores[mask_i, :p] = B_hi * w_hi[:, None] - B_lo * w_lo[:, None]
@@ -1172,6 +1481,8 @@ def _hess_none(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for exact observations, shape ``(p+q, p+q)``.
 
@@ -1191,13 +1502,21 @@ def _hess_none(
 
     B = basis.evaluate(y)  # (n, p)
     D = basis.derivative(y, order=1)  # (n, p)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
     hp = D @ theta_b
 
-    w = -_d2_logpdf(h, dist)  # -ψ'(h), ≥ 0 for log-concave f
-    H = _assemble_hessian(B, w, X, p, q)
-    # Add D^T diag(1/h'²) D term on the θ_b block only
-    Dw = D * (1.0 / (hp * hp))[:, None]
+    w_chain = -_d2_logpdf(h, dist)  # -ψ'(h), ≥ 0 for log-concave f
+    if weights is not None:
+        w_chain = weights * w_chain
+    H = _assemble_hessian(B, w_chain, X, p, q)
+    # Add D^T diag(w / h'²) D term on the θ_b block only
+    inv_hp2 = 1.0 / (hp * hp)
+    if weights is not None:
+        inv_hp2 = weights * inv_hp2
+    Dw = D * inv_hp2[:, None]
     H[:p, :p] += Dw.T @ D
     return H
 
@@ -1208,6 +1527,8 @@ def _hess_right(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for right-censored data, shape ``(p+q, p+q)``.
 
@@ -1224,18 +1545,27 @@ def _hess_right(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         lam = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         psi = -_neg_score(h_c, dist)
         w = lam * (psi + lam)  # = -d²logS/dh² → NLL contribution
+        if w_c is not None:
+            w = w_c * w
         H += _assemble_hessian(B_c, w, X_c, p, q)
 
     return H
@@ -1247,6 +1577,8 @@ def _hess_left(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for left-censored data, shape ``(p+q, p+q)``.
 
@@ -1262,18 +1594,27 @@ def _hess_left(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         mu = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
         psi = -_neg_score(h_c, dist)
         w = mu * (mu - psi)  # = -d²logF/dh² → NLL contribution
+        if w_c is not None:
+            w = w_c * w
         H += _assemble_hessian(B_c, w, X_c, p, q)
 
     return H
@@ -1285,6 +1626,8 @@ def _hess_interval(
     basis: BernsteinBasis,
     X: NDArray[np.float64] | None,
     dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Hessian of -ℓ for interval-censored data, shape ``(p+q, p+q)``.
 
@@ -1308,16 +1651,22 @@ def _hess_interval(
     if mask_e.any():
         y_e = cd.exact[mask_e]
         X_e = X[mask_e] if X is not None else None
-        H += _hess_none(y_e, theta, basis, X_e, dist=dist)
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
+        H += _hess_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
 
     mask_i = cd.is_interval_censored_mask
     if mask_i.any():
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
@@ -1336,6 +1685,12 @@ def _hess_interval(
         a = -psi_lo * w_lo - w_lo * w_lo  # ∂²log p/∂h_l²
         c = psi_hi * w_hi - w_hi * w_hi  # ∂²log p/∂h_u²
         b = w_hi * w_lo  # ∂²log p/∂h_l ∂h_u
+
+        # Apply observation weights to a, b, c
+        if w_i is not None:
+            a = w_i * a
+            b = w_i * b
+            c = w_i * c
 
         # NLL contribution = - (chain through J):
         #   -[ J_l^T diag(a) J_l + J_l^T diag(b) J_u + J_u^T diag(b) J_l
@@ -1381,20 +1736,32 @@ def _log_likelihood_from_dist(
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> float:
     """Internal log-likelihood evaluator for a pre-resolved base distribution."""
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        result = _ll_none(y_arr, theta, basis, X, dist=dist)
+        result = _ll_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     else:
         if censoring is CensoringType.NONE:
-            result = _ll_none(y.exact, theta, basis, X, dist=dist)
+            result = _ll_none(
+                y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+            )
         elif censoring is CensoringType.RIGHT:
-            result = _ll_right(y, theta, basis, X, dist=dist)
+            result = _ll_right(
+                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            )
         elif censoring is CensoringType.LEFT:
-            result = _ll_left(y, theta, basis, X, dist=dist)
+            result = _ll_left(
+                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            )
         else:  # INTERVAL
-            result = _ll_interval(y, theta, basis, X, dist=dist)
+            result = _ll_interval(
+                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            )
 
     if not np.isfinite(result):
         raise InfeasibleParameterError(
@@ -1413,24 +1780,38 @@ def _negative_log_likelihood_from_dist(
     censoring: CensoringType,
     gradient: bool,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Internal NLL evaluator for a pre-resolved base distribution."""
     if not gradient:
-        return -_log_likelihood_from_dist(theta, basis, y, X, censoring, dist)
+        return -_log_likelihood_from_dist(
+            theta, basis, y, X, censoring, dist, weights=weights, offset=offset
+        )
 
     # Single pass: share basis.evaluate / basis.derivative and mask slicing
     # between the log-likelihood and its gradient.
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        ll, grad = _ll_and_grad_none(y_arr, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.NONE:
-        ll, grad = _ll_and_grad_none(y.exact, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_none(
+            y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.RIGHT:
-        ll, grad = _ll_and_grad_right(y, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_right(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.LEFT:
-        ll, grad = _ll_and_grad_left(y, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_left(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     else:
-        ll, grad = _ll_and_grad_interval(y, theta, basis, X, dist=dist)
+        ll, grad = _ll_and_grad_interval(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
 
     if not np.isfinite(ll):
         raise InfeasibleParameterError(
@@ -1449,6 +1830,8 @@ def log_likelihood(
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> float:
     """Log-likelihood of a conditional transformation model.
 
@@ -1472,6 +1855,13 @@ def log_likelihood(
         One of ``"normal"`` (default), ``"logistic"``, ``"min_extreme_value"``,
         ``"max_extreme_value"``, or ``"exponential"``.  Selects the target
         distribution Z such that h(Y|X) ~ Z.
+    weights:
+        Per-observation weights of shape ``(n,)``.  Non-negative, finite.
+        ``None`` is equivalent to unit weights.
+    offset:
+        Per-observation fixed linear predictor added to ``h(y|x)`` before
+        distribution calls.  Shape ``(n,)``, finite.  Not optimised.
+        ``None`` is equivalent to zero offset.
 
     Returns
     -------
@@ -1480,15 +1870,18 @@ def log_likelihood(
     Raises
     ------
     InfeasibleParameterError
-        If the result is ``-inf`` or ``NaN``.  Most likely causes: theta
-        violates monotonicity (h' ≤ 0), observations outside support, or
-        numerical overflow in the basis evaluation.  Subclass of
-        :class:`ValueError`.
+        If the result is ``-inf`` or ``NaN``.
     ValueError
-        From :func:`_get_dist` if ``base_distribution`` is not supported.
+        From :func:`_get_dist` if ``base_distribution`` is not supported, or
+        from :func:`_validate_weights_offset` if ``weights``/``offset`` are
+        invalid.
     """
     dist = _get_dist(base_distribution)
-    return _log_likelihood_from_dist(theta, basis, y, X, censoring, dist)
+    n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
+    weights, offset = _validate_weights_offset(weights, offset, n)
+    return _log_likelihood_from_dist(
+        theta, basis, y, X, censoring, dist, weights=weights, offset=offset
+    )
 
 
 def negative_log_likelihood(
@@ -1499,6 +1892,8 @@ def negative_log_likelihood(
     censoring: CensoringType = CensoringType.NONE,
     gradient: bool = False,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Negative log-likelihood (objective for minimisation) with optional gradient.
 
@@ -1513,6 +1908,10 @@ def negative_log_likelihood(
     base_distribution:
         One of ``"normal"`` (default), ``"logistic"``, ``"min_extreme_value"``,
         ``"max_extreme_value"``, or ``"exponential"``.
+    weights:
+        Per-observation weights. See :func:`log_likelihood`.
+    offset:
+        Per-observation offset. See :func:`log_likelihood`.
 
     Returns
     -------
@@ -1520,8 +1919,10 @@ def negative_log_likelihood(
     (float, NDArray)  when ``gradient=True``
     """
     dist = _get_dist(base_distribution)
+    n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
+    weights, offset = _validate_weights_offset(weights, offset, n)
     return _negative_log_likelihood_from_dist(
-        theta, basis, y, X, censoring, gradient, dist
+        theta, basis, y, X, censoring, gradient, dist, weights=weights, offset=offset
     )
 
 
@@ -1532,6 +1933,8 @@ def hessian(
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Analytical Hessian of the negative log-likelihood.
 
@@ -1544,6 +1947,10 @@ def hessian(
     ----------
     theta, basis, y, X, censoring, base_distribution:
         Same as :func:`log_likelihood`.
+    weights:
+        Per-observation weights. See :func:`log_likelihood`.
+    offset:
+        Per-observation offset. See :func:`log_likelihood`.
 
     Returns
     -------
@@ -1554,33 +1961,35 @@ def hessian(
     Raises
     ------
     InfeasibleParameterError
-        If any entry of the Hessian is non-finite — most commonly because
-        ``theta`` violates monotonicity (``h'(y) ≤ 0``) or because observations
-        fall outside the basis support.  Subclass of :class:`ValueError`.
+        If any entry of the Hessian is non-finite.
     ValueError
-        If ``base_distribution`` is not supported (propagated from
-        :func:`_get_dist`).
-
-    Notes
-    -----
-    All five base distributions are log-concave, so the ``β`` block of the
-    Hessian of ``-ℓ`` is positive semidefinite at any ``h``.  The full
-    Hessian is additionally positive definite at the unconstrained MLE
-    (and invertible) for non-degenerate data.
+        If ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
+    n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
+    weights, offset = _validate_weights_offset(weights, offset, n)
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        result = _hess_none(y_arr, theta, basis, X, dist=dist)
+        result = _hess_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.NONE:
-        result = _hess_none(y.exact, theta, basis, X, dist=dist)
+        result = _hess_none(
+            y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.RIGHT:
-        result = _hess_right(y, theta, basis, X, dist=dist)
+        result = _hess_right(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.LEFT:
-        result = _hess_left(y, theta, basis, X, dist=dist)
+        result = _hess_left(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     else:
-        result = _hess_interval(y, theta, basis, X, dist=dist)
+        result = _hess_interval(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
 
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
@@ -1598,52 +2007,63 @@ def score_matrix(
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation score contributions ``∂ℓ_i/∂θ``.
 
     Returns the ``(n, p+q)`` matrix of per-observation gradients of the
     *positive* log-likelihood, often referred to as ``estfun`` in the R
-    ``sandwich`` package.  ``score_matrix(...).sum(axis=0)`` equals the full
-    log-likelihood gradient (the negative of
-    :func:`negative_log_likelihood` gradient).
+    ``sandwich`` package.  When ``weights`` are provided, row ``i`` is
+    ``w_i · ∂ℓ_i/∂θ`` so that ``score_matrix(...).sum(axis=0)`` equals
+    the full weighted log-likelihood gradient.
 
     Parameters
     ----------
     theta, basis, y, X, censoring, base_distribution:
         Same as :func:`log_likelihood`.
+    weights:
+        Per-observation weights. See :func:`log_likelihood`.
+    offset:
+        Per-observation offset. See :func:`log_likelihood`.
 
     Returns
     -------
     NDArray[np.float64]
-        Per-observation score matrix of shape ``(n, p+q)``.  Row ``i`` gives
-        ``∂ℓ_i/∂θ``.  Rows of observations that contribute nothing to the
-        log-likelihood under the chosen censoring regime (should not occur
-        for well-formed inputs) are zero.
+        Per-observation score matrix of shape ``(n, p+q)``.
 
     Raises
     ------
     InfeasibleParameterError
-        If any entry of the score matrix is non-finite — most commonly
-        because ``theta`` violates monotonicity (``h'(y) ≤ 0``) or because
-        observations fall outside the basis support.  Subclass of
-        :class:`ValueError`.
+        If any entry of the score matrix is non-finite.
     ValueError
         If ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
+    n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
+    weights, offset = _validate_weights_offset(weights, offset, n)
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        result = _scores_none(y_arr, theta, basis, X, dist=dist)
+        result = _scores_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.NONE:
-        # Exact observations stored in CensoredData — only .exact is used.
-        result = _scores_none(y.exact, theta, basis, X, dist=dist)
+        result = _scores_none(
+            y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.RIGHT:
-        result = _scores_right(y, theta, basis, X, dist=dist)
+        result = _scores_right(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.LEFT:
-        result = _scores_left(y, theta, basis, X, dist=dist)
+        result = _scores_left(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
     else:
-        result = _scores_interval(y, theta, basis, X, dist=dist)
+        result = _scores_interval(
+            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
 
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
@@ -1661,13 +2081,16 @@ def intercept_score(
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     """Per-observation score w.r.t. an artificial intercept on ``h(y|x)``.
 
     For each observation ``i``, returns ``∂ℓ_i/∂α`` evaluated at ``α = 0``,
     where ``α`` is a hypothetical intercept added to the transformation:
-    ``h̃(y|x) = h(y|x) + α``.  This is the per-observation diagnostic
-    quantity returned by R's ``mlt::residuals()`` (the "score residual").
+    ``h̃(y|x) = h(y|x) + α``.  When ``weights`` are provided, row ``i`` is
+    multiplied by ``w_i`` (same R ``sandwich`` convention as
+    :func:`score_matrix`).
 
     The closed forms by censoring type are:
 
@@ -1680,6 +2103,10 @@ def intercept_score(
     ----------
     theta, basis, y, X, censoring, base_distribution:
         Same as :func:`score_matrix`.
+    weights:
+        Per-observation weights. See :func:`log_likelihood`.
+    offset:
+        Per-observation offset. See :func:`log_likelihood`.
 
     Returns
     -------
@@ -1695,20 +2122,32 @@ def intercept_score(
         If ``base_distribution`` is not supported.
     """
     dist = _get_dist(base_distribution)
+    n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
+    weights, offset = _validate_weights_offset(weights, offset, n)
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
-        result = _intercept_score_exact(y_arr, theta_b, basis, X, beta, dist)
+        result = _intercept_score_exact(
+            y_arr, theta_b, basis, X, beta, dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.NONE:
-        result = _intercept_score_exact(y.exact, theta_b, basis, X, beta, dist)
+        result = _intercept_score_exact(
+            y.exact, theta_b, basis, X, beta, dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.RIGHT:
-        result = _intercept_score_right(y, theta_b, basis, X, beta, dist)
+        result = _intercept_score_right(
+            y, theta_b, basis, X, beta, dist, weights=weights, offset=offset
+        )
     elif censoring is CensoringType.LEFT:
-        result = _intercept_score_left(y, theta_b, basis, X, beta, dist)
+        result = _intercept_score_left(
+            y, theta_b, basis, X, beta, dist, weights=weights, offset=offset
+        )
     else:
-        result = _intercept_score_interval(y, theta_b, basis, X, beta, dist)
+        result = _intercept_score_interval(
+            y, theta_b, basis, X, beta, dist, weights=weights, offset=offset
+        )
 
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
@@ -1726,10 +2165,18 @@ def _intercept_score_exact(
     X: NDArray[np.float64] | None,
     beta: NDArray[np.float64] | None,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     B = basis.evaluate(y)
-    h = np.clip(_shift(B @ theta_b, X, beta), -_H_CLIP, _H_CLIP)
-    return -_neg_score(h, dist)
+    h_raw = _shift(B @ theta_b, X, beta)
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
+    result = -_neg_score(h, dist)
+    if weights is not None:
+        result = weights * result
+    return result
 
 
 def _intercept_score_right(
@@ -1739,24 +2186,36 @@ def _intercept_score_right(
     X: NDArray[np.float64] | None,
     beta: NDArray[np.float64] | None,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     out = np.zeros(cd.n, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         out[mask_e] = _intercept_score_exact(
-            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist, weights=w_e, offset=o_e
         )
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
-        out[mask_c] = -np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        vals = -np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+        if w_c is not None:
+            vals = w_c * vals
+        out[mask_c] = vals
 
     return out
 
@@ -1768,25 +2227,37 @@ def _intercept_score_left(
     X: NDArray[np.float64] | None,
     beta: NDArray[np.float64] | None,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     out = np.zeros(cd.n, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         out[mask_e] = _intercept_score_exact(
-            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist, weights=w_e, offset=o_e
         )
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
         X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
         B_c = basis.evaluate(y_c)
-        h_c = np.clip(_shift(B_c @ theta_b, X_c, beta), -_H_CLIP, _H_CLIP)
+        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
+        if o_c is not None:
+            h_raw_c = h_raw_c + o_c
+        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_inv_mills = dist.logpdf(h_c) - _logcdf(h_c)
-        out[mask_c] = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
+        vals = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
+        if w_c is not None:
+            vals = w_c * vals
+        out[mask_c] = vals
 
     return out
 
@@ -1798,14 +2269,18 @@ def _intercept_score_interval(
     X: NDArray[np.float64] | None,
     beta: NDArray[np.float64] | None,
     dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
     out = np.zeros(cd.n, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
         X_e = X[mask_e] if X is not None else None
+        w_e = weights[mask_e] if weights is not None else None
+        o_e = offset[mask_e] if offset is not None else None
         out[mask_e] = _intercept_score_exact(
-            cd.exact[mask_e], theta_b, basis, X_e, beta, dist
+            cd.exact[mask_e], theta_b, basis, X_e, beta, dist, weights=w_e, offset=o_e
         )
 
     mask_i = cd.is_interval_censored_mask
@@ -1813,9 +2288,13 @@ def _intercept_score_interval(
         lo = cd.lower[mask_i]
         hi = cd.upper[mask_i]
         X_i = X[mask_i] if X is not None else None
+        w_i = weights[mask_i] if weights is not None else None
+        o_i = offset[mask_i] if offset is not None else None
         B_lo = basis.evaluate(lo)
         B_hi = basis.evaluate(hi)
         shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
+        if o_i is not None:
+            shift = shift + o_i
         h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
         h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
 
@@ -1825,6 +2304,9 @@ def _intercept_score_interval(
             w_lo = np.exp(dist.logpdf(h_lo) - log_p)
         w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
         w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
-        out[mask_i] = w_hi - w_lo
+        vals = w_hi - w_lo
+        if w_i is not None:
+            vals = w_i * vals
+        out[mask_i] = vals
 
     return out

@@ -25,6 +25,7 @@ from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.interpolate import CubicSpline
 from scipy.special import comb
 from scipy.stats import chi2, norm
 
@@ -35,6 +36,8 @@ from pymlt.likelihood import (
     InfeasibleParameterError,
     _get_dist,
     _neg_score,
+    _validate_offset,
+    _validate_weights_offset,
     log_likelihood,
 )
 from pymlt.likelihood import (
@@ -93,6 +96,9 @@ _VALID_CONFBAND_WHAT = (
 
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
+
+# Grid size used by R's qmlt() default quantile inversion.
+_QMLT_GRID_POINTS = 50
 
 # simulate(): clip Uniform(0,1) draws to [_SIMULATE_U_EPS, 1 − _SIMULATE_U_EPS]
 # before inverting through F⁻¹ in _predict_quantile.  At u = 0 / u = 1 the
@@ -195,10 +201,20 @@ class ConditionalTransformationModel:
         # Score matrix — computed eagerly at the end of fit().
         self._estfun_cache_: NDArray[np.float64] | None = None
 
+        self.weights_: NDArray[np.float64] | None = None
+        """Observation weights supplied to the last :meth:`fit` call.
+        ``None`` when no weights were used."""
+
+        self.offset_: NDArray[np.float64] | None = None
+        """Per-observation offset supplied to the last :meth:`fit` call.
+        ``None`` when no offset was used."""
+
         # Training response/covariates retained for residuals().  Stored as
         # copies so subsequent caller mutations cannot affect diagnostics.
         self._y_train_: NDArray[np.float64] | CensoredData | None = None
         self._X_train_: NDArray[np.float64] | None = None
+        self._weights_train_: NDArray[np.float64] | None = None
+        self._offset_train_: NDArray[np.float64] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -285,6 +301,8 @@ class ConditionalTransformationModel:
         self,
         y: NDArray[np.float64] | CensoredData,
         X: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> "ConditionalTransformationModel":
         """Fit the transformation model by maximum likelihood.
 
@@ -297,6 +315,15 @@ class ConditionalTransformationModel:
         X:
             Optional covariate matrix of shape ``(n, q)``.  If given, the
             last ``q`` entries of ``theta_`` are regression coefficients.
+        weights:
+            Optional non-negative per-observation weights of shape ``(n,)``.
+            The weighted log-likelihood ``Σ w_i · ℓ_i`` is maximised; no
+            normalisation is applied.  ``None`` is equivalent to all-ones.
+        offset:
+            Optional per-observation offset of shape ``(n,)``.  Added to
+            ``h(y|x)`` before distribution calls on every likelihood
+            evaluation: ``h_eff = B·θ_b + X·β + offset``.  ``None`` is
+            equivalent to all-zeros.
 
         Returns
         -------
@@ -308,10 +335,13 @@ class ConditionalTransformationModel:
         Raises
         ------
         ValueError
-            If ``y`` contains values outside ``basis.support``.
+            If ``y`` contains values outside ``basis.support``, or if
+            ``weights``/``offset`` have the wrong shape or invalid values.
         """
         feature_names = _extract_feature_names(X)
         y_clean, X_clean = self._validate_input(y, X)
+        n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
+        weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
 
         result = optimize(
             self.basis,
@@ -320,6 +350,8 @@ class ConditionalTransformationModel:
             censoring=self.censoring,
             config=self.optimizer_config,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
 
         if not result.converged:
@@ -353,6 +385,9 @@ class ConditionalTransformationModel:
         # ``vcov()`` or ``estfun()`` results.  Failures here indicate a real
         # modelling problem (degenerate basis, constraint-binding fit);
         # surface them.
+        self.weights_ = weights_clean
+        self.offset_ = offset_clean
+
         self.hessian_ = _hessian(
             self.theta_,
             self.basis,
@@ -360,6 +395,8 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
         self._estfun_cache_ = _score_matrix(
             self.theta_,
@@ -368,6 +405,8 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
 
         # Snapshot the training response and covariates for diagnostics
@@ -392,6 +431,10 @@ class ConditionalTransformationModel:
         else:
             self._y_train_ = y_clean.copy()
         self._X_train_ = X_clean.copy() if X_clean is not None else None
+        self._weights_train_ = (
+            weights_clean.copy() if weights_clean is not None else None
+        )
+        self._offset_train_ = offset_clean.copy() if offset_clean is not None else None
         return self
 
     def predict(
@@ -414,6 +457,7 @@ class ConditionalTransformationModel:
             "logodds",
             "quantile",
         ] = "distribution",
+        offset_new: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
 
@@ -424,6 +468,9 @@ class ConditionalTransformationModel:
             For all other ``what``: response values in ``basis.support``.
         X_new:
             Optional covariate matrix of shape ``(m, q)``.
+        offset_new:
+            Optional per-observation offset of shape ``(m,)``.  Added to
+            ``h(y|x)`` before distribution calls.
         what:
             Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
             ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
@@ -441,7 +488,8 @@ class ConditionalTransformationModel:
             * ``"logcumhazard"``    — ``log(−log S(h))``
             * ``"odds"``            — ``F(h) / S(h)``
             * ``"logodds"``         — ``log F(h) − log S(h)``
-            * ``"quantile"``        — Quantile via numerical inversion (brentq)
+            * ``"quantile"``        — Quantile via inversion; right-censored
+              models use an R-compatible grid+spline inversion.
 
         Returns
         -------
@@ -479,6 +527,10 @@ class ConditionalTransformationModel:
         theta_b = self.theta_[:p]
 
         y_arr = np.asarray(y_new, dtype=float).ravel()
+        m = y_arr.shape[0]
+        offset_arr: NDArray[np.float64] | None = (
+            _validate_offset(offset_new, m) if offset_new is not None else None
+        )
         X_arr: NDArray[np.float64] | None = None
         if X_new is not None:
             X_arr = np.asarray(X_new, dtype=float)
@@ -506,7 +558,9 @@ class ConditionalTransformationModel:
                         f"model has {beta.shape[0]} covariate coefficients."
                     )
                 xbeta = X_arr @ beta
-            return self._predict_quantile(y_arr, theta_b, xbeta=xbeta)
+            return self._predict_quantile(
+                y_arr, theta_b, xbeta=xbeta, offset=offset_arr
+            )
 
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -517,6 +571,9 @@ class ConditionalTransformationModel:
         if X_arr is not None and len(self.theta_) > p:
             beta = self.theta_[p:]
             h = h + X_arr @ beta
+
+        if offset_arr is not None:
+            h = h + offset_arr
 
         dist = _get_dist(self.base_distribution)
         if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
@@ -582,13 +639,18 @@ class ConditionalTransformationModel:
         probs: NDArray[np.float64],
         theta_b: NDArray[np.float64],
         xbeta: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
-        """Numerically invert the conditional transformation via brentq.
+        """Numerically invert the fitted distribution for quantile prediction.
 
-        Solves ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i]`` for each ``i``,
-        where ``h_baseline(y) = B_k(y) · theta_b`` and ``F⁻¹`` is the
-        quantile function of the base distribution.  When ``xbeta is None``
-        this reduces to the marginal inversion ``h_baseline(q) = F⁻¹(p)``.
+        For right-censored models, follow R ``mlt::qmlt`` semantics:
+        evaluate a CDF curve on a fixed grid and invert that curve via
+        spline/interpolation.
+
+        For other censoring types, solve
+        ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i] − offset[i]`` directly via
+        vectorised bisection, where ``h_baseline(y) = B_k(y) · theta_b`` and
+        ``F⁻¹`` is the base-distribution quantile function.
 
         Parameters
         ----------
@@ -599,6 +661,8 @@ class ConditionalTransformationModel:
         xbeta:
             Per-row linear predictor ``X @ beta`` of shape ``(len(probs),)``,
             or ``None`` for the baseline (no-covariate) case.
+        offset:
+            Per-row offset of shape ``(len(probs),)``, or ``None``.
 
         Returns
         -------
@@ -607,18 +671,124 @@ class ConditionalTransformationModel:
         a, b = self.basis.support
         k = self.basis.order
         theta_b = np.asarray(theta_b, dtype=float)
+        probs_arr = np.asarray(probs, dtype=np.float64)
 
-        n_probs = len(probs)
+        n_probs = len(probs_arr)
         if n_probs == 0:
             return np.empty(0, dtype=float)
+
+        dist = _get_dist(self.base_distribution)
+        shift: NDArray[np.float64] = (
+            np.zeros(n_probs, dtype=np.float64)
+            if xbeta is None
+            else np.asarray(xbeta, dtype=np.float64)
+        )
+        if offset is not None:
+            shift = shift + np.asarray(offset, dtype=np.float64)
+
+        # R-compatible quantile inversion path for right-censored models:
+        # qmlt() evaluates CDF on a K-point grid and .invf() inverts with
+        # spline+approx. This avoids support-bracket clipping artifacts in
+        # Coxph quantiles with covariate shifts.
+        if self.censoring is CensoringType.RIGHT:
+            q_grid = np.linspace(0.0, b, _QMLT_GRID_POINTS, dtype=np.float64)
+
+            i_arr = np.arange(k + 1, dtype=float)
+            j_arr = k - i_arr
+            binom_theta = comb(k, i_arr, exact=False) * theta_b
+            inv_width = 1.0 / (b - a)
+            t_grid = (q_grid - a) * inv_width
+            T_grid = (t_grid[:, None] ** i_arr) * ((1.0 - t_grid)[:, None] ** j_arr)
+            h_base_grid = cast(NDArray[np.float64], T_grid @ binom_theta)
+
+            eps = float(np.sqrt(np.finfo(float).eps))
+            out = np.empty(n_probs, dtype=np.float64)
+            saturated = False
+
+            for i, p in enumerate(probs_arr):
+                cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+                # For survival-time responses, R's grid starts at 0 and the
+                # CDF at time zero is treated as zero.
+                cdf_grid[0] = 0.0
+
+                finite = np.isfinite(cdf_grid)
+                if not np.any(finite):
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                cmin = float(np.min(cdf_grid[finite]))
+                cmax = float(np.max(cdf_grid[finite]))
+                remove = ~finite
+                flat_low = np.where(cdf_grid < cmin + eps)[0]
+                flat_high = np.where(cdf_grid > cmax - eps)[0]
+                if flat_low.size > 1:
+                    remove[flat_low[:-1]] = True
+                if flat_high.size > 1:
+                    remove[flat_high[1:]] = True
+
+                keep = ~remove
+                qk = q_grid[keep]
+                ck = cdf_grid[keep]
+                if qk.size < 2:
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                n_spline = max(3 * qk.size, 3)
+                q_s = np.linspace(
+                    float(qk[0]),
+                    float(qk[-1]),
+                    n_spline,
+                    dtype=np.float64,
+                )
+                c_s = cast(
+                    NDArray[np.float64],
+                    CubicSpline(qk, ck, bc_type="not-a-knot", extrapolate=False)(q_s),
+                )
+
+                finite_s = np.isfinite(c_s)
+                if not np.any(finite_s):
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+                q_s = q_s[finite_s]
+                c_s = c_s[finite_s]
+
+                order = np.argsort(c_s)
+                c_s = c_s[order]
+                q_s = q_s[order]
+                uniq = np.concatenate(([True], np.diff(c_s) > 0.0))
+                c_s = c_s[uniq]
+                q_s = q_s[uniq]
+                if c_s.size == 0:
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                if p < c_s[0]:
+                    out[i] = q_grid[0]
+                    saturated = True
+                elif p > c_s[-1]:
+                    out[i] = q_grid[-1]
+                    saturated = True
+                else:
+                    out[i] = float(np.interp(p, c_s, q_s))
+
+            if saturated:
+                warnings.warn(
+                    "predict(what='quantile'): probability target lies outside "
+                    "the finite R-style inversion grid at one or more points; "
+                    "returning boundary-saturated quantiles.",
+                    stacklevel=2,
+                )
+            return out
 
         # Bracket-clip range for h_baseline — independent of xbeta.
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
-        dist = _get_dist(self.base_distribution)
-        shift = 0.0 if xbeta is None else np.asarray(xbeta, dtype=float)
-        z_raw = dist.ppf(probs) - shift
+        z_raw = dist.ppf(probs_arr) - shift
         if np.any((z_raw < z_min) | (z_raw > z_max)):
             warnings.warn(
                 "predict(what='quantile'): F⁻¹(p) − xβ exceeds the basis "
@@ -658,6 +828,8 @@ class ConditionalTransformationModel:
         self,
         y: NDArray[np.float64] | CensoredData,
         X: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -669,6 +841,10 @@ class ConditionalTransformationModel:
             Response observations.
         X:
             Optional covariate matrix.
+        weights:
+            Optional per-observation weights.
+        offset:
+            Optional per-observation offset added to ``h``.
 
         Returns
         -------
@@ -685,6 +861,8 @@ class ConditionalTransformationModel:
                 "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         y_clean, X_clean = self._validate_input(y, X)
+        n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
+        weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
         return log_likelihood(
             self.theta_,
             self.basis,
@@ -692,6 +870,8 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
 
     def vcov(self) -> NDArray[np.float64]:
@@ -846,6 +1026,8 @@ class ConditionalTransformationModel:
                 self._X_train_,
                 self.censoring,
                 base_distribution=self.base_distribution,
+                weights=self._weights_train_,
+                offset=self._offset_train_,
             )
 
         # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per
@@ -858,6 +1040,8 @@ class ConditionalTransformationModel:
         if self._X_train_ is not None and len(self.theta_) > p:
             beta = self.theta_[p:]
             h = h + self._X_train_ @ beta
+        if self._offset_train_ is not None:
+            h = h + self._offset_train_
         h_c = np.clip(h, -_H_CLIP, _H_CLIP)
         dist = _get_dist(self.base_distribution)
         r = -dist.logsf(h_c)
@@ -1001,6 +1185,7 @@ class ConditionalTransformationModel:
         what: Literal[
             "trafo", "distribution", "survivor", "density", "hazard"
         ] = "distribution",
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Pointwise delta-method confidence band for a predicted curve.
 
@@ -1042,6 +1227,10 @@ class ConditionalTransformationModel:
         what:
             One of ``"trafo"``, ``"distribution"``, ``"survivor"``,
             ``"density"``, ``"hazard"``.  Defaults to ``"distribution"``.
+        offset:
+            Optional per-grid-point offset of shape ``(len(y_grid),)``.
+            Added to ``h`` before computing the band; does not affect the
+            delta-method Jacobian (offset is constant w.r.t. ``theta``).
 
         Returns
         -------
@@ -1121,6 +1310,9 @@ class ConditionalTransformationModel:
 
         y_arr = np.asarray(y_grid, dtype=float).ravel()
         m = y_arr.size
+        offset_arr: NDArray[np.float64] | None = (
+            _validate_offset(offset, m) if offset is not None else None
+        )
         V = self.vcov()
 
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -1129,6 +1321,9 @@ class ConditionalTransformationModel:
         hp = D @ theta_b
         if x_row is not None and beta is not None:
             h = h + float(x_row @ beta)
+
+        if offset_arr is not None:
+            h = h + offset_arr
 
         # Assemble per-grid-point Jacobian J of shape (m, p+q).
         # For scales whose η involves log h', also validate h' > 0.
