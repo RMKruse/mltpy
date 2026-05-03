@@ -91,6 +91,15 @@ _VALID_CONFBAND_WHAT = (
 # Small epsilon used for bracket safety in brentq
 _BRENTQ_EPS = 1e-10
 
+# simulate(): clip Uniform(0,1) draws to [_SIMULATE_U_EPS, 1 − _SIMULATE_U_EPS]
+# before inverting through F⁻¹ in _predict_quantile.  At u = 0 / u = 1 the
+# base CDF inverse returns ∓∞, which would propagate as NaN through the
+# Bernstein bisection.  1e-10 keeps the saturation tail to ppf(1e-10) ≈ ±6.4
+# (normal) — well inside _H_CLIP — while losing < 0.0000001% of the
+# distribution at each end.  Bracket saturation beyond this is reported by
+# _predict_quantile's own warning, not silenced here.
+_SIMULATE_U_EPS = 1e-10
+
 # `what` values whose formula involves h'(y) and therefore require hp > 0.
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
@@ -1186,8 +1195,8 @@ class ConditionalTransformationModel:
         else:
             rng = np.random.default_rng(random_state)
 
-        # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf
-        u = np.clip(rng.uniform(size=n), 1e-10, 1 - 1e-10)
+        # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf.
+        u = np.clip(rng.uniform(size=n), _SIMULATE_U_EPS, 1.0 - _SIMULATE_U_EPS)
         return self.predict(u, X_new=X_arr, what="quantile")
 
     def __repr__(self) -> str:
