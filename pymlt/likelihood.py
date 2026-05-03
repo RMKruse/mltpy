@@ -186,6 +186,23 @@ _H_CLIP = 30.0
 # Maximum exponent that np.exp can handle without overflow.
 _LOG_FLOAT_MAX: float = float(np.log(np.finfo(np.float64).max))
 
+# _log_diff_ndtr: floor on the log-CDF ratio  r = log F(a) − log F(b)  before
+# evaluating  log1p(−exp(r))  on the wide-interval path.  Without the floor,
+# exact zero-width intervals (a == b ⇒ r == 0) yield exp(r) == 1 and
+# log1p(−1) = −∞.  −1e-15 is the smallest magnitude that survives a single
+# float64 round-trip through exp/log1p (≈ machine epsilon for ones), so the
+# wide branch returns a finite (very negative) number which the
+# narrow-branch selector below then discards anyway.
+_LOG_DIFF_NDTR_RATIO_CAP = -1e-15
+
+# _log_diff_ndtr: split point between the wide-interval logsumexp identity
+# and the narrow-interval Taylor fallback, in the same  r = log F(a) − log F(b)
+# space.  Once F(a)/F(b) exceeds 1 − 1e-6, the cancellation in
+# log1p(−exp(r)) loses more than ~6 significant digits, while the midpoint
+# Taylor rule  F(b)−F(a) ≈ f(mid)·(b−a)  remains accurate.  −1e-6 is the
+# crossover where both rules agree to ~6 digits in float64.
+_LOG_DIFF_NDTR_NARROW_THRESHOLD = -1e-6
+
 
 # ---------------------------------------------------------------------------
 # Numerically stable log(F(b) − F(a))
@@ -251,7 +268,7 @@ def _log_diff_ndtr(
     ratio = log_Fa - log_Fb  # <= 0  (since a <= b)
 
     # Wide-interval path: ratio well below 0 → log1p stable
-    ratio_safe = np.minimum(ratio, -1e-15)
+    ratio_safe = np.minimum(ratio, _LOG_DIFF_NDTR_RATIO_CAP)
     wide = log_Fb + np.log1p(-np.exp(ratio_safe))
 
     # Narrow-interval fallback: F(b)-F(a) ≈ f(mid)·(b−a).
@@ -262,8 +279,12 @@ def _log_diff_ndtr(
         log_width = np.log(width)
     narrow = dist.logpdf(mid) + log_width
 
-    # Use fallback when ratio > -1e-6  (i.e. F(a)/F(b) > 1-1e-6)
-    return cast(NDArray[np.float64], np.where(ratio < -1e-6, wide, narrow))
+    # Use fallback when ratio > _LOG_DIFF_NDTR_NARROW_THRESHOLD  (F(a)/F(b)
+    # within 1e-6 of 1 — see constant definition for the rationale).
+    return cast(
+        NDArray[np.float64],
+        np.where(ratio < _LOG_DIFF_NDTR_NARROW_THRESHOLD, wide, narrow),
+    )
 
 
 # ---------------------------------------------------------------------------
