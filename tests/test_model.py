@@ -590,6 +590,17 @@ def test_cdf_is_monotone_hypothesis(order: int, seed: int):
     )
 
 
+def test_fit_regression_no_runtime_warning_on_flat_hp_boundary():
+    """Regression: this seed/order previously emitted divide-by-zero warnings."""
+    rng = np.random.default_rng(24)
+    y = rng.uniform(0.05, 0.95, 60)
+    model = MLT(order=2, support=(0.0, 1.0))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        model.fit(y)
+    assert model.is_fitted_
+
+
 # ---------------------------------------------------------------------------
 # R reference integration test
 # ---------------------------------------------------------------------------

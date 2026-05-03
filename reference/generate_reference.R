@@ -684,7 +684,7 @@ cat(sprintf("residuals refs: boxcox (n=%d), colr (n=%d), coxph (n=%d) written.\n
 
 # --- BoxCox with weights --------------------------------------------------
 set.seed(200)
-w_bc_w <- sample(1L:4L, n_bc, replace = TRUE)
+w_bc_w <- as.numeric(sample(1L:4L, n_bc, replace = TRUE))
 fit_bc_w <- tram::BoxCox(y ~ x,
                           data    = data.frame(y = y_bc, x = x_bc),
                           support = c(a_bc, b_bc),
@@ -708,7 +708,7 @@ cat(sprintf("BoxCox weights ref: n=%d, sum_w=%d, p+q=%d\n",
 
 # --- Colr with weights ----------------------------------------------------
 set.seed(201)
-w_colr_w <- sample(1L:4L, n_colr, replace = TRUE)
+w_colr_w <- as.numeric(sample(1L:4L, n_colr, replace = TRUE))
 fit_colr_w <- tram::Colr(y ~ x,
                           data    = data.frame(y = y_colr, x = x_colr),
                           support = c(a_colr, b_colr),
@@ -732,7 +732,7 @@ cat(sprintf("Colr weights ref: n=%d, sum_w=%d, p+q=%d\n",
 
 # --- Coxph with weights ---------------------------------------------------
 set.seed(202)
-w_cx_w <- sample(1L:4L, n_cx, replace = TRUE)
+w_cx_w <- as.numeric(sample(1L:4L, n_cx, replace = TRUE))
 fit_cx_w <- tram::Coxph(Surv(y, event) ~ x,
                          data    = data.frame(y = y_cx, event = event_cx, x = x_cx),
                          support = c(a_cx, b_cx),

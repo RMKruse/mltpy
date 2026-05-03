@@ -19,7 +19,12 @@ import numpy as np
 import pytest
 
 from pymlt import MLT, CensoredData
-from pymlt.likelihood import _validate_weights_offset
+from pymlt.likelihood import (
+    _validate_weights_offset,
+    log_likelihood,
+    negative_log_likelihood,
+    score_matrix,
+)
 from pymlt.tram import BoxCox, Colr, Coxph
 from pymlt.variables import CensoringType
 
@@ -99,6 +104,10 @@ class TestValidateWeightsOffset:
         assert w is not None
         assert w[1] == 0.0
 
+    def test_all_zero_weights_raises(self) -> None:
+        with pytest.raises(ValueError, match="at least one positive"):
+            _validate_weights_offset(np.zeros(5), None, 5)
+
 
 # ---------------------------------------------------------------------------
 # fit() validation integration
@@ -122,6 +131,11 @@ class TestFitValidation:
         y = np.linspace(0.1, 0.9, 10)
         with pytest.raises(ValueError, match="offset must have shape"):
             MLT(order=3, support=(0.0, 1.0)).fit(y, offset=np.zeros(5))
+
+    def test_all_zero_weights_in_fit(self) -> None:
+        y = np.linspace(0.1, 0.9, 10)
+        with pytest.raises(ValueError, match="at least one positive"):
+            MLT(order=3, support=(0.0, 1.0)).fit(y, weights=np.zeros(10))
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +325,26 @@ class TestOffsetPredict:
             with_zero = m.predict(y, what=what, offset_new=np.zeros(20))
             np.testing.assert_allclose(with_zero, base, rtol=1e-12)
 
+    def test_wrong_shape_offset_predict_raises(self) -> None:
+        rng = np.random.default_rng(45)
+        y = rng.uniform(0.05, 0.95, 20)
+        m, _ = _simple_fit(n=60)
+        with pytest.raises(ValueError, match="offset must have shape"):
+            m.predict(y, offset_new=np.zeros(5))
+
+    def test_wrong_shape_offset_quantile_raises(self) -> None:
+        m, _ = _simple_fit(n=60)
+        probs = np.array([0.1, 0.5, 0.9])
+        with pytest.raises(ValueError, match="offset must have shape"):
+            m.predict(probs, what="quantile", offset_new=np.zeros(10))
+
+    def test_nonfinite_offset_predict_raises(self) -> None:
+        rng = np.random.default_rng(46)
+        y = rng.uniform(0.05, 0.95, 20)
+        m, _ = _simple_fit(n=60)
+        with pytest.raises(ValueError, match="finite"):
+            m.predict(y, offset_new=np.full(20, np.nan))
+
 
 class TestOffsetFit:
     def test_constant_offset_shifts_theta_b(self) -> None:
@@ -410,6 +444,18 @@ class TestConfbandOffset:
         est1_expected = _norm.cdf(h1)
         np.testing.assert_allclose(band0[:, 0], est0_expected, rtol=1e-10)
         np.testing.assert_allclose(band1[:, 0], est1_expected, rtol=1e-10)
+
+    def test_wrong_shape_offset_confband_raises(self) -> None:
+        m, _ = _simple_fit()
+        g = np.linspace(0.05, 0.95, 20)
+        with pytest.raises(ValueError, match="offset must have shape"):
+            m.confband(g, offset=np.zeros(5))
+
+    def test_nonfinite_offset_confband_raises(self) -> None:
+        m, _ = _simple_fit()
+        g = np.linspace(0.05, 0.95, 20)
+        with pytest.raises(ValueError, match="finite"):
+            m.confband(g, offset=np.full(20, np.inf))
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +561,7 @@ def test_r_weights_parity(
     censoring: CensoringType,
     beta_sign: float,
 ) -> None:
-    """pymlt weighted fit matches R mlt weighted fit to rtol=1e-4."""
+    """Weighted parity with R at both R theta and pymlt's fitted theta."""
     wref = _load_weights_reference(model_name)
     vref = _load_vcov_reference_for_weights(model_name)
     if wref is None or vref is None:
@@ -553,14 +599,45 @@ def test_r_weights_parity(
     sign_vec[p:] = beta_sign
     theta_r = wref["theta"] * sign_vec
 
-    np.testing.assert_allclose(
-        m.theta_,
+    # Exact parity check at R theta (objective and weighted score matrix).
+    ll_at_r_theta = log_likelihood(
         theta_r,
-        rtol=1e-4,
-        atol=1e-5,
-        err_msg=f"{model_name}: fitted theta deviates from R reference",
+        m.basis,
+        y_obj,
+        X=X,
+        censoring=censoring,
+        base_distribution=base_dist,  # type: ignore[arg-type]
+        weights=w,
+    )
+    np.testing.assert_allclose(
+        ll_at_r_theta,
+        wref["ll"],
+        rtol=1e-8,
+        atol=1e-10,
+        err_msg=f"{model_name}: weighted log-likelihood mismatch at R theta",
     )
 
+    scores_at_r_theta = score_matrix(
+        theta_r,
+        m.basis,
+        y_obj,
+        X=X,
+        censoring=censoring,
+        base_distribution=base_dist,  # type: ignore[arg-type]
+        weights=w,
+    )
+    # R estfun convention here is ∂(-ℓ)/∂θ; pymlt score_matrix returns ∂ℓ/∂θ.
+    # BoxCox additionally needs β-sign conversion (negative=TRUE in R).
+    estfun_r_converted = -wref["estfun"] * sign_vec[None, :]
+    np.testing.assert_allclose(
+        scores_at_r_theta,
+        estfun_r_converted,
+        rtol=1e-6,
+        atol=1e-8,
+        err_msg=f"{model_name}: weighted score matrix mismatch at R theta",
+    )
+
+    # Fit-parity check at pymlt's own optimum: objective value should match R.
     np.testing.assert_allclose(
         m.result_.log_likelihood,  # type: ignore[union-attr]
         wref["ll"],
@@ -568,11 +645,22 @@ def test_r_weights_parity(
         err_msg=f"{model_name}: fitted log-likelihood deviates from R reference",
     )
 
-    # Check weighted score sums ≈ 0 at MLE
+    # Constraint-robust score identity at fitted theta:
+    # sum_i estfun_i == grad(ℓ) == -grad(NLL).
     estfun_pymlt = m.estfun()
+    _, grad_nll = negative_log_likelihood(
+        m.theta_,
+        m.basis,
+        y_obj,
+        X=X,
+        censoring=censoring,
+        gradient=True,
+        base_distribution=base_dist,  # type: ignore[arg-type]
+        weights=w,
+    )
     np.testing.assert_allclose(
         estfun_pymlt.sum(axis=0),
-        np.zeros(p + 1),
-        atol=1e-4,
-        err_msg=f"{model_name}: estfun column sums not close to zero at MLE",
+        -grad_nll,
+        atol=1e-10,
+        err_msg=f"{model_name}: estfun column sums must equal -grad(NLL)",
     )

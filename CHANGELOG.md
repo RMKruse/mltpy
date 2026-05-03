@@ -75,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Right-censored quantile prediction now follows R `mlt::qmlt` semantics:
+  quantiles are obtained by inverting a fixed CDF grid (`K=50`) via cubic
+  interpolation, with saturation to grid boundaries when targets fall outside
+  the finite inversion range. This removes Coxph quantile mismatches caused by
+  strict support-bracket root clipping in the previous implementation.
+
 - GitHub Actions workflows are temporarily deactivated while the repository is
   private. Workflow files were moved from `.github/workflows/` to
   `.github/workflows-disabled/`. Move them back to re-enable Actions.

@@ -475,13 +475,54 @@ def _validate_weights_offset(
             raise ValueError("weights must be finite (no NaN or inf).")
         if np.any(weights < 0.0):
             raise ValueError("weights must be non-negative.")
+        if not np.any(weights > 0.0):
+            raise ValueError(
+                "weights must have at least one positive entry; "
+                "all-zero weights provide no information."
+            )
     if offset is not None:
-        offset = np.asarray(offset, dtype=np.float64)
-        if offset.shape != (n,):
-            raise ValueError(f"offset must have shape ({n},), got {offset.shape}.")
-        if not np.all(np.isfinite(offset)):
-            raise ValueError("offset must be finite (no NaN or inf).")
+        offset = _validate_offset(offset, n)
     return weights, offset
+
+
+def _validate_offset(
+    offset: NDArray[np.float64],
+    n: int,
+) -> NDArray[np.float64]:
+    """Validate and coerce a per-observation offset array.
+
+    Parameters
+    ----------
+    offset:
+        Array to validate.  Must have shape ``(n,)`` and be finite.
+    n:
+        Expected length.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        Validated, float64-cast array of shape ``(n,)``.
+
+    Raises
+    ------
+    ValueError
+        If ``offset`` has the wrong shape or contains non-finite values.
+    """
+    offset = np.asarray(offset, dtype=np.float64)
+    if offset.shape != (n,):
+        raise ValueError(f"offset must have shape ({n},), got {offset.shape}.")
+    if not np.all(np.isfinite(offset)):
+        raise ValueError("offset must be finite (no NaN or inf).")
+    return offset
+
+
+def _inverse_hp(
+    hp: NDArray[np.float64], weights: NDArray[np.float64] | None
+) -> NDArray[np.float64]:
+    """Return ``1 / hp`` (or ``weights / hp``) while silencing divide warnings."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = (1.0 / hp) if weights is None else (weights / hp)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +789,7 @@ def _grad_none(
     ns = _neg_score(h, dist)  # -(∂ log f(h)/∂h)
     # weighted: wns = w * ns; ihp = w / hp
     wns = ns if weights is None else weights * ns
-    ihp = (1.0 / hp) if weights is None else (weights / hp)
+    ihp = _inverse_hp(hp, weights)
     grad_b = B.T @ wns - D.T @ ihp
 
     if X is not None and beta is not None:
@@ -786,7 +827,7 @@ def _grad_right(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
             grad[p:] += X_e.T @ wns
@@ -843,7 +884,7 @@ def _grad_left(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
             grad[p:] += X_e.T @ wns
@@ -900,7 +941,7 @@ def _grad_interval(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         grad[:p] += B_e.T @ wns - D_e.T @ ihp
         if X_e is not None:
             grad[p:] += X_e.T @ wns
@@ -975,7 +1016,7 @@ def _ll_and_grad_none(
 
     ns = _neg_score(h, dist)
     wns = ns if weights is None else weights * ns
-    ihp = (1.0 / hp) if weights is None else (weights / hp)
+    ihp = _inverse_hp(hp, weights)
     with np.errstate(invalid="ignore", divide="ignore"):
         if weights is not None:
             ll = np.dot(weights, dist.logpdf(h) + np.log(hp))
@@ -1020,7 +1061,7 @@ def _ll_and_grad_right(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
             if w_e is not None:
                 ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
@@ -1087,7 +1128,7 @@ def _ll_and_grad_left(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
             if w_e is not None:
                 ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
@@ -1154,7 +1195,7 @@ def _ll_and_grad_interval(
         hp_e = D_e @ theta_b
         ns = _neg_score(h_e, dist)
         wns = ns if w_e is None else w_e * ns
-        ihp = (1.0 / hp_e) if w_e is None else (w_e / hp_e)
+        ihp = _inverse_hp(hp_e, w_e)
         with np.errstate(invalid="ignore", divide="ignore"):
             if w_e is not None:
                 ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
