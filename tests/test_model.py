@@ -1384,3 +1384,213 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
     if name == "exponential":
         # Feasibility: theta_b[0] >= 0 ensures h(y) >= 0 across support
         assert model.theta_[0] >= -1e-6
+
+
+# ---------------------------------------------------------------------------
+# residuals()
+# ---------------------------------------------------------------------------
+
+
+def _refit_at_r_theta(model, theta_R, beta_sign):
+    """Inject R's theta (with sign-flipped beta block if needed) into a fitted
+    pymlt model so residuals() evaluates at R's MLE rather than pymlt's.
+
+    Mirrors the convention used in tests/test_vcov.py — tram::BoxCox uses
+    ``negative = TRUE`` (β sign flipped), Colr / Coxph match pymlt directly.
+    """
+    p = model.basis.order + 1
+    theta_pymlt = theta_R.copy()
+    if beta_sign != 1.0 and len(theta_pymlt) > p:
+        theta_pymlt[p:] *= beta_sign
+    model.theta_ = theta_pymlt
+    return model
+
+
+class TestResidualsRReference:
+    """Element-wise parity with ``mlt::residuals`` for the canonical fits."""
+
+    def _load(self, model: str):
+        required = [
+            REF_DIR / f"vcov_{model}_y.txt",
+            REF_DIR / f"vcov_{model}_x.txt",
+            REF_DIR / f"vcov_{model}_support.txt",
+            REF_DIR / f"vcov_{model}_theta.txt",
+            REF_DIR / f"residuals_{model}_score.txt",
+            REF_DIR / f"residuals_{model}_coxsnell.txt",
+            REF_DIR / f"residuals_{model}_deviance.txt",
+        ]
+        if not all(p.exists() for p in required):
+            pytest.skip(
+                f"residuals_{model}_* reference files not yet generated — "
+                "run Rscript reference/generate_reference.R"
+            )
+        data = {
+            "y": np.loadtxt(required[0]),
+            "x": np.loadtxt(required[1]).reshape(-1, 1),
+            "support": tuple(np.loadtxt(required[2])),
+            "theta": np.loadtxt(required[3]),
+            "score": np.loadtxt(required[4]),
+            "coxsnell": np.loadtxt(required[5]),
+            "deviance": np.loadtxt(required[6]),
+        }
+        event_path = REF_DIR / f"vcov_{model}_event.txt"
+        if event_path.exists():
+            data["event"] = np.loadtxt(event_path).astype(int)
+        return data
+
+    def _fit_and_inject(self, model_cls, ref, beta_sign, censoring=None):
+        if "event" in ref:
+            cd = CensoredData.right_censored(ref["y"], censored=ref["event"] == 0)
+            y_obj: np.ndarray | CensoredData = cd
+        else:
+            y_obj = ref["y"]
+        order = len(ref["theta"]) - ref["x"].shape[1] - 1
+        m = model_cls(order=order, support=ref["support"]).fit(y_obj, X=ref["x"])
+        return _refit_at_r_theta(m, ref["theta"], beta_sign)
+
+    def test_boxcox(self):
+        from pymlt.tram import BoxCox
+
+        ref = self._load("boxcox")
+        m = self._fit_and_inject(BoxCox, ref, beta_sign=-1.0)
+        np.testing.assert_allclose(
+            m.residuals("score"), ref["score"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("cox-snell"), ref["coxsnell"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("deviance"), ref["deviance"], rtol=1e-6, atol=1e-10
+        )
+
+    def test_colr(self):
+        from pymlt.tram import Colr
+
+        ref = self._load("colr")
+        m = self._fit_and_inject(Colr, ref, beta_sign=+1.0)
+        np.testing.assert_allclose(
+            m.residuals("score"), ref["score"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("cox-snell"), ref["coxsnell"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("deviance"), ref["deviance"], rtol=1e-6, atol=1e-10
+        )
+
+    def test_coxph(self):
+        from pymlt.tram import Coxph
+
+        ref = self._load("coxph")
+        m = self._fit_and_inject(Coxph, ref, beta_sign=+1.0)
+        np.testing.assert_allclose(
+            m.residuals("score"), ref["score"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("cox-snell"), ref["coxsnell"], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(
+            m.residuals("deviance"), ref["deviance"], rtol=1e-6, atol=1e-10
+        )
+
+
+class TestResidualsProperties:
+    def test_score_residuals_sum_to_zero_at_mle_uncensored(self):
+        """Score equation: sum of intercept-score residuals at the MLE is 0."""
+        rng = np.random.default_rng(0)
+        y = rng.normal(0, 1, 200)
+        from pymlt.tram import BoxCox
+
+        m = BoxCox(support=(float(y.min() - 0.1), float(y.max() + 0.1)), order=4).fit(y)
+        # Sum of intercept-score residuals == ∂(-ℓ)/∂α at the MLE; bounded by
+        # the optimiser's gradient tolerance (~1e-4 by default).
+        assert abs(m.residuals("score").sum()) < 1e-3
+
+    def test_cox_snell_mean_near_one_under_correct_model(self):
+        """Cox-Snell residuals ~ Exp(1) under a correctly specified model."""
+        rng = np.random.default_rng(1)
+        y = rng.normal(0, 1, 1000)
+        from pymlt.tram import BoxCox
+
+        m = BoxCox(support=(float(y.min() - 0.1), float(y.max() + 0.1)), order=6).fit(y)
+        r = m.residuals("cox-snell")
+        # Exp(1) has mean 1, var 1.  Sample SE of mean ≈ 1/sqrt(n) ≈ 0.032.
+        assert abs(r.mean() - 1.0) < 0.1
+        assert (r > 0).all()
+
+    def test_residuals_shape_matches_n_obs(self):
+        rng = np.random.default_rng(2)
+        y = rng.uniform(0.1, 0.9, 50)
+        m = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        for kind in ("score", "cox-snell", "deviance"):
+            assert m.residuals(kind).shape == (m.n_obs_,)
+
+    def test_residuals_with_right_censoring_runs(self):
+        """Right-censored fits produce length-n vectors with sane signs."""
+        from pymlt.tram import Coxph
+
+        rng = np.random.default_rng(3)
+        n = 80
+        y = np.abs(rng.normal(1.5, 0.5, n)) + 0.1
+        event = rng.random(n) > 0.3
+        cd = CensoredData.right_censored(y, censored=~event)
+        m = Coxph(order=4, support=(0.0, float(y.max() + 0.5))).fit(cd)
+        r_score = m.residuals("score")
+        r_cs = m.residuals("cox-snell")
+        assert r_score.shape == (n,)
+        assert r_cs.shape == (n,)
+        # Cox-Snell residuals are -log S, always > 0 for finite S < 1.
+        assert (r_cs > 0).all()
+
+
+class TestResidualsErrors:
+    def test_unfitted_raises(self):
+        m = make_ctm()
+        with pytest.raises(NotFittedError):
+            m.residuals()
+
+    def test_invalid_type_raises(self):
+        rng = np.random.default_rng(0)
+        y = rng.uniform(0.1, 0.9, 30)
+        m = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        with pytest.raises(ValueError, match="invalid"):
+            m.residuals(type="bogus")  # type: ignore[arg-type]
+
+    def test_default_type_is_score(self):
+        rng = np.random.default_rng(0)
+        y = rng.uniform(0.1, 0.9, 30)
+        m = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        np.testing.assert_array_equal(m.residuals(), m.residuals("score"))
+
+    def test_training_data_isolated_from_caller_mutation(self):
+        """Mutating y after fit() must not change residuals()."""
+        rng = np.random.default_rng(7)
+        y = rng.uniform(0.1, 0.9, 40)
+        m = MLT(order=3, support=(0.0, 1.0)).fit(y)
+        r_before = m.residuals("cox-snell").copy()
+        y[:] = 0.0
+        np.testing.assert_array_equal(m.residuals("cox-snell"), r_before)
+
+
+class TestResidualsIntervalCensoring:
+    """Interval-censored model exercises the _log_diff_ndtr Taylor branch."""
+
+    def test_narrow_interval_runs(self):
+        rng = np.random.default_rng(11)
+        n = 60
+        y = rng.uniform(0.1, 0.9, n)
+        # Very narrow intervals trigger the Taylor fallback in _log_diff_ndtr
+        cd = CensoredData(
+            lower=y - 1e-7,
+            upper=y + 1e-7,
+            exact=np.full(n, np.nan),
+        )
+        m = ConditionalTransformationModel(
+            BernsteinBasis(order=4, support=(0.0, 1.0)),
+            censoring=CensoringType.INTERVAL,
+        ).fit(cd)
+        r_score = m.residuals("score")
+        r_cs = m.residuals("cox-snell")
+        assert r_score.shape == (n,)
+        assert np.all(np.isfinite(r_score))
+        assert np.all(np.isfinite(r_cs))
