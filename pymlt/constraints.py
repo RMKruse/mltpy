@@ -44,9 +44,12 @@ class MonotonicityConstraint:
     _D: NDArray[np.float64] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.n_params < 2:
-            raise ValueError(f"n_params must be >= 2, got {self.n_params}")
-        # Computed once — Jacobian is constant (linear constraint).
+        if self.n_params < 1:
+            raise ValueError(f"n_params must be >= 1, got {self.n_params}")
+        # Computed once — Jacobian is constant (linear constraint).  When
+        # n_params == 1 (e.g. K=2 ordinal model) this is a (0, 1) array and
+        # ``D @ theta`` is the empty constraint vector — the monotonicity
+        # condition is vacuous and SLSQP/trust-constr accept zero-row blocks.
         self._D = np.diff(np.eye(self.n_params), axis=0)
 
     # ------------------------------------------------------------------

@@ -288,9 +288,11 @@ def _log_diff_ndtr(
 
     # Narrow-interval fallback: F(b)-F(a) ≈ f(mid)·(b−a).
     # Zero-width intervals (a == b) give true probability 0 → log = -inf.
+    # Tiny negative widths can arise transiently when both bounds clip to
+    # ±_H_CLIP and round in opposite directions — mask out the invalid log.
     mid = 0.5 * (a + b)
     width = b - a
-    with np.errstate(divide="ignore"):
+    with np.errstate(divide="ignore", invalid="ignore"):
         log_width = np.log(width)
     narrow = dist.logpdf(mid) + log_width
 
@@ -736,25 +738,53 @@ def _ll_interval(
         else:
             ll += np.sum(per_obs_e)
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        log_p_i = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        if w_i is not None:
-            ll += np.dot(w_i, log_p_i)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        # Sub-masks within mask_c (relative to its compacted index space):
+        # both finite → true interval; only-hi finite → left-open
+        # (lower=-∞); only-lo finite → right-open (upper=+∞).
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
+
+        log_p = np.zeros(mask_c.sum(), dtype=np.float64)
+
+        def _h_at(
+            sub_mask: NDArray[np.bool_],
+            y_vals: NDArray[np.float64],
+        ) -> NDArray[np.float64]:
+            B_sub = basis.evaluate(y_vals)
+            X_sub = X_c[sub_mask] if X_c is not None else None
+            shift_sub = (
+                (X_sub @ beta) if (X_sub is not None and beta is not None) else 0.0
+            )
+            if o_c is not None:
+                shift_sub = shift_sub + o_c[sub_mask]
+            return np.clip(B_sub @ theta_b + shift_sub, -_H_CLIP, _H_CLIP)
+
+        if both.any():
+            h_lo_b = _h_at(both, lo[both])
+            h_hi_b = _h_at(both, hi[both])
+            log_p[both] = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+        if only_hi.any():
+            h_hi_o = _h_at(only_hi, hi[only_hi])
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            log_p[only_hi] = _logcdf(h_hi_o)
+        if only_lo.any():
+            h_lo_o = _h_at(only_lo, lo[only_lo])
+            log_p[only_lo] = dist.logsf(h_lo_o)
+
+        if w_c is not None:
+            ll += np.dot(w_c, log_p)
         else:
-            ll += np.sum(log_p_i)
+            ll += np.sum(log_p)
 
     return ll
 
@@ -946,41 +976,76 @@ def _grad_interval(
         if X_e is not None:
             grad[p:] += X_e.T @ wns
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
 
-        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        # When interval probability ≈ 0, log_p = -inf and the subtraction
-        # produces +inf before exp, raising overflow/invalid warnings.  Suppress
-        # them here; nan_to_num zeros the resulting inf/NaN so they never affect
-        # the gradient.
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+        if both.any():
+            B_lo_b = basis.evaluate(lo[both])
+            B_hi_b = basis.evaluate(hi[both])
+            X_b = X_c[both] if X_c is not None else None
+            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_b = shift_b + o_c[both]
+            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
+                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
+            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            if w_c is not None:
+                ww = w_c[both]
+                w_hi_b = ww * w_hi_b
+                w_lo_b = ww * w_lo_b
+            with np.errstate(invalid="ignore"):
+                grad[:p] -= B_hi_b.T @ w_hi_b - B_lo_b.T @ w_lo_b
+                if X_b is not None:
+                    grad[p:] -= X_b.T @ (w_hi_b - w_lo_b)
 
-        # Apply observation weights
-        if w_i is not None:
-            w_hi = w_i * w_hi
-            w_lo = w_i * w_lo
+        if only_hi.any():
+            # Left-open row: lower=-∞, upper=h_hi.  Same form as _grad_left.
+            B_hi_o = basis.evaluate(hi[only_hi])
+            X_o = X_c[only_hi] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_hi]
+            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            inv_mills = np.exp(
+                np.minimum(dist.logpdf(h_hi_o) - _logcdf(h_hi_o), _LOG_FLOAT_MAX)
+            )
+            if w_c is not None:
+                inv_mills = w_c[only_hi] * inv_mills
+            grad[:p] -= B_hi_o.T @ inv_mills
+            if X_o is not None:
+                grad[p:] -= X_o.T @ inv_mills
 
-        with np.errstate(invalid="ignore"):
-            grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
-            if X_i is not None:
-                grad[p:] -= X_i.T @ (w_hi - w_lo)
+        if only_lo.any():
+            # Right-open row: lower=h_lo, upper=+∞.  Same form as _grad_right.
+            B_lo_o = basis.evaluate(lo[only_lo])
+            X_o = X_c[only_lo] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_lo]
+            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            log_hazard = dist.logpdf(h_lo_o) - dist.logsf(h_lo_o)
+            hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            if w_c is not None:
+                hazard = w_c[only_lo] * hazard
+            grad[:p] += B_lo_o.T @ hazard
+            if X_o is not None:
+                grad[p:] += X_o.T @ hazard
 
     return cast(NDArray[np.float64], grad)
 
@@ -1205,40 +1270,88 @@ def _ll_and_grad_interval(
         if X_e is not None:
             grad[p:] += X_e.T @ wns
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
 
-        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        if w_i is not None:
-            ll += np.dot(w_i, log_p)
-        else:
-            ll += np.sum(log_p)
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+        if both.any():
+            B_lo_b = basis.evaluate(lo[both])
+            B_hi_b = basis.evaluate(hi[both])
+            X_b = X_c[both] if X_c is not None else None
+            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_b = shift_b + o_c[both]
+            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+            ww_b = w_c[both] if w_c is not None else None
+            if ww_b is not None:
+                ll += np.dot(ww_b, log_p_b)
+            else:
+                ll += np.sum(log_p_b)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
+                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
+            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            if ww_b is not None:
+                w_hi_b = ww_b * w_hi_b
+                w_lo_b = ww_b * w_lo_b
+            with np.errstate(invalid="ignore"):
+                grad[:p] -= B_hi_b.T @ w_hi_b - B_lo_b.T @ w_lo_b
+                if X_b is not None:
+                    grad[p:] -= X_b.T @ (w_hi_b - w_lo_b)
 
-        if w_i is not None:
-            w_hi = w_i * w_hi
-            w_lo = w_i * w_lo
+        if only_hi.any():
+            B_hi_o = basis.evaluate(hi[only_hi])
+            X_o = X_c[only_hi] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_hi]
+            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            log_Fc = _logcdf(h_hi_o)
+            ww_o = w_c[only_hi] if w_c is not None else None
+            if ww_o is not None:
+                ll += np.dot(ww_o, log_Fc)
+            else:
+                ll += np.sum(log_Fc)
+            inv_mills = np.exp(np.minimum(dist.logpdf(h_hi_o) - log_Fc, _LOG_FLOAT_MAX))
+            if ww_o is not None:
+                inv_mills = ww_o * inv_mills
+            grad[:p] -= B_hi_o.T @ inv_mills
+            if X_o is not None:
+                grad[p:] -= X_o.T @ inv_mills
 
-        with np.errstate(invalid="ignore"):
-            grad[:p] -= B_hi.T @ w_hi - B_lo.T @ w_lo
-            if X_i is not None:
-                grad[p:] -= X_i.T @ (w_hi - w_lo)
+        if only_lo.any():
+            B_lo_o = basis.evaluate(lo[only_lo])
+            X_o = X_c[only_lo] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_lo]
+            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            logsf_o = dist.logsf(h_lo_o)
+            ww_o = w_c[only_lo] if w_c is not None else None
+            if ww_o is not None:
+                ll += np.dot(ww_o, logsf_o)
+            else:
+                ll += np.sum(logsf_o)
+            log_hazard = dist.logpdf(h_lo_o) - logsf_o
+            hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            if ww_o is not None:
+                hazard = ww_o * hazard
+            grad[:p] += B_lo_o.T @ hazard
+            if X_o is not None:
+                grad[p:] += X_o.T @ hazard
 
     return ll, cast(NDArray[np.float64], grad)
 
@@ -1410,36 +1523,80 @@ def _scores_interval(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e
         )
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        # Indices into the full row space for each sub-mask, computed via a
+        # cumulative offset from mask_c so we can write back into scores at
+        # the original row positions.
+        idx_c = np.flatnonzero(mask_c)
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
 
-        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+        if both.any():
+            rows = idx_c[both]
+            B_lo_b = basis.evaluate(lo[both])
+            B_hi_b = basis.evaluate(hi[both])
+            X_b = X_c[both] if X_c is not None else None
+            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_b = shift_b + o_c[both]
+            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
+                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
+            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            if w_c is not None:
+                ww = w_c[both]
+                w_hi_b = ww * w_hi_b
+                w_lo_b = ww * w_lo_b
+            scores[rows, :p] = B_hi_b * w_hi_b[:, None] - B_lo_b * w_lo_b[:, None]
+            if X_b is not None:
+                scores[rows, p:] = X_b * (w_hi_b - w_lo_b)[:, None]
 
-        if w_i is not None:
-            w_hi = w_i * w_hi
-            w_lo = w_i * w_lo
+        if only_hi.any():
+            rows = idx_c[only_hi]
+            B_hi_o = basis.evaluate(hi[only_hi])
+            X_o = X_c[only_hi] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_hi]
+            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            inv_mills = np.exp(
+                np.minimum(dist.logpdf(h_hi_o) - _logcdf(h_hi_o), _LOG_FLOAT_MAX)
+            )
+            if w_c is not None:
+                inv_mills = w_c[only_hi] * inv_mills
+            scores[rows, :p] = B_hi_o * inv_mills[:, None]
+            if X_o is not None:
+                scores[rows, p:] = X_o * inv_mills[:, None]
 
-        # ∂ℓ_i/∂θ_b = B_hi_i · w_hi - B_lo_i · w_lo
-        scores[mask_i, :p] = B_hi * w_hi[:, None] - B_lo * w_lo[:, None]
-        if X_i is not None:
-            scores[mask_i, p:] = X_i * (w_hi - w_lo)[:, None]
+        if only_lo.any():
+            rows = idx_c[only_lo]
+            B_lo_o = basis.evaluate(lo[only_lo])
+            X_o = X_c[only_lo] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_lo]
+            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            log_hazard = dist.logpdf(h_lo_o) - dist.logsf(h_lo_o)
+            hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            if w_c is not None:
+                hazard = w_c[only_lo] * hazard
+            scores[rows, :p] = -B_lo_o * hazard[:, None]
+            if X_o is not None:
+                scores[rows, p:] = -X_o * hazard[:, None]
 
     return scores
 
@@ -1655,71 +1812,101 @@ def _hess_interval(
         o_e = offset[mask_e] if offset is not None else None
         H += _hess_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+    def _outer(
+        U: NDArray[np.float64],
+        Xu: NDArray[np.float64] | None,
+        V: NDArray[np.float64],
+        Xv: NDArray[np.float64] | None,
+        w_vec: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Compute ``U^T diag(w_vec) V`` split into a ``(p+q, p+q)`` block."""
+        Uw = U * w_vec[:, None]
+        out = np.zeros((p + q, p + q), dtype=np.float64)
+        out[:p, :p] = Uw.T @ V
+        if Xu is not None and Xv is not None and q > 0:
+            out[:p, p:] = Uw.T @ Xv
+            out[p:, :p] = (Xu * w_vec[:, None]).T @ V
+            out[p:, p:] = (Xu * w_vec[:, None]).T @ Xv
+        return out
 
-        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
 
-        psi_lo = -_neg_score(h_lo, dist)
-        psi_hi = -_neg_score(h_hi, dist)
+        if both.any():
+            B_lo_b = basis.evaluate(lo[both])
+            B_hi_b = basis.evaluate(hi[both])
+            X_b = X_c[both] if X_c is not None else None
+            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_b = shift_b + o_c[both]
+            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
+                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
+            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Entries of the 2x2 Hessian of log p (per obs, same for ℓ and -ℓ sign
-        # flipped below).
-        a = -psi_lo * w_lo - w_lo * w_lo  # ∂²log p/∂h_l²
-        c = psi_hi * w_hi - w_hi * w_hi  # ∂²log p/∂h_u²
-        b = w_hi * w_lo  # ∂²log p/∂h_l ∂h_u
+            psi_lo = -_neg_score(h_lo_b, dist)
+            psi_hi = -_neg_score(h_hi_b, dist)
+            a = -psi_lo * w_lo_b - w_lo_b * w_lo_b
+            c = psi_hi * w_hi_b - w_hi_b * w_hi_b
+            b = w_hi_b * w_lo_b
+            if w_c is not None:
+                ww = w_c[both]
+                a = ww * a
+                b = ww * b
+                c = ww * c
+            block = (
+                _outer(B_lo_b, X_b, B_lo_b, X_b, a)
+                + _outer(B_lo_b, X_b, B_hi_b, X_b, b)
+                + _outer(B_hi_b, X_b, B_lo_b, X_b, b)
+                + _outer(B_hi_b, X_b, B_hi_b, X_b, c)
+            )
+            H -= block  # NLL = -ℓ
 
-        # Apply observation weights to a, b, c
-        if w_i is not None:
-            a = w_i * a
-            b = w_i * b
-            c = w_i * c
+        if only_hi.any():
+            # Left-open: same Hessian form as _hess_left at h_hi.
+            B_hi_o = basis.evaluate(hi[only_hi])
+            X_o = X_c[only_hi] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_hi]
+            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            mu = np.exp(dist.logpdf(h_hi_o) - _logcdf(h_hi_o))
+            psi = -_neg_score(h_hi_o, dist)
+            w_block = mu * (mu - psi)
+            if w_c is not None:
+                w_block = w_c[only_hi] * w_block
+            H += _assemble_hessian(B_hi_o, w_block, X_o, p, q)
 
-        # NLL contribution = - (chain through J):
-        #   -[ J_l^T diag(a) J_l + J_l^T diag(b) J_u + J_u^T diag(b) J_l
-        #      + J_u^T diag(c) J_u ]
-        # where J_l = [B_lo, X_i], J_u = [B_hi, X_i].
-        def _outer(
-            U: NDArray[np.float64],
-            Xu: NDArray[np.float64] | None,
-            V: NDArray[np.float64],
-            Xv: NDArray[np.float64] | None,
-            w_vec: NDArray[np.float64],
-        ) -> NDArray[np.float64]:
-            """Compute U^T diag(w_vec) V split into (p+q, p+q) block."""
-            Uw = U * w_vec[:, None]
-            out = np.zeros((p + q, p + q), dtype=np.float64)
-            out[:p, :p] = Uw.T @ V
-            if Xu is not None and Xv is not None and q > 0:
-                out[:p, p:] = Uw.T @ Xv
-                out[p:, :p] = (Xu * w_vec[:, None]).T @ V
-                out[p:, p:] = (Xu * w_vec[:, None]).T @ Xv
-            return out
-
-        block = (
-            _outer(B_lo, X_i, B_lo, X_i, a)
-            + _outer(B_lo, X_i, B_hi, X_i, b)
-            + _outer(B_hi, X_i, B_lo, X_i, b)
-            + _outer(B_hi, X_i, B_hi, X_i, c)
-        )
-        H -= block  # NLL = -ℓ
+        if only_lo.any():
+            # Right-open: same Hessian form as _hess_right at h_lo.
+            B_lo_o = basis.evaluate(lo[only_lo])
+            X_o = X_c[only_lo] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_lo]
+            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            log_hazard = dist.logpdf(h_lo_o) - dist.logsf(h_lo_o)
+            lam = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            psi = -_neg_score(h_lo_o, dist)
+            w_block = lam * (psi + lam)
+            if w_c is not None:
+                w_block = w_c[only_lo] * w_block
+            H += _assemble_hessian(B_lo_o, w_block, X_o, p, q)
 
     return H
 
@@ -2283,30 +2470,68 @@ def _intercept_score_interval(
             cd.exact[mask_e], theta_b, basis, X_e, beta, dist, weights=w_e, offset=o_e
         )
 
-    mask_i = cd.is_interval_censored_mask
-    if mask_i.any():
-        lo = cd.lower[mask_i]
-        hi = cd.upper[mask_i]
-        X_i = X[mask_i] if X is not None else None
-        w_i = weights[mask_i] if weights is not None else None
-        o_i = offset[mask_i] if offset is not None else None
-        B_lo = basis.evaluate(lo)
-        B_hi = basis.evaluate(hi)
-        shift = (X_i @ beta) if (X_i is not None and beta is not None) else 0.0
-        if o_i is not None:
-            shift = shift + o_i
-        h_lo = np.clip(B_lo @ theta_b + shift, -_H_CLIP, _H_CLIP)
-        h_hi = np.clip(B_hi @ theta_b + shift, -_H_CLIP, _H_CLIP)
+    mask_c = ~cd.is_exact_mask
+    if mask_c.any():
+        idx_c = np.flatnonzero(mask_c)
+        lo = cd.lower[mask_c]
+        hi = cd.upper[mask_c]
+        X_c = X[mask_c] if X is not None else None
+        w_c = weights[mask_c] if weights is not None else None
+        o_c = offset[mask_c] if offset is not None else None
+        fin_lo = np.isfinite(lo)
+        fin_hi = np.isfinite(hi)
+        both = fin_lo & fin_hi
+        only_hi = ~fin_lo & fin_hi
+        only_lo = fin_lo & ~fin_hi
 
-        log_p = _log_diff_ndtr(h_lo, h_hi, dist=dist)
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi = np.exp(dist.logpdf(h_hi) - log_p)
-            w_lo = np.exp(dist.logpdf(h_lo) - log_p)
-        w_hi = np.nan_to_num(w_hi, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo = np.nan_to_num(w_lo, nan=0.0, posinf=0.0, neginf=0.0)
-        vals = w_hi - w_lo
-        if w_i is not None:
-            vals = w_i * vals
-        out[mask_i] = vals
+        if both.any():
+            rows = idx_c[both]
+            B_lo_b = basis.evaluate(lo[both])
+            B_hi_b = basis.evaluate(hi[both])
+            X_b = X_c[both] if X_c is not None else None
+            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_b = shift_b + o_c[both]
+            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
+            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
+                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
+            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            vals = w_hi_b - w_lo_b
+            if w_c is not None:
+                vals = w_c[both] * vals
+            out[rows] = vals
+
+        if only_hi.any():
+            rows = idx_c[only_hi]
+            B_hi_o = basis.evaluate(hi[only_hi])
+            X_o = X_c[only_hi] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_hi]
+            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            log_inv_mills = dist.logpdf(h_hi_o) - _logcdf(h_hi_o)
+            vals = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
+            if w_c is not None:
+                vals = w_c[only_hi] * vals
+            out[rows] = vals
+
+        if only_lo.any():
+            rows = idx_c[only_lo]
+            B_lo_o = basis.evaluate(lo[only_lo])
+            X_o = X_c[only_lo] if X_c is not None else None
+            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
+            if o_c is not None:
+                shift_o = shift_o + o_c[only_lo]
+            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            log_hazard = dist.logpdf(h_lo_o) - dist.logsf(h_lo_o)
+            vals = -np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            if w_c is not None:
+                vals = w_c[only_lo] * vals
+            out[rows] = vals
 
     return out

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -181,3 +182,186 @@ class CensoredData:
     @property
     def n_censored(self) -> int:
         return self.n - self.n_exact
+
+
+# ---------------------------------------------------------------------------
+# Ordered categorical response
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OrderedVariable:
+    """Ordered categorical response with K levels and K-1 transformation cutpoints.
+
+    Used by :class:`pymlt.tram.Polr` (proportional-odds ordinal regression).
+    A level-``k`` observation (``1 <= k <= K``) is mapped to interval-censored
+    bounds on a synthetic integer cut scale::
+
+        level 1   → (-∞, 1]
+        level k   → (k-1, k]      for 1 < k < K
+        level K   → (K-1, +∞)
+
+    Combined with :class:`pymlt.basis.OrdinalBasis`, the cut position ``k``
+    selects one of ``K-1`` Bernstein-like coefficients ``θ_k`` so that
+    ``h(y_k) = θ_k`` exactly.
+
+    Parameters
+    ----------
+    levels:
+        Tuple of ordered category labels (any hashable values).  Must contain
+        at least two distinct levels.
+    """
+
+    levels: tuple[Any, ...] = field()
+
+    def __post_init__(self) -> None:
+        self.levels = tuple(self.levels)
+        if len(self.levels) < 2:
+            raise ValueError(
+                f"OrderedVariable requires at least 2 levels, got {len(self.levels)}"
+            )
+        if len(set(self.levels)) != len(self.levels):
+            raise ValueError(
+                f"OrderedVariable levels must be unique, got {self.levels}"
+            )
+        # Build a label → 1-based index lookup (1..K) for fast encoding.
+        self._label_to_code = {label: i + 1 for i, label in enumerate(self.levels)}
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def K(self) -> int:  # noqa: N802 — match standard ordinal-regression notation
+        """Number of levels."""
+        return len(self.levels)
+
+    # ------------------------------------------------------------------
+    # Constructors / conversions
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_labels(
+        cls,
+        y: Sequence[Any] | NDArray[Any],
+        levels: Sequence[Any] | None = None,
+    ) -> tuple[OrderedVariable, CensoredData]:
+        """Coerce raw observations into ``(OrderedVariable, CensoredData)``.
+
+        Level inference order:
+
+        1. If ``levels`` is given explicitly, use it.
+        2. Else if ``y`` is a pandas ordered Categorical, use ``y.cat.categories``.
+        3. Else: sorted unique values (deterministic ordering).
+
+        Validates that every observation lies in the resolved level set.
+
+        Parameters
+        ----------
+        y:
+            Length-n sequence of category labels (any hashable type).
+        levels:
+            Optional ordered tuple of all valid labels.  Overrides automatic
+            inference.
+
+        Returns
+        -------
+        (variable, censored_data)
+            ``variable`` carries the level vocabulary; ``censored_data`` has
+            one row per observation with synthetic integer-cut bounds suitable
+            for :class:`~pymlt.basis.OrdinalBasis` and the interval-censored
+            likelihood path.
+
+        Raises
+        ------
+        ValueError
+            If ``levels`` is empty or not unique, or if any observation in
+            ``y`` is missing from the resolved level set.
+        """
+        # Resolve the ordered level vocabulary.  Look for pandas Categorical
+        # (object exposes ``categories``) directly, or a pandas Series with
+        # a ``.cat`` accessor.  Fall back to sorted unique values otherwise.
+        if levels is not None:
+            resolved_levels = tuple(levels)
+        else:
+            categories = None
+            cat = getattr(y, "cat", None)
+            if cat is not None and hasattr(cat, "categories"):
+                categories = cat.categories
+            elif hasattr(y, "categories"):
+                categories = y.categories
+            if categories is not None:
+                resolved_levels = tuple(categories)
+            else:
+                arr = np.asarray(y)
+                resolved_levels = tuple(np.unique(arr).tolist())
+
+        variable = cls(levels=resolved_levels)
+        codes = variable.encode(y)
+        K = variable.K
+        n = codes.shape[0]
+        lower = np.where(codes == 1, -np.inf, codes.astype(np.float64) - 1.0)
+        upper = np.where(codes == K, np.inf, codes.astype(np.float64))
+        cd = CensoredData(exact=np.full(n, np.nan), lower=lower, upper=upper)
+        return variable, cd
+
+    def encode(self, y: Sequence[Any] | NDArray[Any]) -> NDArray[np.intp]:
+        """Map labels to 1-based integer codes ``1..K``.
+
+        Parameters
+        ----------
+        y:
+            Sequence of category labels.
+
+        Returns
+        -------
+        NDArray[np.intp]
+            Integer codes of shape ``(n,)``.
+
+        Raises
+        ------
+        ValueError
+            If any label is not in :attr:`levels`.
+        """
+        # Pandas Series / Categorical: list() preserves the labels rather
+        # than the underlying integer codes that ``np.asarray`` would expose.
+        if hasattr(y, "cat") or hasattr(y, "categories"):
+            y = list(y)
+        arr = np.asarray(y)
+        codes = np.empty(arr.shape[0], dtype=np.intp)
+        for i, label in enumerate(arr.tolist()):
+            try:
+                codes[i] = self._label_to_code[label]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Observation {label!r} at position {i} is not in the "
+                    f"OrderedVariable levels {self.levels!r}."
+                ) from exc
+        return codes
+
+    def decode(self, codes: NDArray[np.intp]) -> NDArray[Any]:
+        """Inverse of :meth:`encode` — map ``1..K`` codes back to labels.
+
+        Parameters
+        ----------
+        codes:
+            Integer codes of shape ``(n,)`` with values in ``{1, ..., K}``.
+
+        Returns
+        -------
+        NDArray
+            Labels in their original dtype (object array for non-numeric).
+
+        Raises
+        ------
+        ValueError
+            If any code is outside the valid range.
+        """
+        codes_arr = np.asarray(codes, dtype=np.intp)
+        if codes_arr.size and (codes_arr.min() < 1 or codes_arr.max() > self.K):
+            raise ValueError(
+                f"Codes must be in [1, {self.K}], got "
+                f"min={int(codes_arr.min())}, max={int(codes_arr.max())}."
+            )
+        labels = np.array(self.levels, dtype=object)
+        return labels[codes_arr - 1]
