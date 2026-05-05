@@ -293,8 +293,24 @@ class OrderedVariable:
             if categories is not None:
                 resolved_levels = tuple(categories)
             else:
-                arr = np.asarray(y)
-                resolved_levels = tuple(np.unique(arr).tolist())
+                # Avoid np.asarray inference, which coerces mixed types to a
+                # common string dtype (e.g. [1, "a"] -> ["1", "a"]) and
+                # silently corrupts integer / boolean labels.  Materialise as
+                # a Python list of original objects, then sort-unique.  An
+                # ndarray's .tolist() converts numpy scalars back to Python
+                # scalars (preserving identity for object-dtype arrays).
+                if isinstance(y, np.ndarray):
+                    seq = y.tolist()
+                else:
+                    seq = list(y)
+                unique = list(dict.fromkeys(seq))
+                try:
+                    resolved_levels = tuple(sorted(unique))
+                except TypeError as exc:
+                    raise ValueError(
+                        "Cannot infer level order from observations of mixed "
+                        f"types: {unique!r}. Pass `levels=` explicitly."
+                    ) from exc
 
         variable = cls(levels=resolved_levels)
         codes = variable.encode(y)
@@ -323,13 +339,20 @@ class OrderedVariable:
         ValueError
             If any label is not in :attr:`levels`.
         """
-        # Pandas Series / Categorical: list() preserves the labels rather
-        # than the underlying integer codes that ``np.asarray`` would expose.
+        # Materialise as a Python list of original objects.  np.asarray on
+        # mixed types coerces to a string dtype (e.g. [1, "a"] -> ["1", "a"])
+        # which would corrupt integer / boolean labels and break the dict
+        # lookup against explicit mixed `levels`.  list() on a pandas
+        # Categorical / Series yields the labels (not the underlying codes);
+        # an ndarray's .tolist() preserves Python scalars.
         if hasattr(y, "cat") or hasattr(y, "categories"):
-            y = list(y)
-        arr = np.asarray(y)
-        codes = np.empty(arr.shape[0], dtype=np.intp)
-        for i, label in enumerate(arr.tolist()):
+            seq = list(y)
+        elif isinstance(y, np.ndarray):
+            seq = y.tolist()
+        else:
+            seq = list(y)
+        codes = np.empty(len(seq), dtype=np.intp)
+        for i, label in enumerate(seq):
             try:
                 codes[i] = self._label_to_code[label]
             except KeyError as exc:
@@ -355,9 +378,28 @@ class OrderedVariable:
         Raises
         ------
         ValueError
-            If any code is outside the valid range.
+            If any code is outside the valid range, or if any floating-point
+            code is not integer-valued (e.g. ``1.7``).
+        TypeError
+            If ``codes`` has a non-numeric dtype (object, complex, …).
         """
-        codes_arr = np.asarray(codes, dtype=np.intp)
+        raw = np.asarray(codes)
+        if np.issubdtype(raw.dtype, np.integer):
+            codes_arr = raw.astype(np.intp)
+        elif np.issubdtype(raw.dtype, np.floating):
+            fractional = raw[raw != np.floor(raw)]
+            if fractional.size:
+                raise ValueError(
+                    f"decode() received non-integer float codes: "
+                    f"{fractional.tolist()!r}. Codes must be whole-number "
+                    f"values in {{1, ..., {self.K}}}."
+                )
+            codes_arr = raw.astype(np.intp)
+        else:
+            raise TypeError(
+                f"codes must have an integer or floating dtype, "
+                f"got {raw.dtype!r}."
+            )
         if codes_arr.size and (codes_arr.min() < 1 or codes_arr.max() > self.K):
             raise ValueError(
                 f"Codes must be in [1, {self.K}], got "

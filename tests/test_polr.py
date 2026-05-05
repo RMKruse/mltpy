@@ -51,6 +51,21 @@ class TestOrderedVariable:
         with pytest.raises(ValueError, match=r"Codes must be in"):
             v.decode(np.array([1, 3], dtype=np.intp))
 
+    def test_decode_fractional_float_raises(self):
+        v = OrderedVariable(("a", "b", "c"))
+        with pytest.raises(ValueError, match="non-integer float"):
+            v.decode(np.array([1.7, 2.0]))
+
+    def test_decode_integer_valued_float_accepted(self):
+        v = OrderedVariable(("a", "b", "c"))
+        result = v.decode(np.array([1.0, 3.0, 2.0]))
+        np.testing.assert_array_equal(result, ["a", "c", "b"])
+
+    def test_decode_non_numeric_dtype_raises(self):
+        v = OrderedVariable(("a", "b"))
+        with pytest.raises(TypeError, match="integer or floating dtype"):
+            v.decode(np.array(["1", "2"]))
+
     def test_from_labels_inferred_levels(self):
         labels = ["b", "a", "c", "b", "a"]
         var, cd = OrderedVariable.from_labels(labels)
@@ -72,6 +87,43 @@ class TestOrderedVariable:
         # mid → code 2 → (1, 2]
         assert cd.lower[0] == 1.0
         assert cd.upper[0] == 2.0
+
+    def test_encode_preserves_integer_labels(self):
+        # np.asarray([1, 2, 3]) returns an int array — fine — but the dict
+        # lookup must still match int keys, not numpy scalars or strings.
+        v = OrderedVariable((1, 2, 3))
+        codes = v.encode([3, 1, 2])
+        np.testing.assert_array_equal(codes, [3, 1, 2])
+
+    def test_encode_preserves_mixed_type_labels(self):
+        # Regression: previously np.asarray([1, "a"]) coerced to ['1', 'a']
+        # so the lookup against int(1) failed.
+        v = OrderedVariable((1, "a"))
+        codes = v.encode([1, "a", 1])
+        np.testing.assert_array_equal(codes, [1, 2, 1])
+
+    def test_from_labels_mixed_types_requires_explicit_levels(self):
+        # Sorted-unique inference cannot order int + str together; surface a
+        # clear error rather than silently coercing to strings.
+        with pytest.raises(ValueError, match="mixed types"):
+            OrderedVariable.from_labels([1, "a", 1])
+
+    def test_from_labels_mixed_types_with_explicit_levels(self):
+        var, cd = OrderedVariable.from_labels([1, "a", 1], levels=(1, "a"))
+        assert var.levels == (1, "a")
+        # 1 → code 1 → (-inf, 1]; "a" → code 2 → (1, +inf)
+        assert cd.lower[0] == -np.inf
+        assert cd.upper[0] == 1.0
+        assert cd.lower[1] == 1.0
+        assert cd.upper[1] == np.inf
+
+    def test_from_labels_object_ndarray_preserves_types(self):
+        # An object-dtype ndarray round-trips through .tolist() with original
+        # Python scalar identities preserved.
+        labels = np.array([1, "a", 1], dtype=object)
+        var, cd = OrderedVariable.from_labels(labels, levels=(1, "a"))
+        assert var.levels == (1, "a")
+        np.testing.assert_array_equal(cd.upper, [1.0, np.inf, 1.0])
 
 
 # ---------------------------------------------------------------------------
