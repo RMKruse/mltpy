@@ -56,9 +56,17 @@ class TestMonotonicityMatrix:
         theta = np.array([4.0, 3.0, 2.0, 1.0])
         assert np.all(D @ theta < 0)
 
-    def test_n_params_1_raises(self):
+    def test_n_params_0_raises(self):
         with pytest.raises(ValueError, match="n_params"):
-            MonotonicityConstraint(1)
+            MonotonicityConstraint(0)
+
+    def test_n_params_1_empty_matrix(self):
+        # K=2 ordinal models need n_params == 1: one cutpoint, no
+        # monotonicity rows.  Matrix shape is (0, 1); D @ theta is empty.
+        D = MonotonicityConstraint(1).as_matrix()
+        assert D.shape == (0, 1)
+        result = MonotonicityConstraint(1).as_scipy_constraint()["fun"](np.array([1.0]))
+        assert result.shape == (0,)
 
     def test_returns_copy(self):
         mc = MonotonicityConstraint(3)

@@ -21,15 +21,59 @@ Lm
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import norm as _norm
 
-from pymlt.model import MLT
+from pymlt.basis import OrdinalBasis
+from pymlt.likelihood import _H_CLIP, _get_dist
+from pymlt.model import MLT, ConditionalTransformationModel
 from pymlt.optimizer import OptimizerConfig
-from pymlt.variables import CensoringType
+from pymlt.variables import CensoringType, OrderedVariable
+
+# ---------------------------------------------------------------------------
+# Shared Wald-table helper
+# ---------------------------------------------------------------------------
+
+
+def _format_wald_table(
+    names: Sequence[str],
+    estimates: NDArray[np.float64],
+    standard_errors: NDArray[np.float64],
+) -> str:
+    """Format a Wald-style coefficient table.
+
+    Columns: ``Estimate``, ``Std. Error``, ``z value``, ``Pr(>|z|)``.  Used by
+    both :class:`_TramModel.summary` and :class:`Polr.summary`.
+    """
+    name_width = max((len(n) for n in names), default=4)
+    name_width = max(name_width, 4)
+    valid = np.isfinite(standard_errors) & (standard_errors > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = estimates / standard_errors
+        pvals = 2.0 * _norm.sf(np.abs(z))
+    header = (
+        f"  {'':<{name_width}}  {'Estimate':>10}  {'Std. Error':>10}  "
+        f"{'z value':>8}  {'Pr(>|z|)':>9}"
+    )
+    rows = [header]
+    for name, b, s, zv, pv, ok in zip(
+        names, estimates, standard_errors, z, pvals, valid
+    ):
+        if ok:
+            zv_str = f"{zv:>8.3f}"
+            pv_str = f"{pv:>9.4g}"
+        else:
+            zv_str = f"{'NA':>8}"
+            pv_str = f"{'NA':>9}"
+        rows.append(
+            f"  {name:<{name_width}}  {b:>10.4f}  {s:>10.4f}  {zv_str}  {pv_str}"
+        )
+    return "\n".join(rows)
+
 
 # ---------------------------------------------------------------------------
 # Internal base class
@@ -118,26 +162,8 @@ class _TramModel(MLT):
         except RuntimeError:
             return "  [Standard errors not available: Hessian matrix is singular.]"
 
-        beta = self.theta_[p:]
-        beta_se = se[p:]
-        z = beta / beta_se
-        pvals = 2.0 * _norm.sf(np.abs(z))
-
         names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q)]
-        name_width = max(len(n) for n in names)
-        name_width = max(name_width, 4)
-
-        header = (
-            f"  {'':<{name_width}}  {'Estimate':>10}  {'Std. Error':>10}  "
-            f"{'z value':>8}  {'Pr(>|z|)':>9}"
-        )
-        rows = [header]
-        for name, b, s, zv, pv in zip(names, beta, beta_se, z, pvals):
-            rows.append(
-                f"  {name:<{name_width}}  {b:>10.4f}  {s:>10.4f}  "
-                f"{zv:>8.3f}  {pv:>9.4g}"
-            )
-        return "\n".join(rows)
+        return _format_wald_table(names, self.theta_[p:], se[p:])
 
     def plot(self, y: NDArray[np.float64], ax: Any = None) -> Any | list[Any]:
         """Plot the estimated CDF and density side by side.
@@ -628,3 +654,335 @@ class Lm(_TramModel):
         y_arr = np.asarray(y, dtype=float).ravel()
         B = self.basis.evaluate(y_arr)
         return B @ theta_b
+
+
+# ---------------------------------------------------------------------------
+# Polr — proportional-odds ordinal regression
+# ---------------------------------------------------------------------------
+
+
+PolrDistribution = Literal["logistic", "normal", "min_extreme_value"]
+
+
+class Polr(ConditionalTransformationModel):
+    """Proportional-odds ordinal regression (R ``tram::Polr``).
+
+    For an ordered response ``Y ∈ {1, ..., K}`` and covariates ``x``, models
+
+    .. math::
+
+        P(Y \\leq k \\mid x) = F(\\theta_k + x^\\top \\beta),
+        \\quad k = 1, \\ldots, K-1,
+
+    where ``F`` is the CDF of the chosen base distribution and
+    ``θ_1 ≤ ... ≤ θ_{K-1}`` are the cutpoints.  Internally implemented as a
+    CTM with a degenerate :class:`~pymlt.basis.OrdinalBasis` plus the
+    standard interval-censored likelihood path — the integer cut positions
+    select the right ``θ_k`` per observation.
+
+    .. note::
+       **Sign convention.** pymlt parameterises ``h(y|x) = h(y) + x'β``, so
+       the fitted ``β`` has the *opposite* sign of R's ``tram::Polr`` (which
+       uses ``h(y) - x'β``).  Negate ``coef_`` to compare with R output.
+
+    Parameters
+    ----------
+    levels:
+        Optional explicit ordered tuple of category labels.  When ``None``
+        (default), levels are inferred at :meth:`fit` time from a pandas
+        ordered ``Categorical`` (uses ``cat.categories``) or, failing that,
+        from sorted unique values of ``y``.
+    distribution:
+        Base distribution / link.
+
+        * ``"logistic"`` (default) — proportional-odds model (R default).
+        * ``"normal"`` — ordered probit.
+        * ``"min_extreme_value"`` — proportional-hazards / cloglog link.
+    optimizer_config:
+        Optimisation settings.  If ``None``, library defaults are used.
+
+    Attributes
+    ----------
+    cutpoints_ : NDArray[np.float64]
+        Estimated ``θ_1, ..., θ_{K-1}``.  Available after :meth:`fit`.
+    coef_ : NDArray[np.float64]
+        Estimated regression coefficients ``β`` (length equal to the number
+        of covariate columns).  Empty array when ``X`` is omitted at fit
+        time.  Negate to compare with R ``tram::Polr``.
+    levels_ : tuple
+        The resolved ordered category labels (length ``K``).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> from pymlt import Polr
+    >>> rng = np.random.default_rng(0)
+    >>> y = pd.Categorical(
+    ...     rng.choice(["low", "mid", "high"], size=200),
+    ...     categories=["low", "mid", "high"],
+    ...     ordered=True,
+    ... )
+    >>> X = rng.standard_normal((200, 2))
+    >>> m = Polr().fit(y, X)
+    >>> probs = m.predict_proba(X[:5])
+    """
+
+    def __init__(
+        self,
+        levels: Sequence[Any] | None = None,
+        distribution: PolrDistribution = "logistic",
+        optimizer_config: OptimizerConfig | None = None,
+    ) -> None:
+        # Validate distribution eagerly (fast-fail before fit()).
+        _get_dist(distribution)
+        self._levels_arg = tuple(levels) if levels is not None else None
+        self._distribution: PolrDistribution = distribution
+        self._user_optimizer_config = optimizer_config
+        self._ordvar: OrderedVariable | None = None
+
+        # Defer ConditionalTransformationModel.__init__ until fit() — basis
+        # depends on K which is only known once y is observed.  Initialise
+        # the public attributes that callers of __repr__ may read pre-fit.
+        self.is_fitted_: bool = False
+        self.theta_: NDArray[np.float64] | None = None
+        self.result_ = None
+        self.basis: OrdinalBasis | None = None  # type: ignore[assignment]
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def levels_(self) -> tuple[Any, ...]:
+        """Ordered category labels resolved at fit time."""
+        if self._ordvar is None:
+            from pymlt.model import NotFittedError
+
+            raise NotFittedError("Model has not been fitted yet. Call fit(y) first.")
+        return self._ordvar.levels
+
+    @property
+    def K_(self) -> int:  # noqa: N802 — match standard ordinal-regression notation
+        """Number of ordered levels."""
+        return len(self.levels_)
+
+    @property
+    def cutpoints_(self) -> NDArray[np.float64]:
+        """Estimated cutpoints ``θ_1, ..., θ_{K-1}``."""
+        self._check_is_fitted()
+        if self.theta_ is None or self._ordvar is None:
+            raise RuntimeError("Unexpected None theta_/_ordvar for fitted model")
+        return self.theta_[: self._ordvar.K - 1].copy()
+
+    @property
+    def coef_(self) -> NDArray[np.float64]:
+        """Estimated regression coefficients ``β``.
+
+        Length equals ``X.shape[1]`` from :meth:`fit`; empty array when
+        no ``X`` was supplied.  pymlt's sign convention (``h + Xβ``) flips
+        the sign relative to R ``tram::Polr`` (``h − Xβ``) — negate to
+        compare.
+        """
+        self._check_is_fitted()
+        if self.theta_ is None or self._ordvar is None:
+            raise RuntimeError("Unexpected None theta_/_ordvar for fitted model")
+        return self.theta_[self._ordvar.K - 1 :].copy()
+
+    # ------------------------------------------------------------------
+    # Fit / predict
+    # ------------------------------------------------------------------
+
+    def fit(  # type: ignore[override]
+        self,
+        y: Sequence[Any] | NDArray[Any],
+        X: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> Polr:
+        """Fit the Polr model by maximum likelihood.
+
+        Parameters
+        ----------
+        y:
+            Ordered categorical response.  Accepts a pandas ordered
+            ``Categorical``/``Series``, or any sequence of hashable labels
+            (whose sorted unique values determine the level order).
+        X:
+            Optional covariate matrix of shape ``(n, q)``.
+        weights:
+            Optional non-negative per-observation weights of shape ``(n,)``.
+        offset:
+            Optional fixed linear predictor offset of shape ``(n,)``.
+        """
+        ordvar, cd = OrderedVariable.from_labels(y, self._levels_arg)
+        basis = OrdinalBasis(K=ordvar.K)
+
+        ConditionalTransformationModel.__init__(
+            self,
+            basis=basis,  # type: ignore[arg-type]
+            censoring=CensoringType.INTERVAL,
+            optimizer_config=self._user_optimizer_config,
+            base_distribution=self._distribution,
+        )
+        self._ordvar = ordvar
+        super().fit(cd, X=X, weights=weights, offset=offset)
+        return self
+
+    def predict(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> NDArray[np.float64]:
+        """Disabled for ``Polr`` — use :meth:`predict_proba` or :meth:`predict_class`.
+
+        Continuous CDF/density predictions are not meaningful for an ordinal
+        response.
+        """
+        raise NotImplementedError(
+            "Polr does not support predict(); use predict_proba(X) for level "
+            "probabilities or predict_class(X) for the modal class."
+        )
+
+    def predict_proba(
+        self,
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Compute per-row level probabilities ``P(Y = level_k | x)``.
+
+        Parameters
+        ----------
+        X:
+            Optional covariate matrix of shape ``(m, q)``.  Must be supplied
+            iff the model was fitted with covariates.
+        offset:
+            Optional offset of shape ``(m,)`` added to the linear predictor.
+
+        Returns
+        -------
+        NDArray of shape ``(m, K)``.  Rows sum to 1.
+        """
+        self._check_is_fitted()
+        if self.theta_ is None or self._ordvar is None:
+            raise RuntimeError("Unexpected None theta_/_ordvar for fitted model")
+
+        K = self._ordvar.K
+        cutpoints = self.theta_[: K - 1]
+        beta = self.theta_[K - 1 :]
+
+        if X is None:
+            if beta.size > 0:
+                raise ValueError(
+                    f"Model was fitted with {beta.size} covariates; "
+                    "X must be provided to predict_proba()."
+                )
+            xbeta = np.zeros(1, dtype=np.float64)
+            m = 1
+        else:
+            X_arr = np.asarray(X, dtype=float)
+            if X_arr.ndim == 1:
+                X_arr = X_arr[:, None]
+            if X_arr.shape[1] != beta.size:
+                raise ValueError(
+                    f"X has {X_arr.shape[1]} columns but the fitted model "
+                    f"has {beta.size} covariate coefficients."
+                )
+            xbeta = X_arr @ beta if beta.size > 0 else np.zeros(X_arr.shape[0])
+            m = X_arr.shape[0]
+
+        if offset is not None:
+            offset_arr = np.asarray(offset, dtype=float).ravel()
+            if offset_arr.shape != (m,):
+                raise ValueError(
+                    f"offset must have shape ({m},), got {offset_arr.shape}."
+                )
+            xbeta = xbeta + offset_arr
+
+        # Linear predictors at each cutpoint, shape (m, K-1).
+        eta = cutpoints[None, :] + xbeta[:, None]
+        eta = np.clip(eta, -_H_CLIP, _H_CLIP)
+        dist = _get_dist(self._distribution)
+        cdf = dist.cdf(eta)  # F(θ_k + x'β)
+
+        # P(Y = level_k) = F(θ_k) − F(θ_{k-1}); θ_0=-∞ ⇒ F=0; θ_K=+∞ ⇒ F=1.
+        probs = np.empty((m, K), dtype=np.float64)
+        probs[:, 0] = cdf[:, 0]
+        if K > 2:
+            probs[:, 1 : K - 1] = np.diff(cdf, axis=1)
+        probs[:, K - 1] = 1.0 - cdf[:, K - 2]
+        # Guard against tiny negatives from floating-point rounding.
+        return cast(NDArray[np.float64], np.clip(probs, 0.0, 1.0))
+
+    def predict_class(
+        self,
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[Any]:
+        """Predict the modal level (argmax over ``predict_proba``).
+
+        Returns the original level labels (decoded back from internal codes).
+        """
+        probs = self.predict_proba(X=X, offset=offset)
+        codes = np.argmax(probs, axis=1) + 1
+        if self._ordvar is None:
+            raise RuntimeError("Unexpected None _ordvar for fitted model")
+        return self._ordvar.decode(codes.astype(np.intp))
+
+    # ------------------------------------------------------------------
+    # Display
+    # ------------------------------------------------------------------
+
+    def summary(self) -> str:
+        """Multi-line summary with cutpoints and a Wald table for ``β``."""
+        if not self.is_fitted_ or self._ordvar is None or self.theta_ is None:
+            return f"Polr(distribution={self._distribution!r}, fitted=False)"
+        K = self._ordvar.K
+        lines = [
+            "Model:        Polr",
+            f"Distribution: {self._distribution}",
+            f"Levels:       {list(self._ordvar.levels)}",
+            "Fitted:       Yes",
+        ]
+        if self.result_ is not None:
+            lines += [
+                f"Log-lik:      {self.result_.log_likelihood:.4f}",
+                f"AIC:          {self.aic():.4f}",
+                f"BIC:          {self.bic():.4f}",
+                f"Converged:    {'Yes' if self.result_.converged else 'No'}",
+            ]
+        cuts = self.theta_[: K - 1]
+        cut_names = [
+            f"{self._ordvar.levels[i]}|{self._ordvar.levels[i + 1]}"
+            for i in range(K - 1)
+        ]
+        cut_lines = ["", "Cutpoints:"]
+        cut_width = max(len(n) for n in cut_names)
+        for name, val in zip(cut_names, cuts):
+            cut_lines.append(f"  {name:<{cut_width}}  {val:>10.4f}")
+        lines += cut_lines
+
+        beta = self.theta_[K - 1 :]
+        if beta.size:
+            try:
+                se = self.standard_errors()
+                names = self.feature_names_in_ or [
+                    f"X{j + 1}" for j in range(beta.size)
+                ]
+                lines += ["", "Coefficients (note: pymlt sign — negate for R):"]
+                lines.append(_format_wald_table(names, beta, se[K - 1 :]))
+            except RuntimeError:
+                lines += [
+                    "",
+                    "  [Standard errors not available: Hessian matrix is singular.]",
+                ]
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        if self.is_fitted_ and self.result_ is not None and self._ordvar is not None:
+            return (
+                f"Polr(distribution={self._distribution!r}, "
+                f"K={self._ordvar.K}, fitted=True, "
+                f"ll={self.result_.log_likelihood:.2f})"
+            )
+        return f"Polr(distribution={self._distribution!r}, fitted=False)"

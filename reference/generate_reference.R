@@ -753,3 +753,67 @@ writeLines(format(flatten_row_major(estfun_cx_w),   digits = 15),
 
 cat(sprintf("Coxph weights ref: n=%d, sum_w=%d, p+q=%d\n",
             n_cx, sum(w_cx_w), length(theta_cx_w)))
+
+# ---------------------------------------------------------------------------
+# Polr (proportional-odds ordinal regression) reference
+#
+# Fit tram::Polr with three different links (logistic / probit / cloglog)
+# on the same n=300 ordinal sample.  Write per-link:
+#   reference/polr_<link>_theta.txt     — coef(fit, with_baseline = TRUE)
+#                                         (first K-1 entries are cutpoints,
+#                                          remaining are R-side beta which
+#                                          satisfy h - X·beta_R = z; pymlt
+#                                          uses h + X·beta so beta_pymlt =
+#                                          -beta_R)
+#   reference/polr_<link>_loglik.txt    — scalar log-likelihood
+#   reference/polr_<link>_proba.txt     — predict(fit, type = "density")
+#                                         flattened row-major, n*K
+#
+# Shared inputs (one copy):
+#   reference/polr_X.txt   — model.matrix entries (n*q row-major)
+#   reference/polr_y.txt   — character labels of the ordered response
+# ---------------------------------------------------------------------------
+
+set.seed(42)
+n_polr <- 300
+levels_polr <- c("low", "mid", "high")
+y_polr <- factor(
+  sample(levels_polr, n_polr, replace = TRUE, prob = c(0.30, 0.40, 0.30)),
+  levels = levels_polr,
+  ordered = TRUE
+)
+x1_polr <- rnorm(n_polr)
+x2_polr <- rbinom(n_polr, 1, 0.5)
+data_polr <- data.frame(y = y_polr, x1 = x1_polr, x2 = x2_polr)
+X_polr <- model.matrix(~ x1 + x2 - 1, data = data_polr)
+
+writeLines(as.character(y_polr), con = file.path(out_dir, "polr_y.txt"))
+writeLines(format(flatten_row_major(X_polr), digits = 15),
+           con = file.path(out_dir, "polr_X.txt"))
+
+.write_polr_link <- function(method, label) {
+  fit <- tram::Polr(y ~ x1 + x2,
+                    data   = data_polr,
+                    method = method)
+  theta <- coef(fit, with_baseline = TRUE)
+  ll    <- as.numeric(logLik(as.mlt(fit)))
+  # Evaluate per-level probabilities at every observation by passing the full
+  # ordered level set as q.  Returns a (K, n) matrix; transpose to (n, K) and
+  # write row-major to match pymlt.predict_proba.
+  q_levels <- factor(levels_polr, levels = levels_polr, ordered = TRUE)
+  proba <- predict(fit, newdata = data_polr, q = q_levels, type = "density")
+  proba <- t(as.matrix(proba))
+
+  writeLines(format(theta, digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_theta.txt", label)))
+  writeLines(format(ll,    digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_loglik.txt", label)))
+  writeLines(format(flatten_row_major(proba), digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_proba.txt", label)))
+  cat(sprintf("Polr %-9s ref: n=%d, K=%d, ll=%.6f\n",
+              label, n_polr, length(levels_polr), ll))
+}
+
+.write_polr_link("logistic", "logistic")
+.write_polr_link("probit",   "probit")
+.write_polr_link("cloglog",  "cloglog")
