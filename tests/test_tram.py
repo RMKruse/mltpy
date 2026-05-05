@@ -15,7 +15,7 @@ from scipy.stats import norm
 
 import pymlt
 from pymlt.model import MLT
-from pymlt.tram import BoxCox, Colr, Coxph, Lm, _TramModel
+from pymlt.tram import BoxCox, Colr, Coxph, Lm, _format_wald_table, _TramModel
 from pymlt.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
@@ -361,6 +361,49 @@ class TestSummary:
         model = Colr(support=(0.0, 1.0)).fit(simple_y())
         s = model.summary()
         assert "Colr" in s
+
+
+# ---------------------------------------------------------------------------
+# _format_wald_table — zero / non-finite SE handling
+# ---------------------------------------------------------------------------
+
+
+class TestFormatWaldTableDegenerateSE:
+    """Zero or non-finite SEs render as ``NA`` without RuntimeWarnings."""
+
+    def test_zero_se_renders_na_quietly(self):
+        names = ["X1", "X2"]
+        estimates = np.array([0.5, 1.2])
+        ses = np.array([0.0, 0.3])
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            table = _format_wald_table(names, estimates, ses)
+
+        rows = table.splitlines()
+        assert "NA" in rows[1]
+        assert "inf" not in rows[1]
+        # The valid row still has numeric z and p columns.
+        assert "NA" not in rows[2]
+
+    def test_nonfinite_se_renders_na(self):
+        names = ["X1"]
+        estimates = np.array([0.5])
+        ses = np.array([np.nan])
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            table = _format_wald_table(names, estimates, ses)
+        assert "NA" in table.splitlines()[1]
+
+    def test_all_positive_se_unchanged(self):
+        names = ["X1", "X2"]
+        estimates = np.array([0.5, -1.0])
+        ses = np.array([0.25, 0.5])
+        table = _format_wald_table(names, estimates, ses)
+        assert "NA" not in table
 
 
 # ---------------------------------------------------------------------------

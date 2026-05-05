@@ -51,16 +51,26 @@ def _format_wald_table(
     """
     name_width = max((len(n) for n in names), default=4)
     name_width = max(name_width, 4)
-    z = estimates / standard_errors
-    pvals = 2.0 * _norm.sf(np.abs(z))
+    valid = np.isfinite(standard_errors) & (standard_errors > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = estimates / standard_errors
+        pvals = 2.0 * _norm.sf(np.abs(z))
     header = (
         f"  {'':<{name_width}}  {'Estimate':>10}  {'Std. Error':>10}  "
         f"{'z value':>8}  {'Pr(>|z|)':>9}"
     )
     rows = [header]
-    for name, b, s, zv, pv in zip(names, estimates, standard_errors, z, pvals):
+    for name, b, s, zv, pv, ok in zip(
+        names, estimates, standard_errors, z, pvals, valid
+    ):
+        if ok:
+            zv_str = f"{zv:>8.3f}"
+            pv_str = f"{pv:>9.4g}"
+        else:
+            zv_str = f"{'NA':>8}"
+            pv_str = f"{'NA':>9}"
         rows.append(
-            f"  {name:<{name_width}}  {b:>10.4f}  {s:>10.4f}  {zv:>8.3f}  {pv:>9.4g}"
+            f"  {name:<{name_width}}  {b:>10.4f}  {s:>10.4f}  {zv_str}  {pv_str}"
         )
     return "\n".join(rows)
 
