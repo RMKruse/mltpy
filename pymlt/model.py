@@ -356,8 +356,8 @@ class ConditionalTransformationModel:
 
         if not result.converged:
             warnings.warn(
-                f"Optimization did not converge after {result.n_restarts}"
-                f"restarts. Solver message: {result.solver_message}."
+                f"Optimization did not converge after {result.n_restarts} "
+                f"restarts. Solver message: {result.solver_message}. "
                 "The result is the best found, but may not be the MLE.",
                 ConvergenceWarning,
                 stacklevel=2,
