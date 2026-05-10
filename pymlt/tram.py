@@ -211,17 +211,15 @@ class _TramModel(MLT):
         pdf = self.predict(y_sorted, what="density")
 
         if ax is not None:
-            try:
+            if isinstance(ax, tuple) and len(ax) == 2:
                 ax_cdf, ax_pdf = ax
-            except (TypeError, ValueError):
-                # If we cannot unpack, assume it's a single Axes object
-                if hasattr(ax, "plot"):
-                    ax_cdf = ax
-                    ax_pdf = None
-                else:
-                    raise TypeError(
-                        "ax must be a 2-tuple (ax_cdf, ax_pdf) or a single Axes"
-                    ) from None
+            elif hasattr(ax, "plot"):
+                ax_cdf = ax
+                ax_pdf = None
+            else:
+                raise TypeError(
+                    "ax must be a 2-tuple (ax_cdf, ax_pdf) or a single Axes"
+                ) from None
             fig = None
         else:
             fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
@@ -585,10 +583,10 @@ class Lm(_TramModel):
         t0, t1 = self._baseline()
         a, b = self._support
         denom = t1 - t0
-        if denom <= 0.0:
+        if denom == 0.0:
             raise RuntimeError(
-                f"Degenerate Lm fit: theta_[1] - theta_[0] = {denom!r} "
-                "(expected > 0). The fitted transformation is constant "
+                "Degenerate Lm fit: theta_[1] == theta_[0] (denom = 0). "
+                "The fitted transformation is constant "
                 "on the support, so sigma_, intercept_, and coef_ are "
                 "undefined. Check the fit diagnostics (support, data "
                 "scale, optimiser convergence)."
