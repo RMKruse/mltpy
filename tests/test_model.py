@@ -110,7 +110,9 @@ class TestFit:
                 self.shape = data.shape
                 self.columns = ("x1", "x2")
 
-            def __array__(self, dtype: np.dtype[np.float64] | None = None) -> np.ndarray:
+            def __array__(
+                self, dtype: np.dtype[np.float64] | None = None
+            ) -> np.ndarray:
                 if dtype is None:
                     return self._data
                 return self._data.astype(dtype, copy=False)

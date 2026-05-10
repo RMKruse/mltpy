@@ -19,8 +19,12 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 
+from pymlt._auglag import AugLagOptions, AugLagResult, auglag_minimize
 from pymlt.basis import BernsteinBasis
-from pymlt.constraints import build_constraints
+from pymlt.constraints import (
+    build_constraint_matrices,
+    build_constraints,
+)
 from pymlt.likelihood import (
     BaseDistribution,
     DistOps,
@@ -42,8 +46,9 @@ class OptimizerConfig:
     Parameters
     ----------
     solver:
-        ``"slsqp"`` (default) or ``"trust-constr"``.
-        SLSQP is faster; trust-constr handles ill-conditioned problems better.
+        ``"slsqp"`` (default), ``"trust-constr"``, or ``"auglag"``.
+        SLSQP is faster; trust-constr handles ill-conditioned problems better;
+        ``"auglag"`` uses the PHR augmented Lagrangian solver (opt-in).
     max_iter:
         Maximum number of iterations passed to scipy.
     tol:
@@ -66,13 +71,14 @@ class OptimizerConfig:
         If ``None`` (default), draws are non-reproducible across runs.
     """
 
-    solver: Literal["slsqp", "trust-constr"] = "slsqp"
+    solver: Literal["slsqp", "trust-constr", "auglag"] = "slsqp"
     max_iter: int = 1000
     tol: float = 1e-8
     max_restarts: int = 3
     use_gradient: bool = True
     verbose: bool = False
     random_state: int | np.random.Generator | None = None
+    auglag_options: AugLagOptions | None = None
 
 
 @dataclass
@@ -101,6 +107,8 @@ class OptimizationResult:
     n_iter: int
     n_restarts: int
     solver_message: str
+    n_outer_iter: int | None = None
+    kkt_residual: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -382,10 +390,39 @@ def optimize(
 
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
+    nonneg_lower = base_distribution == "exponential"
+
+    if isinstance(config.random_state, np.random.Generator):
+        rng = config.random_state
+    else:
+        rng = np.random.default_rng(config.random_state)
+
+    theta_init = _initial_theta(n_params, X)
+
+    if config.solver == "auglag":
+        return _optimize_auglag(
+            basis=basis,
+            y=y,
+            X=X,
+            censoring=censoring,
+            config=config,
+            dist=dist,
+            base_distribution=base_distribution,
+            weights=weights,
+            offset=offset,
+            n_params=n_params,
+            total_params=total_params,
+            nonneg_lower=nonneg_lower,
+            rng=rng,
+            theta_init=theta_init,
+        )
+
+    # ------------------------------------------------------------------
+    # SLSQP / trust-constr path — unchanged from before
+    # ------------------------------------------------------------------
     # Exponential has support [0, ∞); enforce h(y|x) >= 0.  Without covariates
     # this reduces to theta_b[0] >= 0; with covariates we add one linear
     # inequality per training row: theta_b[0] + X_i @ beta >= 0.
-    nonneg_lower = base_distribution == "exponential"
     constraints = build_constraints(
         n_params,
         solver=config.solver,
@@ -406,12 +443,6 @@ def optimize(
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
-    if isinstance(config.random_state, np.random.Generator):
-        rng = config.random_state
-    else:
-        rng = np.random.default_rng(config.random_state)
-
-    theta_init = _initial_theta(n_params, X)
 
     best_scipy_result = None
     best_nll = float("inf")
@@ -496,4 +527,133 @@ def optimize(
         n_iter=int(getattr(best_scipy_result, "nit", 0)),
         n_restarts=n_restarts_used,
         solver_message=str(best_scipy_result.message),
+    )
+
+
+def _optimize_auglag(
+    *,
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    config: OptimizerConfig,
+    dist: DistOps,
+    base_distribution: BaseDistribution,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    n_params: int,
+    total_params: int,
+    nonneg_lower: bool,
+    rng: np.random.Generator,
+    theta_init: NDArray[np.float64],
+) -> OptimizationResult:
+    """Augmented Lagrangian optimisation path (PHR).
+
+    Mirrors the restart logic of the SLSQP path and reuses ``_make_objective``
+    so ``InfeasibleParameterError`` handling is inherited.  The inner solver
+    always uses gradients regardless of ``config.use_gradient`` because
+    L-BFGS-B requires them.
+    """
+    cm = build_constraint_matrices(n_params, total_params=total_params)
+    # auglag always needs gradients for the L-BFGS-B inner solver
+    obj = _make_objective(
+        basis,
+        y,
+        X,
+        censoring,
+        use_gradient=True,
+        base_distribution=base_distribution,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+    )
+    auglag_opts = (
+        config.auglag_options if config.auglag_options is not None else AugLagOptions()
+    )
+
+    best_auglag_result: AugLagResult | None = None
+    best_nll = float("inf")
+    n_restarts_used = 0
+
+    for attempt in range(config.max_restarts + 1):
+        if attempt == 0:
+            theta_try = theta_init.copy()
+        else:
+            n_restarts_used = attempt
+            theta_try = _perturb_and_project(
+                theta_init,
+                n_params,
+                rng,
+                nonneg_lower=nonneg_lower,
+            )
+
+        try:
+            result = auglag_minimize(
+                obj,
+                theta_try,
+                A_ineq=cm.A_ineq,
+                b_ineq=cm.b_ineq,
+                C_eq=cm.C_eq,
+                d_eq=cm.d_eq,
+                options=auglag_opts,
+            )
+        except LinAlgError as exc:
+            if config.verbose:
+                warnings.warn(
+                    f"optimizer.py: attempt {attempt + 1} hit {exc!r}; retrying",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            continue
+
+        if result.fun < best_nll:
+            best_nll = result.fun
+            best_auglag_result = result
+
+        if result.converged:
+            break
+
+        if config.verbose:
+            warnings.warn(
+                f"optimizer.py: attempt {attempt + 1}/{config.max_restarts + 1} "
+                f"did not converge — {result.message}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    if best_auglag_result is None:
+        _nll = cast(
+            float,
+            _negative_log_likelihood_from_dist(
+                theta_init,
+                basis,
+                y,
+                X,
+                censoring,
+                gradient=False,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+            ),
+        )
+        return OptimizationResult(
+            theta=theta_init,
+            log_likelihood=float(-_nll),
+            converged=False,
+            n_iter=0,
+            n_restarts=n_restarts_used,
+            solver_message="All auglag attempts raised LinAlgError.",
+            n_outer_iter=None,
+            kkt_residual=None,
+        )
+
+    return OptimizationResult(
+        theta=best_auglag_result.theta,
+        log_likelihood=float(-best_nll),
+        converged=best_auglag_result.converged,
+        n_iter=best_auglag_result.n_inner_iter,
+        n_restarts=n_restarts_used,
+        solver_message=best_auglag_result.message,
+        n_outer_iter=best_auglag_result.n_outer_iter,
+        kkt_residual=best_auglag_result.kkt_residual,
     )

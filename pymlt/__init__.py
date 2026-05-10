@@ -1,5 +1,6 @@
 """pymlt — Conditional Transformation Models in Python."""
 
+from pymlt._auglag import AugLagOptions, AugLagResult
 from pymlt.basis import OrdinalBasis
 from pymlt.likelihood import (
     InfeasibleParameterError,
@@ -51,5 +52,7 @@ __all__ = [
     "OrdinalBasis",
     # Config
     "OptimizerConfig",
+    "AugLagOptions",
+    "AugLagResult",
     "__version__",
 ]
