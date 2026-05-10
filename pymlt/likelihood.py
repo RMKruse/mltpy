@@ -304,6 +304,38 @@ def _log_diff_ndtr(
     )
 
 
+def _pair_density_weights(
+    h_lo: NDArray[np.float64],
+    h_hi: NDArray[np.float64],
+    log_p: NDArray[np.float64],
+    dist: DistOps,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Mills-style density weights ``(f(h_hi)/P, f(h_lo)/P)`` shared by the
+    both-finite branch of every interval-style block (interval-censored
+    likelihood / gradient / Hessian / scores / intercept score, plus the
+    truncation correction).
+
+    In a very narrow window ``log_p`` is strongly negative, so
+    ``logpdf - log_p`` can exceed ``log(float64.max) ≈ 709`` and a bare
+    ``np.exp`` would overflow to ``+inf``.  Mapping ``+inf`` to ``0`` (as a
+    plain ``nan_to_num(posinf=0.0)`` would) silently zeroes a genuinely
+    large derivative weight, biasing gradient and Hessian *toward* the
+    cases where the correction matters most.  We instead clip the log-arg
+    at :data:`_LOG_FLOAT_MAX`, preserving the (large but finite) magnitude;
+    the only remaining NaN source is ``-inf - -inf`` from a degenerate
+    point-mass interval, where zero is the correct contribution.
+    """
+    with np.errstate(invalid="ignore"):
+        log_w_hi = dist.logpdf(h_hi) - log_p
+        log_w_lo = dist.logpdf(h_lo) - log_p
+    w_hi = np.exp(np.minimum(log_w_hi, _LOG_FLOAT_MAX))
+    w_lo = np.exp(np.minimum(log_w_lo, _LOG_FLOAT_MAX))
+    return (
+        np.nan_to_num(w_hi, nan=0.0),
+        np.nan_to_num(w_lo, nan=0.0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers: split theta, apply shift, compute score
 # ---------------------------------------------------------------------------
@@ -525,6 +557,443 @@ def _inverse_hp(
     with np.errstate(divide="ignore", invalid="ignore"):
         result = (1.0 / hp) if weights is None else (weights / hp)
     return result
+
+
+def _outer(
+    U: NDArray[np.float64],
+    Xu: NDArray[np.float64] | None,
+    V: NDArray[np.float64],
+    Xv: NDArray[np.float64] | None,
+    w_vec: NDArray[np.float64],
+    p: int,
+    q: int,
+) -> NDArray[np.float64]:
+    """Compute ``[U, Xu]^T diag(w_vec) [V, Xv]`` as a ``(p+q, p+q)`` block.
+
+    Reused by the interval-censored Hessian and the truncation Hessian to chain
+    a 2x2 second-derivative kernel through the design matrices ``[B, X]``.
+    """
+    Uw = U * w_vec[:, None]
+    out = np.zeros((p + q, p + q), dtype=np.float64)
+    out[:p, :p] = Uw.T @ V
+    if Xu is not None and Xv is not None and q > 0:
+        out[:p, p:] = Uw.T @ Xv
+        out[p:, :p] = (Xu * w_vec[:, None]).T @ V
+        out[p:, p:] = (Xu * w_vec[:, None]).T @ Xv
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Truncation correction
+# ---------------------------------------------------------------------------
+#
+# Under truncation [l_i, u_i] each observation is conditioned on being inside
+# the observable window:
+#
+#     ℓ_i(θ) = ℓ_uncond_i(θ) − log P_i(θ),
+#     P_i(θ) = F(h(u_i|x_i)) − F(h(l_i|x_i))
+#
+# This factorisation requires the observation event A_i = [lower_i, upper_i]
+# to be contained in B_i = [trunc_lower_i, trunc_upper_i] — otherwise the
+# numerator should be P(A_i ∩ B_i), not P(A_i).  CensoredData enforces
+# A_i ⊆ B_i at construction (see variables.py), so the helpers below assume
+# the precondition holds.
+#
+# The censoring branch produces ℓ_uncond; the helpers below add the
+# −log P_i correction (and its derivatives) on top.  The five public
+# dispatchers (log_likelihood, negative_log_likelihood, score_matrix,
+# hessian, intercept_score) call into these helpers when the CensoredData
+# input carries trunc_lower / trunc_upper.
+#
+# Per-observation cases (mirrors the fin_lo / fin_hi split used by
+# _ll_interval):
+#
+#   trunc_lower finite, trunc_upper finite  →  log P = log[F(h_u) − F(h_l)]
+#   trunc_lower = −∞,    trunc_upper finite →  log P = log F(h_u)
+#   trunc_lower finite,  trunc_upper = +∞   →  log P = log S(h_l)
+#   both infinite                            →  log P = 0  (no contribution)
+
+
+def _has_truncation(cd: CensoredData) -> bool:
+    """Whether ``cd`` carries any truncation information."""
+    return cd.trunc_lower is not None or cd.trunc_upper is not None
+
+
+def _trunc_bounds(
+    cd: CensoredData,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Return ``(lo, hi)`` per-observation truncation arrays.
+
+    A missing side is expanded to ``±inf`` so the rest of the helpers can
+    treat both bounds uniformly via ``np.isfinite`` masks.
+    """
+    n = cd.n
+    lo = (
+        cd.trunc_lower
+        if cd.trunc_lower is not None
+        else np.full(n, -np.inf, dtype=np.float64)
+    )
+    hi = (
+        cd.trunc_upper
+        if cd.trunc_upper is not None
+        else np.full(n, np.inf, dtype=np.float64)
+    )
+    return lo, hi
+
+
+@dataclass
+class _TruncContext:
+    """Pre-computed pieces shared across truncation-correction outputs."""
+
+    n: int
+    both: NDArray[np.bool_]
+    only_hi: NDArray[np.bool_]
+    only_lo: NDArray[np.bool_]
+    # "both finite" subset
+    B_lo_b: NDArray[np.float64]
+    B_hi_b: NDArray[np.float64]
+    h_lo_b: NDArray[np.float64]
+    h_hi_b: NDArray[np.float64]
+    X_b: NDArray[np.float64] | None
+    # "only upper finite" subset
+    B_hi_o: NDArray[np.float64]
+    h_hi_o: NDArray[np.float64]
+    X_only_hi: NDArray[np.float64] | None
+    # "only lower finite" subset
+    B_lo_o: NDArray[np.float64]
+    h_lo_o: NDArray[np.float64]
+    X_only_lo: NDArray[np.float64] | None
+
+
+def _build_truncation_context(
+    cd: CensoredData,
+    theta: NDArray[np.float64],
+    basis: BernsteinBasis,
+    X: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> _TruncContext:
+    """Evaluate basis matrices and clipped ``h`` at the truncation bounds.
+
+    Returns a :class:`_TruncContext` carrying the three sub-mask buffers.
+    Empty subsets get zero-row arrays so downstream helpers can blindly
+    iterate without ``mask.any()`` guards.
+    """
+    n = cd.n
+    p = basis.order + 1
+    theta_b, beta = _split_theta(theta, p, X)
+    lo, hi = _trunc_bounds(cd)
+    fin_lo = np.isfinite(lo)
+    fin_hi = np.isfinite(hi)
+    both = fin_lo & fin_hi
+    only_hi = ~fin_lo & fin_hi
+    only_lo = fin_lo & ~fin_hi
+
+    def _eval(
+        sub_mask: NDArray[np.bool_], y_vals: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64] | None]:
+        if not sub_mask.any():
+            empty_B = np.zeros((0, p), dtype=np.float64)
+            empty_h = np.zeros(0, dtype=np.float64)
+            empty_X = None if X is None else np.zeros((0, X.shape[1]), dtype=np.float64)
+            return empty_B, empty_h, empty_X
+        B = basis.evaluate(y_vals)
+        X_sub = X[sub_mask] if X is not None else None
+        shift = (X_sub @ beta) if (X_sub is not None and beta is not None) else 0.0
+        if offset is not None:
+            shift = shift + offset[sub_mask]
+        h = np.clip(B @ theta_b + shift, -_H_CLIP, _H_CLIP)
+        return B, h, X_sub
+
+    B_lo_b, h_lo_b, X_b = _eval(both, lo[both])
+    B_hi_b, h_hi_b, _ = _eval(both, hi[both])
+
+    B_hi_o, h_hi_o, X_only_hi = _eval(only_hi, hi[only_hi])
+    B_lo_o, h_lo_o, X_only_lo = _eval(only_lo, lo[only_lo])
+
+    return _TruncContext(
+        n=n,
+        both=both,
+        only_hi=only_hi,
+        only_lo=only_lo,
+        B_lo_b=B_lo_b,
+        B_hi_b=B_hi_b,
+        h_lo_b=h_lo_b,
+        h_hi_b=h_hi_b,
+        X_b=X_b,
+        B_hi_o=B_hi_o,
+        h_hi_o=h_hi_o,
+        X_only_hi=X_only_hi,
+        B_lo_o=B_lo_o,
+        h_lo_o=h_lo_o,
+        X_only_lo=X_only_lo,
+    )
+
+
+def _truncation_log_p(ctx: _TruncContext, dist: DistOps) -> NDArray[np.float64]:
+    """Per-observation ``log P_i`` (zero where neither bound is finite)."""
+    log_p = np.zeros(ctx.n, dtype=np.float64)
+    if ctx.both.any():
+        log_p[ctx.both] = _log_diff_ndtr(ctx.h_lo_b, ctx.h_hi_b, dist=dist)
+    if ctx.only_hi.any():
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        log_p[ctx.only_hi] = _logcdf(ctx.h_hi_o)
+    if ctx.only_lo.any():
+        log_p[ctx.only_lo] = dist.logsf(ctx.h_lo_o)
+    return log_p
+
+
+def _truncation_ll(
+    ctx: _TruncContext,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+) -> float:
+    """Scalar correction ``-Σ w_i · log P_i`` to add to the log-likelihood."""
+    log_p = _truncation_log_p(ctx, dist)
+    if weights is not None:
+        return float(-np.dot(weights, log_p))
+    return float(-np.sum(log_p))
+
+
+def _truncation_weights(
+    ctx: _TruncContext,
+    dist: DistOps,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+]:
+    """Return the four (sub-mask aligned) ``f / P`` weights used by the
+    derivative corrections.
+
+    Outputs:
+
+    * ``w_lo_b``, ``w_hi_b`` for the "both finite" subset
+      (``= f(h_l) / P``, ``= f(h_u) / P`` respectively).
+    * ``w_hi_only`` for the "only upper finite" subset (inverse Mills ratio
+      ``f(h_u) / F(h_u)``).
+    * ``w_lo_only`` for the "only lower finite" subset (hazard
+      ``f(h_l) / S(h_l)``).
+    """
+    if ctx.both.any():
+        log_p_b = _log_diff_ndtr(ctx.h_lo_b, ctx.h_hi_b, dist=dist)
+        w_hi_b, w_lo_b = _pair_density_weights(ctx.h_lo_b, ctx.h_hi_b, log_p_b, dist)
+    else:
+        w_hi_b = np.zeros(0, dtype=np.float64)
+        w_lo_b = np.zeros(0, dtype=np.float64)
+
+    if ctx.only_hi.any():
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        w_hi_only = np.exp(
+            np.minimum(dist.logpdf(ctx.h_hi_o) - _logcdf(ctx.h_hi_o), _LOG_FLOAT_MAX)
+        )
+    else:
+        w_hi_only = np.zeros(0, dtype=np.float64)
+
+    if ctx.only_lo.any():
+        w_lo_only = np.exp(
+            np.minimum(dist.logpdf(ctx.h_lo_o) - dist.logsf(ctx.h_lo_o), _LOG_FLOAT_MAX)
+        )
+    else:
+        w_lo_only = np.zeros(0, dtype=np.float64)
+
+    return w_lo_b, w_hi_b, w_hi_only, w_lo_only
+
+
+def _truncation_grad_nll(
+    ctx: _TruncContext,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    p: int,
+    q: int,
+) -> NDArray[np.float64]:
+    """Correction added to ``∂(-ℓ)/∂θ``.
+
+    For each observation ``ℓ_trunc = -log P``, so the contribution to the
+    gradient of the *negative* log-likelihood is ``+∂log P/∂θ``:
+
+    * **both finite**: ``+(B(u)·w_hi − B(l)·w_lo)`` for ``θ_b``
+      and ``+(w_hi − w_lo)·x`` for ``β``.
+    * **only upper finite**: ``+B(u)·µ`` for ``θ_b``, ``+µ·x`` for ``β``,
+      where ``µ = f(h_u)/F(h_u)`` (inverse Mills ratio).
+    * **only lower finite**: ``-B(l)·λ`` for ``θ_b``, ``-λ·x`` for ``β``,
+      where ``λ = f(h_l)/S(h_l)`` (hazard).
+    """
+    grad = np.zeros(p + q, dtype=np.float64)
+    w_lo_b, w_hi_b, w_hi_only, w_lo_only = _truncation_weights(ctx, dist)
+
+    if ctx.both.any():
+        if weights is not None:
+            ww = weights[ctx.both]
+            w_hi_b = ww * w_hi_b
+            w_lo_b = ww * w_lo_b
+        grad[:p] += ctx.B_hi_b.T @ w_hi_b - ctx.B_lo_b.T @ w_lo_b
+        if ctx.X_b is not None:
+            grad[p:] += ctx.X_b.T @ (w_hi_b - w_lo_b)
+
+    if ctx.only_hi.any():
+        wh = w_hi_only
+        if weights is not None:
+            wh = weights[ctx.only_hi] * wh
+        grad[:p] += ctx.B_hi_o.T @ wh
+        if ctx.X_only_hi is not None:
+            grad[p:] += ctx.X_only_hi.T @ wh
+
+    if ctx.only_lo.any():
+        wl = w_lo_only
+        if weights is not None:
+            wl = weights[ctx.only_lo] * wl
+        grad[:p] -= ctx.B_lo_o.T @ wl
+        if ctx.X_only_lo is not None:
+            grad[p:] -= ctx.X_only_lo.T @ wl
+
+    return grad
+
+
+def _truncation_scores(
+    ctx: _TruncContext,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    n: int,
+    p: int,
+    q: int,
+) -> NDArray[np.float64]:
+    """Per-observation correction ``∂log P_i/∂θ`` (shape ``(n, p+q)``).
+
+    Caller subtracts this from the unconditional ``∂ℓ_i/∂θ`` matrix.  Rows
+    are weighted following the R ``sandwich`` ``estfun`` convention so that
+    column sums equal the full weighted gradient of ``-Σ_i log P_i``.
+    """
+    out = np.zeros((n, p + q), dtype=np.float64)
+    w_lo_b, w_hi_b, w_hi_only, w_lo_only = _truncation_weights(ctx, dist)
+
+    if ctx.both.any():
+        rows = np.flatnonzero(ctx.both)
+        if weights is not None:
+            ww = weights[ctx.both]
+            w_hi_b = ww * w_hi_b
+            w_lo_b = ww * w_lo_b
+        out[rows, :p] = ctx.B_hi_b * w_hi_b[:, None] - ctx.B_lo_b * w_lo_b[:, None]
+        if ctx.X_b is not None:
+            out[rows, p:] = ctx.X_b * (w_hi_b - w_lo_b)[:, None]
+
+    if ctx.only_hi.any():
+        rows = np.flatnonzero(ctx.only_hi)
+        wh = w_hi_only
+        if weights is not None:
+            wh = weights[ctx.only_hi] * wh
+        out[rows, :p] = ctx.B_hi_o * wh[:, None]
+        if ctx.X_only_hi is not None:
+            out[rows, p:] = ctx.X_only_hi * wh[:, None]
+
+    if ctx.only_lo.any():
+        rows = np.flatnonzero(ctx.only_lo)
+        wl = w_lo_only
+        if weights is not None:
+            wl = weights[ctx.only_lo] * wl
+        out[rows, :p] = -ctx.B_lo_o * wl[:, None]
+        if ctx.X_only_lo is not None:
+            out[rows, p:] = -ctx.X_only_lo * wl[:, None]
+
+    return out
+
+
+def _truncation_hess_nll(
+    ctx: _TruncContext,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    p: int,
+    q: int,
+) -> NDArray[np.float64]:
+    """Correction added to ``∂²(-ℓ)/∂θ²`` (the negative log-likelihood Hessian).
+
+    Since ``ℓ_trunc = -log P``, the contribution to ``∂²(-ℓ)/∂θ²`` equals
+    ``+∂²log P/∂θ²`` — the *negation* of the corresponding interval /
+    left / right censoring Hessian block evaluated at the truncation
+    bounds.
+    """
+    H = np.zeros((p + q, p + q), dtype=np.float64)
+    w_lo_b, w_hi_b, w_hi_only, w_lo_only = _truncation_weights(ctx, dist)
+
+    if ctx.both.any():
+        psi_lo = -_neg_score(ctx.h_lo_b, dist)
+        psi_hi = -_neg_score(ctx.h_hi_b, dist)
+        a = -psi_lo * w_lo_b - w_lo_b * w_lo_b
+        c = psi_hi * w_hi_b - w_hi_b * w_hi_b
+        b = w_hi_b * w_lo_b
+        if weights is not None:
+            ww = weights[ctx.both]
+            a = ww * a
+            b = ww * b
+            c = ww * c
+        # ∂²(log P)/∂θ² = chained 2x2 [a b; b c] outer product.  This is the
+        # SAME block computed by _hess_interval for the "both finite" path,
+        # added with the OPPOSITE sign (interval Hessian subtracts; truncation
+        # Hessian — which targets -ℓ_trunc = +log P — adds).
+        H += (
+            _outer(ctx.B_lo_b, ctx.X_b, ctx.B_lo_b, ctx.X_b, a, p, q)
+            + _outer(ctx.B_lo_b, ctx.X_b, ctx.B_hi_b, ctx.X_b, b, p, q)
+            + _outer(ctx.B_hi_b, ctx.X_b, ctx.B_lo_b, ctx.X_b, b, p, q)
+            + _outer(ctx.B_hi_b, ctx.X_b, ctx.B_hi_b, ctx.X_b, c, p, q)
+        )
+
+    if ctx.only_hi.any():
+        # log P = log F(h_u);   ∂²log F/∂h² = -µ(µ - ψ).
+        psi = -_neg_score(ctx.h_hi_o, dist)
+        w_block = w_hi_only * (w_hi_only - psi)
+        if weights is not None:
+            w_block = weights[ctx.only_hi] * w_block
+        H -= _assemble_hessian(ctx.B_hi_o, w_block, ctx.X_only_hi, p, q)
+
+    if ctx.only_lo.any():
+        # log P = log S(h_l);   ∂²log S/∂h² = -λ(ψ + λ).
+        psi = -_neg_score(ctx.h_lo_o, dist)
+        w_block = w_lo_only * (psi + w_lo_only)
+        if weights is not None:
+            w_block = weights[ctx.only_lo] * w_block
+        H -= _assemble_hessian(ctx.B_lo_o, w_block, ctx.X_only_lo, p, q)
+
+    return H
+
+
+def _truncation_intercept_score(
+    ctx: _TruncContext,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    n: int,
+) -> NDArray[np.float64]:
+    """Per-observation correction ``∂log P_i/∂α`` (length ``n``).
+
+    Caller subtracts this from the unconditional intercept score.
+
+    Closed forms:
+
+    * **both finite**: ``w_hi − w_lo``
+    * **only upper finite**: ``+µ`` (inverse Mills ratio at ``h_u``)
+    * **only lower finite**: ``−λ`` (negative hazard at ``h_l``)
+    """
+    out = np.zeros(n, dtype=np.float64)
+    w_lo_b, w_hi_b, w_hi_only, w_lo_only = _truncation_weights(ctx, dist)
+
+    if ctx.both.any():
+        vals = w_hi_b - w_lo_b
+        if weights is not None:
+            vals = weights[ctx.both] * vals
+        out[ctx.both] = vals
+
+    if ctx.only_hi.any():
+        vals = w_hi_only
+        if weights is not None:
+            vals = weights[ctx.only_hi] * vals
+        out[ctx.only_hi] = vals
+
+    if ctx.only_lo.any():
+        vals = -w_lo_only
+        if weights is not None:
+            vals = weights[ctx.only_lo] * vals
+        out[ctx.only_lo] = vals
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -999,11 +1468,7 @@ def _grad_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if w_c is not None:
                 ww = w_c[both]
                 w_hi_b = ww * w_hi_b
@@ -1298,11 +1763,7 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_b, log_p_b)
             else:
                 ll += np.sum(log_p_b)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if ww_b is not None:
                 w_hi_b = ww_b * w_hi_b
                 w_lo_b = ww_b * w_lo_b
@@ -1551,11 +2012,7 @@ def _scores_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if w_c is not None:
                 ww = w_c[both]
                 w_hi_b = ww * w_hi_b
@@ -1812,23 +2269,6 @@ def _hess_interval(
         o_e = offset[mask_e] if offset is not None else None
         H += _hess_none(y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e)
 
-    def _outer(
-        U: NDArray[np.float64],
-        Xu: NDArray[np.float64] | None,
-        V: NDArray[np.float64],
-        Xv: NDArray[np.float64] | None,
-        w_vec: NDArray[np.float64],
-    ) -> NDArray[np.float64]:
-        """Compute ``U^T diag(w_vec) V`` split into a ``(p+q, p+q)`` block."""
-        Uw = U * w_vec[:, None]
-        out = np.zeros((p + q, p + q), dtype=np.float64)
-        out[:p, :p] = Uw.T @ V
-        if Xu is not None and Xv is not None and q > 0:
-            out[:p, p:] = Uw.T @ Xv
-            out[p:, :p] = (Xu * w_vec[:, None]).T @ V
-            out[p:, p:] = (Xu * w_vec[:, None]).T @ Xv
-        return out
-
     mask_c = ~cd.is_exact_mask
     if mask_c.any():
         lo = cd.lower[mask_c]
@@ -1852,11 +2292,7 @@ def _hess_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
 
             psi_lo = -_neg_score(h_lo_b, dist)
             psi_hi = -_neg_score(h_hi_b, dist)
@@ -1869,10 +2305,10 @@ def _hess_interval(
                 b = ww * b
                 c = ww * c
             block = (
-                _outer(B_lo_b, X_b, B_lo_b, X_b, a)
-                + _outer(B_lo_b, X_b, B_hi_b, X_b, b)
-                + _outer(B_hi_b, X_b, B_lo_b, X_b, b)
-                + _outer(B_hi_b, X_b, B_hi_b, X_b, c)
+                _outer(B_lo_b, X_b, B_lo_b, X_b, a, p, q)
+                + _outer(B_lo_b, X_b, B_hi_b, X_b, b, p, q)
+                + _outer(B_hi_b, X_b, B_lo_b, X_b, b, p, q)
+                + _outer(B_hi_b, X_b, B_hi_b, X_b, c, p, q)
             )
             H -= block  # NLL = -ℓ
 
@@ -1950,6 +2386,10 @@ def _log_likelihood_from_dist(
                 y, theta, basis, X, dist=dist, weights=weights, offset=offset
             )
 
+        if _has_truncation(y):
+            ctx = _build_truncation_context(y, theta, basis, X, offset)
+            result = result + _truncation_ll(ctx, dist, weights)
+
     if not np.isfinite(result):
         raise InfeasibleParameterError(
             f"log_likelihood returned {result}.  Possible causes: theta "
@@ -1999,6 +2439,13 @@ def _negative_log_likelihood_from_dist(
         ll, grad = _ll_and_grad_interval(
             y, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
+
+    if isinstance(y, CensoredData) and _has_truncation(y):
+        p = basis.order + 1
+        q = X.shape[1] if X is not None else 0
+        ctx = _build_truncation_context(y, theta, basis, X, offset)
+        ll = ll + _truncation_ll(ctx, dist, weights)
+        grad = grad + _truncation_grad_nll(ctx, dist, weights, p, q)
 
     if not np.isfinite(ll):
         raise InfeasibleParameterError(
@@ -2178,6 +2625,12 @@ def hessian(
             y, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
 
+    if isinstance(y, CensoredData) and _has_truncation(y):
+        p = basis.order + 1
+        q = X.shape[1] if X is not None else 0
+        ctx = _build_truncation_context(y, theta, basis, X, offset)
+        result = result + _truncation_hess_nll(ctx, dist, weights, p, q)
+
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
             "hessian() produced non-finite entries.  Possible causes: theta "
@@ -2251,6 +2704,12 @@ def score_matrix(
         result = _scores_interval(
             y, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
+
+    if isinstance(y, CensoredData) and _has_truncation(y):
+        p = basis.order + 1
+        q = X.shape[1] if X is not None else 0
+        ctx = _build_truncation_context(y, theta, basis, X, offset)
+        result = result - _truncation_scores(ctx, dist, weights, n, p, q)
 
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
@@ -2335,6 +2794,10 @@ def intercept_score(
         result = _intercept_score_interval(
             y, theta_b, basis, X, beta, dist, weights=weights, offset=offset
         )
+
+    if isinstance(y, CensoredData) and _has_truncation(y):
+        ctx = _build_truncation_context(y, theta, basis, X, offset)
+        result = result - _truncation_intercept_score(ctx, dist, weights, n)
 
     if not np.all(np.isfinite(result)):
         raise InfeasibleParameterError(
@@ -2495,11 +2958,7 @@ def _intercept_score_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             vals = w_hi_b - w_lo_b
             if w_c is not None:
                 vals = w_c[both] * vals
