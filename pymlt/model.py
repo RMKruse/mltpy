@@ -114,15 +114,33 @@ _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
 
 def _extract_feature_names(X: object) -> list[str] | None:
-    """Extract column names from a pandas DataFrame, else ``None``.
+    """Extract column names from DataFrame-like ``X``, else ``None``.
 
     Kept as a free function so no pandas import is required at module load
-    time — we only touch pandas attributes by duck-typing.
+    time — we only touch DataFrame-like attributes by duck-typing.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` exposes both ``columns`` and a 2-D ``shape``, but the column
+        name count does not match ``shape[1]``.
     """
     columns = getattr(X, "columns", None)
     if columns is None:
         return None
-    return [str(c) for c in columns]
+    feature_names = [str(c) for c in columns]
+    shape = getattr(X, "shape", None)
+    if (
+        isinstance(shape, tuple)
+        and len(shape) >= 2
+        and isinstance(shape[1], int | np.integer)
+        and len(feature_names) != int(shape[1])
+    ):
+        raise ValueError(
+            f"X columns metadata has length {len(feature_names)} but X has "
+            f"{int(shape[1])} columns."
+        )
+    return feature_names
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +392,7 @@ class ConditionalTransformationModel:
         # Feature names for the covariate block of theta_.
         if X_clean is not None:
             q = X_clean.shape[1]
-            if feature_names is None or len(feature_names) != q:
+            if feature_names is None:
                 feature_names = [f"X{j + 1}" for j in range(q)]
             self.feature_names_in_ = feature_names
         else:

@@ -103,6 +103,24 @@ class TestFit:
         model.fit(y, X=X)
         assert model.theta_.shape == (4 + q,)
 
+    def test_duck_typed_columns_length_mismatch_raises(self):
+        class _BadColumnsArray:
+            def __init__(self, data: np.ndarray):
+                self._data = data
+                self.shape = data.shape
+                self.columns = ("x1", "x2")
+
+            def __array__(self, dtype: np.dtype[np.float64] | None = None) -> np.ndarray:
+                if dtype is None:
+                    return self._data
+                return self._data.astype(dtype, copy=False)
+
+        model = make_ctm()
+        y = simple_y(n=20)
+        X = _BadColumnsArray(np.linspace(-1.0, 1.0, 20).reshape(-1, 1))
+        with pytest.raises(ValueError, match="columns metadata"):
+            model.fit(y, X=X)
+
     def test_result_has_log_likelihood(self):
         model = make_ctm()
         model.fit(simple_y())
