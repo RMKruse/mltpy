@@ -832,16 +832,21 @@ class ConditionalTransformationModel:
             T = (t[:, None] ** i_arr) * ((1.0 - t)[:, None] ** j_arr)
             return cast(NDArray[np.float64], T @ binom_theta)
 
-        # Vectorised bisection. 60 iters bracket-shrink: (b-a) · 2^-60 ≪ 1e-6
-        # for any practically-sized support.
+        # Vectorised bisection. At most 60 iterations; breaks early once the
+        # widest remaining bracket is < _BRENTQ_EPS (same tolerance used for
+        # bracket endpoints).  For a width-100 support this exits after ~40
+        # iters; for width-1 after ~33.
         lo = np.full(n_probs, a, dtype=float)
         hi = np.full(n_probs, b, dtype=float)
+        mid = 0.5 * (lo + hi)
         for _ in range(60):
-            mid = 0.5 * (lo + hi)
+            if np.max(hi - lo) < _BRENTQ_EPS:
+                break
             below = _h_vec(mid) < z
             lo = np.where(below, mid, lo)
             hi = np.where(below, hi, mid)
-        return cast(NDArray[np.float64], 0.5 * (lo + hi))
+            mid = 0.5 * (lo + hi)
+        return cast(NDArray[np.float64], mid)
 
     def score(
         self,
