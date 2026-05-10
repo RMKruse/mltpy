@@ -206,6 +206,24 @@ class TestBoundaryConstraint:
         np.testing.assert_array_equal(lc.lb, lc.ub)
         np.testing.assert_array_equal(lc.lb, [1.0, 4.0])
 
+    def test_total_params_pads_A_shape(self):
+        bc = BoundaryConstraint(4, lower=0.0, upper=1.0, total_params=6)
+        assert bc._A.shape == (2, 6)
+
+    def test_total_params_upper_selects_correct_index(self):
+        # upper must pin theta[n_params-1]=theta[3], not theta[-1]=theta[5]
+        bc = BoundaryConstraint(4, lower=None, upper=1.0, total_params=6)
+        cs = bc.as_scipy_constraint()
+        theta = np.array([0.0, 0.5, 0.8, 1.0, 99.0, 99.0])
+        np.testing.assert_allclose(cs[0]["fun"](theta), 0.0)
+
+    def test_linear_constraint_padded_shape(self):
+        bc = BoundaryConstraint(4, lower=0.0, upper=1.0, total_params=6)
+        lc = bc.as_LinearConstraint()
+        A = lc.A.toarray() if hasattr(lc.A, "toarray") else lc.A
+        assert A.shape == (2, 6)
+        np.testing.assert_array_equal(A[:, 4:], 0.0)
+
 
 # ---------------------------------------------------------------------------
 # build_constraints
@@ -306,6 +324,47 @@ class TestBuildConstraints:
         assert np.all(np.diff(result.x) >= -1e-6)
         np.testing.assert_allclose(result.x[0], 0.0, atol=1e-6)
         np.testing.assert_allclose(result.x[-1], 1.0, atol=1e-6)
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_boundary_with_total_params_correct_shape(self, solver):
+        n_params, total = 4, 6
+        result = build_constraints(
+            n_params, lower=0.0, upper=1.0, solver=solver, total_params=total
+        )
+        if solver == "slsqp":
+            for c in result[1:]:  # skip monotonicity
+                j = c["jac"](np.zeros(total))
+                assert j.shape == (total,)
+        else:
+            bc_lc = result[1]
+            A = bc_lc.A.toarray() if hasattr(bc_lc.A, "toarray") else bc_lc.A
+            assert A.shape == (2, total)
+
+    def test_minimize_slsqp_boundary_with_betas(self):
+        """Boundary constraints work end-to-end when beta parameters are present."""
+        n_params, n_beta = 4, 2
+        total = n_params + n_beta
+        constraints = build_constraints(
+            n_params, lower=0.0, upper=1.0, solver="slsqp", total_params=total
+        )
+        target = np.concatenate([np.array([4.0, 3.0, 2.0, 1.0]), np.zeros(n_beta)])
+
+        def obj(t):
+            return np.sum((t - target) ** 2)
+
+        def grad(t):
+            return 2 * (t - target)
+
+        result = minimize(
+            obj,
+            x0=np.array([0.0, 0.3, 0.6, 1.0, 0.0, 0.0]),
+            jac=grad,
+            method="SLSQP",
+            constraints=constraints,
+        )
+        assert result.success, result.message
+        np.testing.assert_allclose(result.x[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(result.x[n_params - 1], 1.0, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

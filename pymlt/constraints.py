@@ -88,8 +88,8 @@ class BoundaryConstraint:
 
     Enforces equality constraints::
 
-        theta[0]  == lower   (if lower is not None)
-        theta[-1] == upper   (if upper is not None)
+        theta[0]          == lower   (if lower is not None)
+        theta[n_params-1] == upper   (if upper is not None)
 
     Parameters
     ----------
@@ -98,12 +98,19 @@ class BoundaryConstraint:
     lower:
         Value to fix ``theta[0]`` to, or ``None`` to leave it free.
     upper:
-        Value to fix ``theta[-1]`` to, or ``None`` to leave it free.
+        Value to fix ``theta[n_params-1]`` to, or ``None`` to leave it free.
+    total_params:
+        Total length of the parameter vector passed to the optimiser, including
+        any regression coefficients.  When ``total_params > n_params`` the
+        constraint rows are padded with zero columns for the beta entries so
+        that ``_A`` has shape ``(n_active, total_params)``.  Defaults to
+        ``n_params`` (no beta).
     """
 
     n_params: int
     lower: float | None
     upper: float | None
+    total_params: int | None = None
     _A: NDArray[np.float64] = field(init=False, repr=False)
     _rhs: NDArray[np.float64] = field(init=False, repr=False)
     _jacs: list[NDArray[np.float64]] = field(init=False, repr=False)
@@ -112,23 +119,27 @@ class BoundaryConstraint:
         if self.lower is None and self.upper is None:
             raise ValueError("At least one of lower or upper must be provided")
 
+        total = self.total_params if self.total_params is not None else self.n_params
+
         rows: list[NDArray[np.float64]] = []
         rhs: list[float] = []
         jacs: list[NDArray[np.float64]] = []
 
-        e0 = np.eye(self.n_params)[0]
-        e_last = np.eye(self.n_params)[-1]
+        e0 = np.zeros(total)
+        e0[0] = 1.0
+        e_upper = np.zeros(total)
+        e_upper[self.n_params - 1] = 1.0
 
         if self.lower is not None:
             rows.append(e0)
             rhs.append(float(self.lower))
             jacs.append(e0)
         if self.upper is not None:
-            rows.append(e_last)
+            rows.append(e_upper)
             rhs.append(float(self.upper))
-            jacs.append(e_last)
+            jacs.append(e_upper)
 
-        # _A: shape (n_active, n_params); _rhs: shape (n_active,)
+        # _A: shape (n_active, total); _rhs: shape (n_active,)
         self._A = np.array(rows)
         self._rhs = np.array(rhs)
         self._jacs = jacs  # per-constraint row vectors (precomputed)
@@ -155,11 +166,12 @@ class BoundaryConstraint:
             idx += 1
         if self.upper is not None:
             up = self.upper
+            n = self.n_params
             jac_row = self._jacs[idx]
             constraints.append(
                 {
                     "type": "eq",
-                    "fun": lambda theta, up=up: theta[-1] - up,
+                    "fun": lambda theta, up=up, n=n: theta[n - 1] - up,
                     "jac": lambda theta, j=jac_row: j,
                 }
             )
@@ -341,7 +353,9 @@ def build_constraints(
                 }
             )
         if lower is not None or upper is not None:
-            bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
+            bc = BoundaryConstraint(
+                n_params, lower=lower, upper=upper, total_params=total
+            )
             result.extend(bc.as_scipy_constraint())
         return result
 
@@ -350,6 +364,8 @@ def build_constraints(
         if support_rows is not None:
             lcs.append(LinearConstraint(support_rows, lb=0.0, ub=np.inf))
         if lower is not None or upper is not None:
-            bc = BoundaryConstraint(n_params, lower=lower, upper=upper)
+            bc = BoundaryConstraint(
+                n_params, lower=lower, upper=upper, total_params=total
+            )
             lcs.append(bc.as_LinearConstraint())
         return lcs
