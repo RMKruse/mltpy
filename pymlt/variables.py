@@ -68,14 +68,50 @@ class CensoredData:
             self.trunc_lower = np.asarray(self.trunc_lower, dtype=float)
             if len(self.trunc_lower) != n:
                 raise ValueError("trunc_lower must have the same length as exact")
+            if np.any(np.isnan(self.trunc_lower)):
+                raise ValueError("trunc_lower must not contain NaN.")
         if self.trunc_upper is not None:
             self.trunc_upper = np.asarray(self.trunc_upper, dtype=float)
             if len(self.trunc_upper) != n:
                 raise ValueError("trunc_upper must have the same length as exact")
+            if np.any(np.isnan(self.trunc_upper)):
+                raise ValueError("trunc_upper must not contain NaN.")
         if self.trunc_lower is not None and self.trunc_upper is not None:
             if np.any(self.trunc_lower > self.trunc_upper):
                 raise ValueError(
                     "trunc_lower must be <= trunc_upper for every observation"
+                )
+        # The truncated likelihood factorisation
+        #     L_i = P(Y in A_i) / P(Y in B_i)
+        # only holds when the observation event A_i = [lower_i, upper_i] is
+        # contained in the truncation set B_i = [trunc_lower_i, trunc_upper_i].
+        # Otherwise the numerator should be P(A_i ∩ B_i), not P(A_i), and the
+        # likelihood would be silently wrong (or positive for impossible
+        # observations when A_i ∩ B_i is empty).  Validate the precondition
+        # here so it cannot reach the likelihood layer.
+        if self.trunc_lower is not None or self.trunc_upper is not None:
+            tl = (
+                self.trunc_lower
+                if self.trunc_lower is not None
+                else np.full(n, -np.inf)
+            )
+            tu = (
+                self.trunc_upper if self.trunc_upper is not None else np.full(n, np.inf)
+            )
+            below = self.lower < tl
+            above = self.upper > tu
+            if np.any(below) or np.any(above):
+                bad = np.flatnonzero(below | above)
+                first = int(bad[0])
+                raise ValueError(
+                    "Each observation interval [lower, upper] must be "
+                    "contained in its truncation interval "
+                    "[trunc_lower, trunc_upper]; got "
+                    f"lower[{first}]={self.lower[first]!r}, "
+                    f"upper[{first}]={self.upper[first]!r}, "
+                    f"trunc_lower[{first}]={tl[first]!r}, "
+                    f"trunc_upper[{first}]={tu[first]!r} "
+                    f"({len(bad)} row(s) violate the constraint)."
                 )
 
     # ------------------------------------------------------------------
@@ -175,6 +211,33 @@ class CensoredData:
         trunc_lower = np.asarray(trunc_lower, dtype=float)
         if len(trunc_lower) != len(y):
             raise ValueError("trunc_lower must have the same length as y")
+        # Reject NaN in y / trunc_lower up-front: NaN comparisons evaluate to
+        # False, so a NaN entry would slip past the generic A⊆B precondition
+        # in __post_init__ and silently contaminate the likelihood.
+        if np.any(np.isnan(y)):
+            raise ValueError(
+                "y must not contain NaN; right-censoring is encoded via the "
+                "`censored` mask, not by NaN in y."
+            )
+        if np.any(np.isnan(trunc_lower)):
+            raise ValueError("trunc_lower must not contain NaN.")
+        # Delayed entry requires the entry time to be at or before the
+        # observed/censoring time, i.e. trunc_lower[i] <= y[i].  Without this
+        # check, rows with trunc_lower > y describe an impossible event
+        # (observed before entering the risk set) and would produce
+        # nonsensical likelihood contributions.
+        bad = trunc_lower > y
+        if np.any(bad):
+            idx = np.flatnonzero(bad)
+            first = int(idx[0])
+            raise ValueError(
+                "Left-truncation (delayed entry) requires the entry time to "
+                "be at or before the observed/censoring time, i.e. "
+                "trunc_lower[i] <= y[i]; got "
+                f"trunc_lower[{first}]={trunc_lower[first]!r}, "
+                f"y[{first}]={y[first]!r} "
+                f"({len(idx)} row(s) violate the constraint)."
+            )
         if censored is None:
             exact = y.copy()
             lower = y.copy()

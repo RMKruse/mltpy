@@ -304,6 +304,38 @@ def _log_diff_ndtr(
     )
 
 
+def _pair_density_weights(
+    h_lo: NDArray[np.float64],
+    h_hi: NDArray[np.float64],
+    log_p: NDArray[np.float64],
+    dist: DistOps,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Mills-style density weights ``(f(h_hi)/P, f(h_lo)/P)`` shared by the
+    both-finite branch of every interval-style block (interval-censored
+    likelihood / gradient / Hessian / scores / intercept score, plus the
+    truncation correction).
+
+    In a very narrow window ``log_p`` is strongly negative, so
+    ``logpdf - log_p`` can exceed ``log(float64.max) ≈ 709`` and a bare
+    ``np.exp`` would overflow to ``+inf``.  Mapping ``+inf`` to ``0`` (as a
+    plain ``nan_to_num(posinf=0.0)`` would) silently zeroes a genuinely
+    large derivative weight, biasing gradient and Hessian *toward* the
+    cases where the correction matters most.  We instead clip the log-arg
+    at :data:`_LOG_FLOAT_MAX`, preserving the (large but finite) magnitude;
+    the only remaining NaN source is ``-inf - -inf`` from a degenerate
+    point-mass interval, where zero is the correct contribution.
+    """
+    with np.errstate(invalid="ignore"):
+        log_w_hi = dist.logpdf(h_hi) - log_p
+        log_w_lo = dist.logpdf(h_lo) - log_p
+    w_hi = np.exp(np.minimum(log_w_hi, _LOG_FLOAT_MAX))
+    w_lo = np.exp(np.minimum(log_w_lo, _LOG_FLOAT_MAX))
+    return (
+        np.nan_to_num(w_hi, nan=0.0),
+        np.nan_to_num(w_lo, nan=0.0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers: split theta, apply shift, compute score
 # ---------------------------------------------------------------------------
@@ -561,6 +593,12 @@ def _outer(
 #     ℓ_i(θ) = ℓ_uncond_i(θ) − log P_i(θ),
 #     P_i(θ) = F(h(u_i|x_i)) − F(h(l_i|x_i))
 #
+# This factorisation requires the observation event A_i = [lower_i, upper_i]
+# to be contained in B_i = [trunc_lower_i, trunc_upper_i] — otherwise the
+# numerator should be P(A_i ∩ B_i), not P(A_i).  CensoredData enforces
+# A_i ⊆ B_i at construction (see variables.py), so the helpers below assume
+# the precondition holds.
+#
 # The censoring branch produces ℓ_uncond; the helpers below add the
 # −log P_i correction (and its derivatives) on top.  The five public
 # dispatchers (log_likelihood, negative_log_likelihood, score_matrix,
@@ -739,11 +777,7 @@ def _truncation_weights(
     """
     if ctx.both.any():
         log_p_b = _log_diff_ndtr(ctx.h_lo_b, ctx.h_hi_b, dist=dist)
-        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-            w_hi_b = np.exp(dist.logpdf(ctx.h_hi_b) - log_p_b)
-            w_lo_b = np.exp(dist.logpdf(ctx.h_lo_b) - log_p_b)
-        w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-        w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+        w_hi_b, w_lo_b = _pair_density_weights(ctx.h_lo_b, ctx.h_hi_b, log_p_b, dist)
     else:
         w_hi_b = np.zeros(0, dtype=np.float64)
         w_lo_b = np.zeros(0, dtype=np.float64)
@@ -1434,11 +1468,7 @@ def _grad_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if w_c is not None:
                 ww = w_c[both]
                 w_hi_b = ww * w_hi_b
@@ -1733,11 +1763,7 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_b, log_p_b)
             else:
                 ll += np.sum(log_p_b)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if ww_b is not None:
                 w_hi_b = ww_b * w_hi_b
                 w_lo_b = ww_b * w_lo_b
@@ -1986,11 +2012,7 @@ def _scores_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if w_c is not None:
                 ww = w_c[both]
                 w_hi_b = ww * w_hi_b
@@ -2270,11 +2292,7 @@ def _hess_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
 
             psi_lo = -_neg_score(h_lo_b, dist)
             psi_hi = -_neg_score(h_hi_b, dist)
@@ -2940,11 +2958,7 @@ def _intercept_score_interval(
             h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                w_hi_b = np.exp(dist.logpdf(h_hi_b) - log_p_b)
-                w_lo_b = np.exp(dist.logpdf(h_lo_b) - log_p_b)
-            w_hi_b = np.nan_to_num(w_hi_b, nan=0.0, posinf=0.0, neginf=0.0)
-            w_lo_b = np.nan_to_num(w_lo_b, nan=0.0, posinf=0.0, neginf=0.0)
+            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             vals = w_hi_b - w_lo_b
             if w_c is not None:
                 vals = w_c[both] * vals

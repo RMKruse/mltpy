@@ -354,6 +354,53 @@ class TestLogLikelihoodTruncation:
             # else: both infinite → 0
         return log_p
 
+    def test_construction_rejects_observation_outside_truncation(self):
+        """CensoredData must error when A_i ⊄ B_i for any row.
+
+        The truncation correction relies on
+        ``ℓ_i = log P(A_i) − log P(B_i)`` which only equals
+        ``log[P(A_i ∩ B_i) / P(B_i)]`` when ``A_i ⊆ B_i``.  Inputs that
+        violate this would silently produce wrong likelihoods, so the
+        constraint is enforced loud at construction.
+        """
+        # Exact obs above the upper truncation bound.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([0.5, 0.9]),
+                lower=np.array([0.5, 0.9]),
+                upper=np.array([0.5, 0.9]),
+                trunc_lower=np.array([0.0, 0.0]),
+                trunc_upper=np.array([1.0, 0.8]),
+            )
+        # Right-censored row paired with a finite upper truncation
+        # (upper=+inf cannot fit inside any finite trunc_upper).
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([0.3]),
+                upper=np.array([np.inf]),
+                trunc_lower=np.array([0.2]),
+                trunc_upper=np.array([0.9]),
+            )
+        # Interval-censored row whose upper bound exceeds trunc_upper.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([0.30]),
+                upper=np.array([0.70]),
+                trunc_lower=np.array([0.20]),
+                trunc_upper=np.array([0.60]),
+            )
+        # Left-censored row whose lower bound (-inf) is below trunc_lower.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([-np.inf]),
+                upper=np.array([0.5]),
+                trunc_lower=np.array([0.1]),
+                trunc_upper=np.array([np.inf]),
+            )
+
     def test_noop_when_both_bounds_none(self):
         """Truncation correction is a no-op when neither bound is set."""
         basis = make_basis(order=3)
@@ -693,6 +740,58 @@ class TestLogLikelihoodTruncation:
         ll = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
 
         np.testing.assert_allclose(ll, ll_ref, rtol=1e-6, atol=1e-8)
+
+    def test_weights_no_overflow_to_zero(self):
+        # Regression: the both-finite branch of _truncation_weights used to
+        # exp(logpdf - log_p) and then nan_to_num(posinf=0.0).  In a very
+        # narrow truncation window logpdf - log_p exceeds log(float64.max),
+        # exp(...) overflows to +inf, and the +inf -> 0 mapping silently
+        # zeroed a genuinely large derivative weight, biasing gradient and
+        # Hessian.  Construct a degenerate-window _TruncContext directly
+        # (h_lo == h_hi forces _log_diff_ndtr -> -inf via its narrow-path
+        # log(width=0) = -inf) so logpdf - log_p = +inf and exercises the
+        # overflow branch.  After the fix the weight must be finite and
+        # large, never zero.
+        from pymlt.likelihood import (
+            _LOG_FLOAT_MAX,
+            _NORM_OPS,
+            _truncation_weights,
+            _TruncContext,
+        )
+
+        p_dim = 2
+        h = np.array([0.0])
+        B = np.ones((1, p_dim))
+        empty_mask = np.array([False])
+        ctx = _TruncContext(
+            n=1,
+            both=np.array([True]),
+            only_hi=empty_mask,
+            only_lo=empty_mask,
+            B_lo_b=B,
+            B_hi_b=B,
+            h_lo_b=h,
+            h_hi_b=h,
+            X_b=None,
+            B_hi_o=np.zeros((0, p_dim)),
+            h_hi_o=np.zeros(0),
+            X_only_hi=None,
+            B_lo_o=np.zeros((0, p_dim)),
+            h_lo_o=np.zeros(0),
+            X_only_lo=None,
+        )
+        w_lo_b, w_hi_b, _, _ = _truncation_weights(ctx, _NORM_OPS)
+
+        assert np.isfinite(w_hi_b[0]), f"w_hi_b must be finite, got {w_hi_b[0]}"
+        assert np.isfinite(w_lo_b[0]), f"w_lo_b must be finite, got {w_lo_b[0]}"
+        # Clipped at _LOG_FLOAT_MAX, the weight is ~exp(_LOG_FLOAT_MAX).
+        # The previous buggy implementation returned exactly 0.0.
+        threshold = np.exp(0.5 * _LOG_FLOAT_MAX)
+        assert w_hi_b[0] > threshold, (
+            f"narrow-window weight must be large, got {w_hi_b[0]} "
+            "(buggy code silently returned 0.0)"
+        )
+        assert w_lo_b[0] > threshold
 
 
 # ---------------------------------------------------------------------------

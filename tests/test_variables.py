@@ -181,6 +181,24 @@ class TestCensoredDataValidation:
                 trunc_upper=np.array([3.0, 1.0]),
             )
 
+    def test_trunc_lower_nan_raises(self):
+        with pytest.raises(ValueError, match="trunc_lower must not contain NaN"):
+            CensoredData(
+                exact=np.array([1.0, 2.0]),
+                lower=np.array([1.0, 2.0]),
+                upper=np.array([1.0, 2.0]),
+                trunc_lower=np.array([0.0, np.nan]),
+            )
+
+    def test_trunc_upper_nan_raises(self):
+        with pytest.raises(ValueError, match="trunc_upper must not contain NaN"):
+            CensoredData(
+                exact=np.array([1.0, 2.0]),
+                lower=np.array([1.0, 2.0]),
+                upper=np.array([1.0, 2.0]),
+                trunc_upper=np.array([np.nan, 5.0]),
+            )
+
     def test_truncation_stored_correctly(self):
         cd = CensoredData(
             exact=np.array([1.0, 2.0]),
@@ -191,6 +209,71 @@ class TestCensoredDataValidation:
         )
         np.testing.assert_array_equal(cd.trunc_lower, [0.0, 0.5])
         np.testing.assert_array_equal(cd.trunc_upper, [3.0, 4.0])
+
+
+class TestCensoredDataLeftTruncated:
+    def test_basic_no_censoring(self):
+        cd = CensoredData.left_truncated(
+            y=np.array([1.0, 2.0, 3.0]),
+            trunc_lower=np.array([0.5, 1.0, 1.5]),
+        )
+        np.testing.assert_array_equal(cd.exact, [1.0, 2.0, 3.0])
+        np.testing.assert_array_equal(cd.trunc_lower, [0.5, 1.0, 1.5])
+
+    def test_with_right_censoring(self):
+        cd = CensoredData.left_truncated(
+            y=np.array([1.0, 2.0]),
+            trunc_lower=np.array([0.5, 1.0]),
+            censored=np.array([False, True]),
+        )
+        assert np.isnan(cd.exact[1])
+        assert cd.upper[1] == np.inf
+        assert cd.lower[1] == 2.0
+
+    def test_entry_after_observation_raises(self):
+        with pytest.raises(ValueError, match="delayed entry"):
+            CensoredData.left_truncated(
+                y=np.array([1.0, 2.0, 3.0]),
+                trunc_lower=np.array([0.5, 2.5, 1.5]),  # row 1: 2.5 > 2.0
+            )
+
+    def test_entry_after_right_censoring_raises(self):
+        with pytest.raises(ValueError, match="delayed entry"):
+            CensoredData.left_truncated(
+                y=np.array([1.0, 2.0]),
+                trunc_lower=np.array([0.5, 5.0]),  # row 1: 5.0 > 2.0 (censored)
+                censored=np.array([False, True]),
+            )
+
+    def test_entry_equal_observation_allowed(self):
+        # Degenerate but mathematically valid: P(B) = P(Y >= y) and the row
+        # contributes log f(y) - log S(y), which is finite.
+        cd = CensoredData.left_truncated(
+            y=np.array([1.0, 2.0]),
+            trunc_lower=np.array([1.0, 2.0]),
+        )
+        np.testing.assert_array_equal(cd.trunc_lower, [1.0, 2.0])
+
+    def test_nan_in_trunc_lower_raises(self):
+        with pytest.raises(ValueError, match="trunc_lower must not contain NaN"):
+            CensoredData.left_truncated(
+                y=np.array([1.0, 2.0]),
+                trunc_lower=np.array([0.5, np.nan]),
+            )
+
+    def test_nan_in_y_raises(self):
+        with pytest.raises(ValueError, match="y must not contain NaN"):
+            CensoredData.left_truncated(
+                y=np.array([1.0, np.nan]),
+                trunc_lower=np.array([0.5, 0.5]),
+            )
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="trunc_lower must have the same length"):
+            CensoredData.left_truncated(
+                y=np.array([1.0, 2.0]),
+                trunc_lower=np.array([0.5]),
+            )
 
 
 # ---------------------------------------------------------------------------
