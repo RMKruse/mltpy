@@ -184,6 +184,40 @@ class BernsteinBasis:
             result = k * (k - 1) * (B_pad[:, :-2] - 2 * B_pad[:, 1:-1] + B_pad[:, 2:])
             return result / (b - a) ** 2
 
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Bernstein design matrix and its first derivative in one pass.
+
+        Normalises and validates ``y`` once, then returns both the evaluation
+        matrix (degree k) and the first-derivative matrix (degree k−1
+        recurrence).  Equivalent to calling ``evaluate(y)`` followed by
+        ``derivative(y, order=1)`` but avoids the redundant support scan.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        B : NDArray of shape (n, order+1)
+            Same as ``evaluate(y)``.
+        dB : NDArray of shape (n, order+1)
+            Same as ``derivative(y, order=1)``.
+        """
+        k = self.order
+        a, b = self.support
+        t = _normalize_and_validate_support(y, self.support)
+        n = len(t)
+        B = _bernstein_matrix(t, k)
+        if k == 0:
+            return B, np.zeros((n, 1))
+        B_low = _bernstein_matrix(t, k - 1)
+        B_pad = np.pad(B_low, ((0, 0), (1, 1)))
+        dB = k * (B_pad[:, :-1] - B_pad[:, 1:]) / (b - a)
+        return B, dB
+
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Running integral of each basis function from a to y.
 

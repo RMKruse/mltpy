@@ -1041,8 +1041,7 @@ def _ll_none(
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
-    B = basis.evaluate(y)  # (n, p)
-    D = basis.derivative(y, order=1)  # (n, p)
+    B, D = basis.evaluate_with_derivative(y)  # (n, p)
     h_raw = _shift(B @ theta_b, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
@@ -1082,8 +1081,7 @@ def _ll_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1140,8 +1138,7 @@ def _ll_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1194,8 +1191,7 @@ def _ll_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1277,8 +1273,7 @@ def _grad_none(
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
-    B = basis.evaluate(y)  # (n, p)
-    D = basis.derivative(y, order=1)  # (n, p)
+    B, D = basis.evaluate_with_derivative(y)  # (n, p)
     h_raw = _shift(B @ theta_b, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
@@ -1317,8 +1312,7 @@ def _grad_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1374,8 +1368,7 @@ def _grad_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1431,8 +1424,7 @@ def _grad_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1536,8 +1528,7 @@ def _ll_and_grad_none(
     p = basis.order + 1
     theta_b, beta = _split_theta(theta, p, X)
 
-    B = basis.evaluate(y)
-    D = basis.derivative(y, order=1)
+    B, D = basis.evaluate_with_derivative(y)
     h_raw = _shift(B @ theta_b, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
@@ -1582,8 +1573,7 @@ def _ll_and_grad_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1649,8 +1639,7 @@ def _ll_and_grad_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1716,8 +1705,7 @@ def _ll_and_grad_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e = basis.evaluate(y_e)
-        D_e = basis.derivative(y_e, order=1)
+        B_e, D_e = basis.evaluate_with_derivative(y_e)
         h_raw_e = _shift(B_e @ theta_b, X_e, beta)
         if o_e is not None:
             h_raw_e = h_raw_e + o_e
@@ -1839,8 +1827,7 @@ def _scores_none(
     q = X.shape[1] if X is not None else 0
     theta_b, beta = _split_theta(theta, p, X)
 
-    B = basis.evaluate(y)  # (n, p)
-    D = basis.derivative(y, order=1)  # (n, p)
+    B, D = basis.evaluate_with_derivative(y)  # (n, p)
     h_raw = _shift(B @ theta_b, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
@@ -2114,8 +2101,7 @@ def _hess_none(
     q = X.shape[1] if X is not None else 0
     theta_b, beta = _split_theta(theta, p, X)
 
-    B = basis.evaluate(y)  # (n, p)
-    D = basis.derivative(y, order=1)  # (n, p)
+    B, D = basis.evaluate_with_derivative(y)  # (n, p)
     h_raw = _shift(B @ theta_b, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
