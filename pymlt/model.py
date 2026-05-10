@@ -26,7 +26,7 @@ from typing import Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
-from scipy.special import comb
+from scipy.special import comb, log_ndtr
 from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
@@ -522,9 +522,9 @@ class ConditionalTransformationModel:
 
         Notes
         -----
-        Log-scale variants use ``dist.logcdf``/``logsf``/``logpdf`` directly
-        and are numerically stable in the tails where the primal quantities
-        would under- or overflow.
+        Log-scale variants use ``scipy.special.log_ndtr`` for the normal
+        distribution's log-CDF (more accurate in the tails) and
+        ``dist.logcdf``/``logsf``/``logpdf`` otherwise.
 
         Examples
         --------
@@ -594,6 +594,7 @@ class ConditionalTransformationModel:
             h = h + offset_arr
 
         dist = _get_dist(self.base_distribution)
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
             raise InfeasibleParameterError(
                 f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
@@ -624,7 +625,7 @@ class ConditionalTransformationModel:
         if what == "distribution":
             return cast(NDArray[np.float64], dist.cdf(h_c))
         if what == "logdistribution":
-            return cast(NDArray[np.float64], dist.logcdf(h_c))
+            return cast(NDArray[np.float64], _logcdf(h_c))
         if what == "survivor":
             return cast(NDArray[np.float64], dist.sf(h_c))
         if what == "logsurvivor":
@@ -648,9 +649,9 @@ class ConditionalTransformationModel:
         if what == "logcumhazard":
             return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
         if what == "odds":
-            return cast(NDArray[np.float64], np.exp(dist.logcdf(h_c) - dist.logsf(h_c)))
+            return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
         # logodds
-        return cast(NDArray[np.float64], dist.logcdf(h_c) - dist.logsf(h_c))
+        return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
 
     def _predict_quantile(
         self,
