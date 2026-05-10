@@ -142,7 +142,8 @@ class BernsteinBasis:
             Observations, shape (n,).  Must lie in the closed interval
             ``[support[0], support[1]]``.
         order:
-            Derivative order: 1 (default) or 2.
+            Derivative order: 1 (default) or 2.  Order 0 is intentionally not
+            supported; use ``evaluate(y)`` instead.
 
         Returns
         -------
@@ -151,7 +152,8 @@ class BernsteinBasis:
         Raises
         ------
         ValueError
-            If ``order`` is not 1 or 2, or if any observation lies outside
+            If ``order`` is not 1 or 2 (order 0 is not supported; call
+            ``evaluate(y)`` directly), or if any observation lies outside
             ``support``.
         """
         if order not in (1, 2):
