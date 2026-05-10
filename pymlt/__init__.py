@@ -20,7 +20,7 @@ from pymlt.optimizer import OptimizerConfig
 from pymlt.tram import BoxCox, Colr, Coxph, Lm, Polr
 from pymlt.variables import CensoredData, CensoringType, OrderedVariable
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # Models
