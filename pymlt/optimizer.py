@@ -136,6 +136,8 @@ def _make_objective(
     base_distribution: BaseDistribution = "normal",
     *,
     dist: DistOps | None = None,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -167,6 +169,11 @@ def _make_objective(
         Optional pre-resolved distribution wrapper. When provided,
         objective evaluations reuse it instead of re-dispatching from
         ``base_distribution`` on every call.
+    weights : NDArray[np.float64] | None, default=None
+        Per-observation weights (already validated by the caller).
+    offset : NDArray[np.float64] | None, default=None
+        Per-observation offsets added to ``h`` before distribution calls
+        (already validated by the caller).
 
     Returns
     -------
@@ -195,6 +202,8 @@ def _make_objective(
                     censoring,
                     gradient=True,
                     dist=resolved_dist,
+                    weights=weights,
+                    offset=offset,
                 )
             except InfeasibleParameterError:
                 # Subgradient of the quadratic monotonicity-violation penalty
@@ -222,6 +231,8 @@ def _make_objective(
                     censoring,
                     gradient=False,
                     dist=resolved_dist,
+                    weights=weights,
+                    offset=offset,
                 )
             except InfeasibleParameterError:
                 return _BIG
@@ -328,6 +339,8 @@ def optimize(
     censoring: CensoringType = CensoringType.NONE,
     config: OptimizerConfig | None = None,
     base_distribution: BaseDistribution = "normal",
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
 
@@ -347,6 +360,12 @@ def optimize(
     config:
         Optimisation settings.  Defaults to :class:`OptimizerConfig` with
         all defaults.
+    weights:
+        Optional per-observation weights, shape ``(n,)``.  Passed unchanged
+        to the likelihood; no normalisation is applied.
+    offset:
+        Optional per-observation offset, shape ``(n,)``.  Added to ``h``
+        before distribution calls on every likelihood evaluation.
 
     Returns
     -------
@@ -382,6 +401,8 @@ def optimize(
         config.use_gradient,
         base_distribution=base_distribution,
         dist=dist,
+        weights=weights,
+        offset=offset,
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
@@ -455,6 +476,8 @@ def optimize(
                 censoring,
                 gradient=False,
                 dist=dist,
+                weights=weights,
+                offset=offset,
             ),
         )
         return OptimizationResult(

@@ -142,7 +142,8 @@ class BernsteinBasis:
             Observations, shape (n,).  Must lie in the closed interval
             ``[support[0], support[1]]``.
         order:
-            Derivative order: 1 (default) or 2.
+            Derivative order: 1 (default) or 2.  Order 0 is intentionally not
+            supported; use ``evaluate(y)`` instead.
 
         Returns
         -------
@@ -151,7 +152,8 @@ class BernsteinBasis:
         Raises
         ------
         ValueError
-            If ``order`` is not 1 or 2, or if any observation lies outside
+            If ``order`` is not 1 or 2 (order 0 is not supported; call
+            ``evaluate(y)`` directly), or if any observation lies outside
             ``support``.
         """
         if order not in (1, 2):
@@ -183,6 +185,40 @@ class BernsteinBasis:
             # result[:, i] = k(k-1) * (B_pad[:,i] - 2*B_pad[:,i+1] + B_pad[:,i+2])
             result = k * (k - 1) * (B_pad[:, :-2] - 2 * B_pad[:, 1:-1] + B_pad[:, 2:])
             return result / (b - a) ** 2
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Bernstein design matrix and its first derivative in one pass.
+
+        Normalises and validates ``y`` once, then returns both the evaluation
+        matrix (degree k) and the first-derivative matrix (degree k−1
+        recurrence).  Equivalent to calling ``evaluate(y)`` followed by
+        ``derivative(y, order=1)`` but avoids the redundant support scan.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        B : NDArray of shape (n, order+1)
+            Same as ``evaluate(y)``.
+        dB : NDArray of shape (n, order+1)
+            Same as ``derivative(y, order=1)``.
+        """
+        k = self.order
+        a, b = self.support
+        t = _normalize_and_validate_support(y, self.support)
+        n = len(t)
+        B = _bernstein_matrix(t, k)
+        if k == 0:
+            return B, np.zeros((n, 1))
+        B_low = _bernstein_matrix(t, k - 1)
+        B_pad = np.pad(B_low, ((0, 0), (1, 1)))
+        dB = k * (B_pad[:, :-1] - B_pad[:, 1:]) / (b - a)
+        return B, dB
 
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Running integral of each basis function from a to y.
@@ -220,3 +256,118 @@ class BernsteinBasis:
         # t[:, None]: (n, 1),  a_param/b_param: (k+1,)  →  result: (n, k+1)
         result = betainc(a_param[None, :], b_param[None, :], t[:, None])
         return cast(NDArray[np.float64], result * (b - a) / (k + 1))
+
+
+# ---------------------------------------------------------------------------
+# Ordinal cutpoint basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OrdinalBasis:
+    """Degenerate "one-hot cutpoint" basis used by ordinal regression (Polr).
+
+    For ``K`` ordered levels the transformation has ``K-1`` cutpoints
+    ``θ = (θ_1, ..., θ_{K-1})``.  Given an integer cut position
+    ``k ∈ {1, ..., K-1}`` (representing the boundary between level ``k`` and
+    level ``k+1``), the basis returns the one-hot row ``e_k`` of length
+    ``K-1``, so ``B(k) @ θ = θ_k`` exactly — the basis *selects* the cutpoint.
+    Combined with :class:`~pymlt.constraints.MonotonicityConstraint` of
+    ``n_params = K-1`` this yields ``θ_1 ≤ ... ≤ θ_{K-1}``.
+
+    The class duck-types :class:`BernsteinBasis` (``order``, ``support``,
+    ``evaluate``, ``derivative``, ``integrate``) so that it drops into the
+    existing likelihood / optimisation code paths unchanged.
+
+    Parameters
+    ----------
+    K:
+        Number of ordered levels.  Must satisfy ``K >= 2``.
+
+    Notes
+    -----
+    The transformation ``h(y) = B(y) @ θ`` is a step function across cut
+    positions, so its analytical derivative w.r.t. ``y`` is zero almost
+    everywhere.  :meth:`derivative` returns zero accordingly; the exact-
+    likelihood paths in :mod:`pymlt.likelihood` would log(0) but are never
+    invoked for ordinal data — every observation is interval-censored
+    (or one-sided open) and routes through the censored likelihoods.
+    """
+
+    K: int  # noqa: N815 — match standard ordinal-regression notation
+
+    def __post_init__(self) -> None:
+        if self.K < 2:
+            raise ValueError(f"K must be >= 2, got {self.K}")
+
+    @property
+    def order(self) -> int:
+        """Polynomial-degree analogue: ``K - 2`` so that ``order + 1 == K - 1``."""
+        return self.K - 2
+
+    @property
+    def support(self) -> tuple[float, float]:
+        """Wide enough to bracket integer cut positions ``1..K-1``.
+
+        Rows that resolve to ``±∞`` bypass the support check in
+        :meth:`pymlt.model.ConditionalTransformationModel._validate_input`.
+        """
+        return (0.0, float(self.K))
+
+    # ------------------------------------------------------------------
+    # Core methods (duck-type :class:`BernsteinBasis`)
+    # ------------------------------------------------------------------
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Return one-hot rows for integer cut positions in ``{1, ..., K-1}``.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape ``(n,)``.  Each value must be an integer in
+            ``{1, ..., K-1}`` (the synthetic cut positions emitted by
+            :meth:`pymlt.variables.OrderedVariable.from_labels`).
+
+        Returns
+        -------
+        NDArray of shape ``(n, K-1)`` with row ``i`` equal to ``e_{int(y[i])-1}``.
+
+        Raises
+        ------
+        ValueError
+            If any element of ``y`` is not an integer in ``{1, ..., K-1}``.
+        """
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        if y_arr.ndim != 1:
+            raise ValueError(f"y must be 1-D, got shape {y_arr.shape}")
+        n = y_arr.size
+        m = self.K - 1
+        if n == 0:
+            return np.zeros((0, m), dtype=np.float64)
+        codes = y_arr.astype(np.intp)
+        if not np.all(codes == y_arr):
+            raise ValueError(
+                "OrdinalBasis.evaluate expects integer cut positions; "
+                "received non-integer values."
+            )
+        if codes.min() < 1 or codes.max() > m:
+            raise ValueError(
+                f"OrdinalBasis cut positions must be in [1, {m}], got "
+                f"min={int(codes.min())}, max={int(codes.max())}."
+            )
+        out = np.zeros((n, m), dtype=np.float64)
+        out[np.arange(n), codes - 1] = 1.0
+        return out
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Derivative w.r.t. ``y`` — zero, because ``h`` is a step function."""
+        if order not in (1, 2):
+            raise ValueError(f"order must be 1 or 2, got {order}")
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        return np.zeros((y_arr.size, self.K - 1), dtype=np.float64)
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Not defined for the ordinal basis — raises ``NotImplementedError``."""
+        raise NotImplementedError(
+            "OrdinalBasis has no continuous integral; use evaluate() instead."
+        )

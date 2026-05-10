@@ -161,6 +161,60 @@ cat(sprintf(
 ))
 
 # ---------------------------------------------------------------------------
+# Left-truncated (delayed-entry) + right-censored reference
+#
+# Counting-process Surv(start, stop, event) gives R's delayed-entry encoding:
+# observation i is only at risk during [trunc_lo[i], y_lt[i]], so the mlt
+# log-likelihood divides each row by P(Y_i > trunc_lo[i] | x_i) — exactly
+# the truncation correction we are validating in pymlt.
+#
+# Files emitted (parallel to the right-censored block above):
+#   ll_trunc_y.txt      — 200 observed/censored thresholds
+#   ll_trunc_event.txt  — 0/1 event indicator
+#   ll_trunc_lower.txt  — left-truncation (delayed-entry) times
+#   ll_trunc_theta.txt  — Bernstein coefficients fitted by mlt
+#   ll_trunc_ll.txt     — scalar log-likelihood from mlt::logLik
+# ---------------------------------------------------------------------------
+
+set.seed(11)
+n_lt     <- 200
+y_lt     <- runif(n_lt, 0.30, 0.95)
+event_lt <- rbinom(n_lt, size = 1, prob = 0.7)
+trunc_lo <- y_lt - runif(n_lt, 0.05, 0.25)
+
+b_lt    <- Bernstein_basis(m, order = 4, ui = "increasing")
+ctm_lt  <- ctm(b_lt)
+
+# mlt's Surv(start, stop, event) path is buggy in 1.7.4 (see
+# https://github.com/cran/mlt — `tmp[[response]] <- object$tleft[il]`
+# fails when the truncated rows count differs from the response column).
+# The supported encoding for combined right-censoring + left-truncation is
+# the explicit ``R()`` constructor wrapped in ``I()`` so ``data.frame``
+# preserves its class.
+exact_lt  <- ifelse(event_lt == 1, y_lt, NA_real_)
+cleft_lt  <- ifelse(event_lt == 1, NA_real_, y_lt)
+cright_lt <- ifelse(event_lt == 1, NA_real_, Inf)
+yvar_lt   <- R(object = exact_lt,
+               cleft  = cleft_lt,
+               cright = cright_lt,
+               tleft  = trunc_lo)
+fit_lt  <- mlt(ctm_lt, data = data.frame(y = I(yvar_lt)))
+
+theta_lt <- coef(fit_lt)
+ll_lt    <- as.numeric(logLik(fit_lt))
+
+writeLines(format(y_lt,     digits = 15), con = file.path(out_dir, "ll_trunc_y.txt"))
+writeLines(as.character(event_lt),        con = file.path(out_dir, "ll_trunc_event.txt"))
+writeLines(format(trunc_lo, digits = 15), con = file.path(out_dir, "ll_trunc_lower.txt"))
+writeLines(format(theta_lt, digits = 15), con = file.path(out_dir, "ll_trunc_theta.txt"))
+writeLines(format(ll_lt,    digits = 15), con = file.path(out_dir, "ll_trunc_ll.txt"))
+
+cat(sprintf(
+  "Left-truncated: n=%d, observed=%d, ll=%.6f\n",
+  n_lt, sum(event_lt == 1), ll_lt
+))
+
+# ---------------------------------------------------------------------------
 # max_extreme_value (standard Gumbel, right) reference
 #
 # Fit mlt with todistr = "MaxExtrVal" on uncensored data, then write:
@@ -593,3 +647,227 @@ writeLines(format(flatten_row_major(q_mat_pq), digits = 15),
 
 cat(sprintf("Coxph predict-quantile ref: %d X x %d probs\n",
             length(x_grid_pq), length(prob_grid_pq)))
+
+# ---------------------------------------------------------------------------
+# Residuals reference — reuses the BoxCox / Colr / Coxph fits from the
+# vcov_*_* block above.  For each fit we write three vectors:
+#
+#   residuals_<model>_score.txt    — score residual (R's mlt::residuals)
+#                                    = ∂ℓ_i/∂α at α = 0 for h̃ = h + α
+#   residuals_<model>_coxsnell.txt — −log S(y_i|x_i) at the observed point
+#   residuals_<model>_deviance.txt — sign(r-1) · sqrt(2·|r - log r - 1|)
+#
+# For Cox-Snell on the right-censored Coxph fit, the observed point for
+# censored obs is the censoring time (Surv$time).  This matches pymlt's
+# convention of evaluating S at the observed lower bound.
+# ---------------------------------------------------------------------------
+
+.cox_snell <- function(surv_vec) -log(surv_vec)
+
+.deviance_from_cs <- function(r) {
+  r_safe <- pmax(r, .Machine$double.xmin)
+  sign(r - 1) * sqrt(2 * abs(r - log(r_safe) - 1))
+}
+
+# --- BoxCox --------------------------------------------------------------
+score_bc <- as.numeric(residuals(fit_bc))
+surv_bc  <- predict(as.mlt(fit_bc),
+                    newdata = data.frame(y = y_bc, x = x_bc),
+                    type = "survivor")
+cs_bc    <- .cox_snell(surv_bc)
+dev_bc   <- .deviance_from_cs(cs_bc)
+writeLines(format(score_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_score.txt"))
+writeLines(format(cs_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_coxsnell.txt"))
+writeLines(format(dev_bc, digits = 15),
+           con = file.path(out_dir, "residuals_boxcox_deviance.txt"))
+
+# --- Colr ----------------------------------------------------------------
+score_colr <- as.numeric(residuals(fit_colr))
+surv_colr  <- predict(as.mlt(fit_colr),
+                      newdata = data.frame(y = y_colr, x = x_colr),
+                      type = "survivor")
+cs_colr    <- .cox_snell(surv_colr)
+dev_colr   <- .deviance_from_cs(cs_colr)
+writeLines(format(score_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_score.txt"))
+writeLines(format(cs_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_coxsnell.txt"))
+writeLines(format(dev_colr, digits = 15),
+           con = file.path(out_dir, "residuals_colr_deviance.txt"))
+
+# --- Coxph (right-censored) ----------------------------------------------
+score_cx <- as.numeric(residuals(fit_cx))
+# For the survivor, evaluate at the observed y (which is the censoring time
+# for censored obs).  predict.mlt requires a Surv() column when the fit was
+# made with one — wrap event=1 so it interprets y as exact for evaluation.
+surv_cx  <- predict(as.mlt(fit_cx),
+                    newdata = data.frame(y = y_cx, x = x_cx),
+                    q = y_cx,
+                    type = "survivor")
+# `predict` with `q = y_cx` returns a matrix (length(q), nrow(newdata)) when
+# q is a vector; pull the diagonal so each row uses its own y.
+if (is.matrix(surv_cx)) {
+  surv_cx <- diag(surv_cx)
+}
+cs_cx    <- .cox_snell(surv_cx)
+dev_cx   <- .deviance_from_cs(cs_cx)
+writeLines(format(score_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_score.txt"))
+writeLines(format(cs_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_coxsnell.txt"))
+writeLines(format(dev_cx, digits = 15),
+           con = file.path(out_dir, "residuals_coxph_deviance.txt"))
+
+cat(sprintf("residuals refs: boxcox (n=%d), colr (n=%d), coxph (n=%d) written.\n",
+            length(score_bc), length(score_colr), length(score_cx)))
+
+# ---------------------------------------------------------------------------
+# Weights reference
+#
+# Re-uses the same data (y_bc / x_bc, y_colr / x_colr, y_cx / x_cx) and
+# support / order from the vcov block above.  For each model we:
+#   1. Draw integer weights w ~ Uniform{1,2,3,4}.
+#   2. Fit with those weights (maximise Σ w_i · ℓ_i).
+#   3. Record: the weights, theta, log-likelihood, and score matrix (estfun).
+#
+# R sandwich::estfun convention for weighted mlt models:
+#   row i = w_i · ∂ℓ_i/∂θ   (column sums ≈ 0 at MLE)
+# ---------------------------------------------------------------------------
+
+# --- BoxCox with weights --------------------------------------------------
+set.seed(200)
+w_bc_w <- as.numeric(sample(1L:4L, n_bc, replace = TRUE))
+fit_bc_w <- tram::BoxCox(y ~ x,
+                          data    = data.frame(y = y_bc, x = x_bc),
+                          support = c(a_bc, b_bc),
+                          order   = 4L,
+                          weights = w_bc_w)
+theta_bc_w   <- coef(fit_bc_w, with_baseline = TRUE)
+loglik_bc_w  <- as.numeric(logLik(as.mlt(fit_bc_w)))
+estfun_bc_w  <- sandwich::estfun(fit_bc_w)
+
+writeLines(format(w_bc_w,                          digits = 15),
+           con = file.path(out_dir, "weights_boxcox_w.txt"))
+writeLines(format(theta_bc_w,                       digits = 15),
+           con = file.path(out_dir, "weights_boxcox_theta.txt"))
+writeLines(format(loglik_bc_w,                      digits = 15),
+           con = file.path(out_dir, "weights_boxcox_ll.txt"))
+writeLines(format(flatten_row_major(estfun_bc_w),   digits = 15),
+           con = file.path(out_dir, "weights_boxcox_estfun.txt"))
+
+cat(sprintf("BoxCox weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_bc, sum(w_bc_w), length(theta_bc_w)))
+
+# --- Colr with weights ----------------------------------------------------
+set.seed(201)
+w_colr_w <- as.numeric(sample(1L:4L, n_colr, replace = TRUE))
+fit_colr_w <- tram::Colr(y ~ x,
+                          data    = data.frame(y = y_colr, x = x_colr),
+                          support = c(a_colr, b_colr),
+                          order   = 4L,
+                          weights = w_colr_w)
+theta_colr_w  <- coef(fit_colr_w, with_baseline = TRUE)
+loglik_colr_w <- as.numeric(logLik(as.mlt(fit_colr_w)))
+estfun_colr_w <- sandwich::estfun(fit_colr_w)
+
+writeLines(format(w_colr_w,                          digits = 15),
+           con = file.path(out_dir, "weights_colr_w.txt"))
+writeLines(format(theta_colr_w,                       digits = 15),
+           con = file.path(out_dir, "weights_colr_theta.txt"))
+writeLines(format(loglik_colr_w,                      digits = 15),
+           con = file.path(out_dir, "weights_colr_ll.txt"))
+writeLines(format(flatten_row_major(estfun_colr_w),   digits = 15),
+           con = file.path(out_dir, "weights_colr_estfun.txt"))
+
+cat(sprintf("Colr weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_colr, sum(w_colr_w), length(theta_colr_w)))
+
+# --- Coxph with weights ---------------------------------------------------
+set.seed(202)
+w_cx_w <- as.numeric(sample(1L:4L, n_cx, replace = TRUE))
+fit_cx_w <- tram::Coxph(Surv(y, event) ~ x,
+                         data    = data.frame(y = y_cx, event = event_cx, x = x_cx),
+                         support = c(a_cx, b_cx),
+                         order   = 4L,
+                         weights = w_cx_w)
+theta_cx_w   <- coef(fit_cx_w, with_baseline = TRUE)
+loglik_cx_w  <- as.numeric(logLik(as.mlt(fit_cx_w)))
+estfun_cx_w  <- sandwich::estfun(fit_cx_w)
+
+writeLines(format(w_cx_w,                          digits = 15),
+           con = file.path(out_dir, "weights_coxph_w.txt"))
+writeLines(format(theta_cx_w,                       digits = 15),
+           con = file.path(out_dir, "weights_coxph_theta.txt"))
+writeLines(format(loglik_cx_w,                      digits = 15),
+           con = file.path(out_dir, "weights_coxph_ll.txt"))
+writeLines(format(flatten_row_major(estfun_cx_w),   digits = 15),
+           con = file.path(out_dir, "weights_coxph_estfun.txt"))
+
+cat(sprintf("Coxph weights ref: n=%d, sum_w=%d, p+q=%d\n",
+            n_cx, sum(w_cx_w), length(theta_cx_w)))
+
+# ---------------------------------------------------------------------------
+# Polr (proportional-odds ordinal regression) reference
+#
+# Fit tram::Polr with three different links (logistic / probit / cloglog)
+# on the same n=300 ordinal sample.  Write per-link:
+#   reference/polr_<link>_theta.txt     — coef(fit, with_baseline = TRUE)
+#                                         (first K-1 entries are cutpoints,
+#                                          remaining are R-side beta which
+#                                          satisfy h - X·beta_R = z; pymlt
+#                                          uses h + X·beta so beta_pymlt =
+#                                          -beta_R)
+#   reference/polr_<link>_loglik.txt    — scalar log-likelihood
+#   reference/polr_<link>_proba.txt     — predict(fit, type = "density")
+#                                         flattened row-major, n*K
+#
+# Shared inputs (one copy):
+#   reference/polr_X.txt   — model.matrix entries (n*q row-major)
+#   reference/polr_y.txt   — character labels of the ordered response
+# ---------------------------------------------------------------------------
+
+set.seed(42)
+n_polr <- 300
+levels_polr <- c("low", "mid", "high")
+y_polr <- factor(
+  sample(levels_polr, n_polr, replace = TRUE, prob = c(0.30, 0.40, 0.30)),
+  levels = levels_polr,
+  ordered = TRUE
+)
+x1_polr <- rnorm(n_polr)
+x2_polr <- rbinom(n_polr, 1, 0.5)
+data_polr <- data.frame(y = y_polr, x1 = x1_polr, x2 = x2_polr)
+X_polr <- model.matrix(~ x1 + x2 - 1, data = data_polr)
+
+writeLines(as.character(y_polr), con = file.path(out_dir, "polr_y.txt"))
+writeLines(format(flatten_row_major(X_polr), digits = 15),
+           con = file.path(out_dir, "polr_X.txt"))
+
+.write_polr_link <- function(method, label) {
+  fit <- tram::Polr(y ~ x1 + x2,
+                    data   = data_polr,
+                    method = method)
+  theta <- coef(fit, with_baseline = TRUE)
+  ll    <- as.numeric(logLik(as.mlt(fit)))
+  # Evaluate per-level probabilities at every observation by passing the full
+  # ordered level set as q.  Returns a (K, n) matrix; transpose to (n, K) and
+  # write row-major to match pymlt.predict_proba.
+  q_levels <- factor(levels_polr, levels = levels_polr, ordered = TRUE)
+  proba <- predict(fit, newdata = data_polr, q = q_levels, type = "density")
+  proba <- t(as.matrix(proba))
+
+  writeLines(format(theta, digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_theta.txt", label)))
+  writeLines(format(ll,    digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_loglik.txt", label)))
+  writeLines(format(flatten_row_major(proba), digits = 15),
+             con = file.path(out_dir, sprintf("polr_%s_proba.txt", label)))
+  cat(sprintf("Polr %-9s ref: n=%d, K=%d, ll=%.6f\n",
+              label, n_polr, length(levels_polr), ll))
+}
+
+.write_polr_link("logistic", "logistic")
+.write_polr_link("probit",   "probit")
+.write_polr_link("cloglog",  "cloglog")

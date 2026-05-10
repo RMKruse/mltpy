@@ -231,6 +231,45 @@ class TestDerivative:
 
 
 # ---------------------------------------------------------------------------
+# evaluate_with_derivative() — equivalence, shapes, edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateWithDerivative:
+    @pytest.mark.parametrize("order", [1, 3, 5, 8])
+    def test_equivalence(self, order):
+        """evaluate_with_derivative returns same results as separate calls."""
+        b = make_basis(order=order)
+        y = linspace_in(b, 40)
+        B_ref = b.evaluate(y)
+        dB_ref = b.derivative(y, order=1)
+        B, dB = b.evaluate_with_derivative(y)
+        np.testing.assert_array_equal(B, B_ref)
+        np.testing.assert_array_equal(dB, dB_ref)
+
+    def test_shapes(self):
+        b = make_basis(order=6)
+        y = linspace_in(b, 25)
+        B, dB = b.evaluate_with_derivative(y)
+        assert B.shape == (25, 7)
+        assert dB.shape == (25, 7)
+
+    def test_order0_edge_case(self):
+        b = BernsteinBasis(order=0, support=(0.0, 1.0))
+        y = np.array([0.25, 0.5, 0.75])
+        B, dB = b.evaluate_with_derivative(y)
+        assert B.shape == (3, 1)
+        assert dB.shape == (3, 1)
+        np.testing.assert_allclose(dB, 0.0, atol=1e-15)
+
+    @pytest.mark.parametrize("y", [np.array([-0.1, 0.5]), np.array([0.5, 1.1])])
+    def test_out_of_support_raises(self, y):
+        b = make_basis(order=3)
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate_with_derivative(y)
+
+
+# ---------------------------------------------------------------------------
 # integrate() — shape, value at full domain, monotonicity
 # ---------------------------------------------------------------------------
 

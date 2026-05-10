@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Observation weights and offset support across the full model pipeline
+  (`fit`, `predict`, `score`, `confband`, `residuals`, `estfun`):
+  - `fit(y, X=None, weights=None, offset=None)` — weighted log-likelihood
+    `Σ w_i·ℓ_i`; offset adds a per-observation constant to `h(y|x)` before
+    all distribution calls.  Weights and offset are stored as `weights_` /
+    `offset_` and snapshotted as `_weights_train_` / `_offset_train_` for
+    later use by `residuals()`.
+  - `predict(..., offset_new=None)` — offset shifts `h` at prediction time.
+  - `score(..., weights=None, offset=None)` — evaluates the weighted LL at any
+    (y, X) pair.
+  - `confband(..., offset=None)` — offset shifts `h` before the delta-method
+    band is computed; the Jacobian is unaffected (offset is constant in θ).
+  - `Coxph.survival(y, X, offset=None)` and `Coxph.hazard(y, X, offset=None)`.
+  - New public helper `_validate_weights_offset(weights, offset, n)` in
+    `likelihood.py` — raises `ValueError` for wrong shapes, negative weights,
+    or non-finite values.
+  - R reference generation extended with weighted BoxCox / Colr / Coxph fits
+    (`reference/generate_reference.R`), producing `weights_<model>_*.txt` files.
+  - Full test coverage in `tests/test_weights_offset.py` (41 tests): input
+    validation, identity (`weights=ones ≡ no weights`, `offset=zeros ≡ no
+    offset`), uniform-doubling invariance, replication invariance, offset-shifts-
+    trafo, quantile-with-offset, R-parity (skipped until R files are generated).
+
+- `residuals(type=...)` method on `ConditionalTransformationModel` —
+  per-observation diagnostics mirroring R `mlt::residuals`.  Three types:
+  `"score"` (default; ∂(-ℓ_i)/∂α at α=0 for an artificial intercept
+  added to `h(y|x)` — sign matches R `mlt::residuals`),
+  `"cox-snell"` (`-log S(y_i|x_i)`, ~Exp(1) under correct model),
+  and `"deviance"` (closed form on Cox-Snell, ~N(0,1) under correct
+  model).  All censoring types (none, left, right, interval) and base
+  distributions are supported; the score residual reuses a new public
+  `intercept_score()` helper in `likelihood.py`.  Cox-Snell evaluates
+  at the observed point regardless of censoring (lower for right-cens,
+  upper for left-cens, midpoint for interval-cens).
+  R-validated against `residuals(fit)` and
+  `-log(predict(fit, type="survivor"))` for BoxCox / Colr / Coxph fits
+  (`pymlt/model.py`, `pymlt/likelihood.py`,
+  `reference/residuals_*`, `tests/test_model.py::TestResiduals*`)
 - `Lm` class — `_TramModel` subclass fixing `order=1`, normal base, and
   uncensored data; exposes `sigma_`, `intercept_`, `coef_`, and
   `fitted_transformation(y)`. Re-exported via `pymlt.Lm`.
@@ -36,6 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `tests/test_confidence.py`)
 
 ### Changed
+
+- Right-censored quantile prediction now follows R `mlt::qmlt` semantics:
+  quantiles are obtained by inverting a fixed CDF grid (`K=50`) via cubic
+  interpolation, with saturation to grid boundaries when targets fall outside
+  the finite inversion range. This removes Coxph quantile mismatches caused by
+  strict support-bracket root clipping in the previous implementation.
 
 - GitHub Actions workflows are temporarily deactivated while the repository is
   private. Workflow files were moved from `.github/workflows/` to

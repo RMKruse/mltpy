@@ -309,6 +309,492 @@ class TestLogLikelihoodInterval:
 
 
 # ---------------------------------------------------------------------------
+# Truncation (delayed entry) — exercises the centralised correction injected
+# by every public dispatcher (log_likelihood, negative_log_likelihood,
+# score_matrix, hessian, intercept_score) when CensoredData carries
+# trunc_lower / trunc_upper.
+# ---------------------------------------------------------------------------
+
+
+class TestLogLikelihoodTruncation:
+    @staticmethod
+    def _manual_log_p(
+        theta: np.ndarray,
+        basis: BernsteinBasis,
+        lo: np.ndarray,
+        hi: np.ndarray,
+        X: np.ndarray | None = None,
+        beta: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Per-observation ``log P_i`` computed with scipy.norm only.
+
+        Mirrors the formula the truncation correction is supposed to
+        implement.  Independent of pymlt internals.
+        """
+        from scipy.special import log_ndtr
+        from scipy.stats import norm
+
+        n = len(lo)
+        log_p = np.zeros(n, dtype=float)
+        theta_b = theta[: basis.order + 1]
+        h_shift = X @ beta if (X is not None and beta is not None) else np.zeros(n)
+        for i in range(n):
+            shift_i = float(h_shift[i])
+            li, ui = lo[i], hi[i]
+            if np.isfinite(li) and np.isfinite(ui):
+                h_l = float((basis.evaluate(np.array([li])) @ theta_b)[0]) + shift_i
+                h_u = float((basis.evaluate(np.array([ui])) @ theta_b)[0]) + shift_i
+                log_p[i] = float(np.log(norm.cdf(h_u) - norm.cdf(h_l)))
+            elif np.isfinite(ui):
+                h_u = float((basis.evaluate(np.array([ui])) @ theta_b)[0]) + shift_i
+                log_p[i] = float(log_ndtr(h_u))
+            elif np.isfinite(li):
+                h_l = float((basis.evaluate(np.array([li])) @ theta_b)[0]) + shift_i
+                log_p[i] = float(norm.logsf(h_l))
+            # else: both infinite → 0
+        return log_p
+
+    def test_construction_rejects_observation_outside_truncation(self):
+        """CensoredData must error when A_i ⊄ B_i for any row.
+
+        The truncation correction relies on
+        ``ℓ_i = log P(A_i) − log P(B_i)`` which only equals
+        ``log[P(A_i ∩ B_i) / P(B_i)]`` when ``A_i ⊆ B_i``.  Inputs that
+        violate this would silently produce wrong likelihoods, so the
+        constraint is enforced loud at construction.
+        """
+        # Exact obs above the upper truncation bound.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([0.5, 0.9]),
+                lower=np.array([0.5, 0.9]),
+                upper=np.array([0.5, 0.9]),
+                trunc_lower=np.array([0.0, 0.0]),
+                trunc_upper=np.array([1.0, 0.8]),
+            )
+        # Right-censored row paired with a finite upper truncation
+        # (upper=+inf cannot fit inside any finite trunc_upper).
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([0.3]),
+                upper=np.array([np.inf]),
+                trunc_lower=np.array([0.2]),
+                trunc_upper=np.array([0.9]),
+            )
+        # Interval-censored row whose upper bound exceeds trunc_upper.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([0.30]),
+                upper=np.array([0.70]),
+                trunc_lower=np.array([0.20]),
+                trunc_upper=np.array([0.60]),
+            )
+        # Left-censored row whose lower bound (-inf) is below trunc_lower.
+        with pytest.raises(ValueError, match=r"contained in its truncation"):
+            CensoredData(
+                exact=np.array([np.nan]),
+                lower=np.array([-np.inf]),
+                upper=np.array([0.5]),
+                trunc_lower=np.array([0.1]),
+                trunc_upper=np.array([np.inf]),
+            )
+
+    def test_noop_when_both_bounds_none(self):
+        """Truncation correction is a no-op when neither bound is set."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.2, 0.5, 0.8])
+        cd = CensoredData.from_exact(y)
+        assert cd.trunc_lower is None and cd.trunc_upper is None
+        ll_arr = log_likelihood(theta, basis, y)
+        ll_cd = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll_arr, ll_cd, rtol=1e-12)
+
+    def test_noop_when_bounds_are_infinite(self):
+        """Explicit ±inf bounds reproduce the unconditional log-likelihood."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.2, 0.5, 0.8])
+        n = len(y)
+        cd_inf = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=np.full(n, -np.inf),
+            trunc_upper=np.full(n, np.inf),
+        )
+        ll_uncond = log_likelihood(theta, basis, y)
+        ll_inf = log_likelihood(theta, basis, cd_inf, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll_inf, ll_uncond, rtol=1e-12)
+
+    def test_exact_with_two_sided_truncation(self):
+        """ℓ = ℓ_uncond − Σ log[Φ(h(u)) − Φ(h(l))] computed manually."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.30, 0.55, 0.70, 0.85])
+        lo = np.array([0.10, 0.40, 0.50, 0.60])
+        hi = np.array([0.50, 0.70, 0.85, 0.95])
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=lo,
+            trunc_upper=hi,
+        )
+        ll_uncond = log_likelihood(theta, basis, y)
+        log_p = self._manual_log_p(theta, basis, lo, hi)
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    def test_one_sided_lower_truncation(self):
+        """Lower-only truncation: correction = −Σ log S(h(l_i))."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.30, 0.55, 0.80])
+        lo = np.array([0.10, 0.40, 0.60])
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=lo,
+        )
+        ll_uncond = log_likelihood(theta, basis, y)
+        hi = np.full(len(y), np.inf)
+        log_p = self._manual_log_p(theta, basis, lo, hi)
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    def test_one_sided_upper_truncation(self):
+        """Upper-only truncation: correction = −Σ log Φ(h(u_i))."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.20, 0.45, 0.65])
+        hi = np.array([0.40, 0.60, 0.85])
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_upper=hi,
+        )
+        ll_uncond = log_likelihood(theta, basis, y)
+        lo = np.full(len(y), -np.inf)
+        log_p = self._manual_log_p(theta, basis, lo, hi)
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    def test_mixed_finite_and_infinite_bounds(self):
+        """Per-row mix of two-sided and one-sided truncation."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        y = np.array([0.30, 0.45, 0.60, 0.80])
+        lo = np.array([0.10, -np.inf, 0.50, -np.inf])
+        hi = np.array([0.50, 0.60, np.inf, 0.95])
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=lo,
+            trunc_upper=hi,
+        )
+        ll_uncond = log_likelihood(theta, basis, y)
+        log_p = self._manual_log_p(theta, basis, lo, hi)
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.NONE)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    def test_right_censoring_plus_truncation(self):
+        """Right-censored survival data with delayed entry."""
+        rng = np.random.default_rng(7)
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        n = 12
+        y = np.sort(rng.uniform(0.30, 0.95, n))
+        is_censored = rng.random(n) < 0.4
+        trunc_lo = y - rng.uniform(0.05, 0.20, n)
+        cd = CensoredData.left_truncated(y, trunc_lo, censored=is_censored)
+        # unconditional right-censored ll
+        cd_uncond = CensoredData.right_censored(y, is_censored)
+        ll_uncond = log_likelihood(
+            theta, basis, cd_uncond, censoring=CensoringType.RIGHT
+        )
+        log_p = self._manual_log_p(theta, basis, trunc_lo, np.full(n, np.inf))
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    def test_interval_censoring_plus_truncation(self):
+        """Interval-censored data with finite truncation window."""
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        lo_obs = np.array([0.20, 0.45, 0.65])
+        hi_obs = np.array([0.30, 0.55, 0.75])
+        trunc_lo = np.array([0.10, 0.30, 0.55])
+        trunc_hi = np.array([0.40, 0.65, 0.90])
+        cd = CensoredData(
+            exact=np.full(3, np.nan),
+            lower=lo_obs,
+            upper=hi_obs,
+            trunc_lower=trunc_lo,
+            trunc_upper=trunc_hi,
+        )
+        cd_uncond = CensoredData.interval_censored(lo_obs, hi_obs)
+        ll_uncond = log_likelihood(
+            theta, basis, cd_uncond, censoring=CensoringType.INTERVAL
+        )
+        log_p = self._manual_log_p(theta, basis, trunc_lo, trunc_hi)
+        expected = ll_uncond - log_p.sum()
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.INTERVAL)
+        np.testing.assert_allclose(ll, expected, rtol=1e-10)
+
+    @pytest.mark.parametrize(
+        "base_distribution",
+        ["normal", "logistic", "min_extreme_value", "max_extreme_value"],
+    )
+    def test_gradient_check_grad(self, base_distribution):
+        """check_grad < 1e-5 on negative_log_likelihood with truncation."""
+        rng = np.random.default_rng(2)
+        basis = make_basis(order=3, support=(0.0, 2.0))
+        theta = ascending_theta(3, step=0.6)
+        n = 14
+        y = np.sort(rng.uniform(0.4, 1.6, n))
+        is_censored = rng.random(n) < 0.3
+        trunc_lo = y - rng.uniform(0.1, 0.3, n)
+        cd = CensoredData.left_truncated(y, trunc_lo, censored=is_censored)
+
+        def f(t):
+            return negative_log_likelihood(
+                t,
+                basis,
+                cd,
+                None,
+                CensoringType.RIGHT,
+                base_distribution=base_distribution,
+            )
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t,
+                basis,
+                cd,
+                None,
+                CensoringType.RIGHT,
+                gradient=True,
+                base_distribution=base_distribution,
+            )
+            return grad
+
+        err = check_grad(f, g, theta)
+        assert err < 1e-5, f"check_grad err={err:.2e} for {base_distribution}"
+
+    def test_gradient_check_grad_with_X(self):
+        """Gradient FD check, no-censoring + two-sided truncation, with X."""
+        rng = np.random.default_rng(11)
+        basis = make_basis(order=3)
+        n, q = 12, 2
+        y = np.sort(rng.uniform(0.3, 0.7, n))
+        X = rng.standard_normal((n, q))
+        theta = np.concatenate(
+            [ascending_theta(3, step=0.3), 0.1 * rng.standard_normal(q)]
+        )
+        trunc_lo = y - rng.uniform(0.05, 0.15, n)
+        trunc_hi = y + rng.uniform(0.05, 0.20, n)
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=trunc_lo,
+            trunc_upper=trunc_hi,
+        )
+
+        def f(t):
+            return negative_log_likelihood(t, basis, cd, X, CensoringType.NONE)
+
+        def g(t):
+            _, grad = negative_log_likelihood(
+                t, basis, cd, X, CensoringType.NONE, gradient=True
+            )
+            return grad
+
+        err = check_grad(f, g, theta)
+        assert err < 1e-4, f"check_grad (with X) err={err:.2e}"
+
+    def test_hessian_symmetry_and_finite_diff(self):
+        """hessian(...) is symmetric and matches the FD of the analytic gradient."""
+        from scipy.optimize import approx_fprime
+
+        from pymlt.likelihood import hessian
+
+        rng = np.random.default_rng(3)
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        n = 10
+        y = np.sort(rng.uniform(0.30, 0.85, n))
+        trunc_lo = y - rng.uniform(0.05, 0.20, n)
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=trunc_lo,
+        )
+        H = hessian(theta, basis, cd, None, CensoringType.NONE)
+        np.testing.assert_allclose(H, H.T, atol=1e-10)
+
+        def grad_fn(t):
+            _, g = negative_log_likelihood(
+                t, basis, cd, None, CensoringType.NONE, gradient=True
+            )
+            return g
+
+        H_fd = np.stack(
+            [
+                approx_fprime(theta, lambda t, i=i: grad_fn(t)[i], 1e-5)
+                for i in range(len(theta))
+            ]
+        )
+        H_fd = 0.5 * (H_fd + H_fd.T)
+        np.testing.assert_allclose(H, H_fd, atol=5e-3, rtol=1e-3)
+
+    def test_score_matrix_sums_to_minus_nll_gradient(self):
+        """``score_matrix.sum(0) == −grad(NLL)`` under truncation."""
+        from pymlt.likelihood import score_matrix
+
+        rng = np.random.default_rng(5)
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        n = 16
+        y = np.sort(rng.uniform(0.30, 0.85, n))
+        is_censored = rng.random(n) < 0.3
+        trunc_lo = y - rng.uniform(0.05, 0.15, n)
+        cd = CensoredData.left_truncated(y, trunc_lo, censored=is_censored)
+
+        _, grad_nll = negative_log_likelihood(
+            theta, basis, cd, None, CensoringType.RIGHT, gradient=True
+        )
+        scores = score_matrix(theta, basis, cd, None, CensoringType.RIGHT)
+        np.testing.assert_allclose(scores.sum(axis=0), -grad_nll, atol=1e-10)
+
+    def test_intercept_score_finite_difference(self):
+        """intercept_score == d ℓ_i / d α at α=0, verified via finite differences."""
+        from pymlt.likelihood import intercept_score
+
+        rng = np.random.default_rng(9)
+        basis = make_basis(order=3)
+        theta = ascending_theta(3, step=0.4)
+        n = 8
+        y = np.sort(rng.uniform(0.30, 0.85, n))
+        trunc_lo = y - rng.uniform(0.05, 0.15, n)
+        cd = CensoredData(
+            exact=y.copy(),
+            lower=y.copy(),
+            upper=y.copy(),
+            trunc_lower=trunc_lo,
+        )
+
+        analytic = intercept_score(theta, basis, cd, None, CensoringType.NONE)
+
+        eps = 1e-6
+        offset_p = np.full(n, eps)
+        offset_m = np.full(n, -eps)
+        ll_p = log_likelihood(
+            theta, basis, cd, None, CensoringType.NONE, offset=offset_p
+        )
+        ll_m = log_likelihood(
+            theta, basis, cd, None, CensoringType.NONE, offset=offset_m
+        )
+        # Sum of intercept_score equals total dℓ/dα (offset shifts h uniformly)
+        d_total_fd = (ll_p - ll_m) / (2 * eps)
+        np.testing.assert_allclose(analytic.sum(), d_total_fd, rtol=1e-4, atol=1e-6)
+
+    def test_reference_ll_trunc(self):
+        """Pymlt LL matches mlt::logLik on left-truncated + right-censored data."""
+        import pathlib
+
+        ref_dir = pathlib.Path(__file__).parent.parent / "reference"
+        required = [
+            ref_dir / "ll_trunc_y.txt",
+            ref_dir / "ll_trunc_event.txt",
+            ref_dir / "ll_trunc_lower.txt",
+            ref_dir / "ll_trunc_theta.txt",
+            ref_dir / "ll_trunc_ll.txt",
+        ]
+        if not all(p.exists() for p in required):
+            pytest.skip(
+                "ll_trunc_* reference files not yet generated — "
+                "run Rscript reference/generate_reference.R"
+            )
+
+        y = np.loadtxt(required[0])
+        event = np.loadtxt(required[1]).astype(int)
+        trunc_lo = np.loadtxt(required[2])
+        theta = np.loadtxt(required[3])
+        ll_ref = float(np.loadtxt(required[4]))
+
+        is_censored = event == 0
+        basis = BernsteinBasis(order=len(theta) - 1, support=(0.0, 1.0))
+        cd = CensoredData.left_truncated(y, trunc_lo, censored=is_censored)
+        ll = log_likelihood(theta, basis, cd, censoring=CensoringType.RIGHT)
+
+        np.testing.assert_allclose(ll, ll_ref, rtol=1e-6, atol=1e-8)
+
+    def test_weights_no_overflow_to_zero(self):
+        # Regression: the both-finite branch of _truncation_weights used to
+        # exp(logpdf - log_p) and then nan_to_num(posinf=0.0).  In a very
+        # narrow truncation window logpdf - log_p exceeds log(float64.max),
+        # exp(...) overflows to +inf, and the +inf -> 0 mapping silently
+        # zeroed a genuinely large derivative weight, biasing gradient and
+        # Hessian.  Construct a degenerate-window _TruncContext directly
+        # (h_lo == h_hi forces _log_diff_ndtr -> -inf via its narrow-path
+        # log(width=0) = -inf) so logpdf - log_p = +inf and exercises the
+        # overflow branch.  After the fix the weight must be finite and
+        # large, never zero.
+        from pymlt.likelihood import (
+            _LOG_FLOAT_MAX,
+            _NORM_OPS,
+            _truncation_weights,
+            _TruncContext,
+        )
+
+        p_dim = 2
+        h = np.array([0.0])
+        B = np.ones((1, p_dim))
+        empty_mask = np.array([False])
+        ctx = _TruncContext(
+            n=1,
+            both=np.array([True]),
+            only_hi=empty_mask,
+            only_lo=empty_mask,
+            B_lo_b=B,
+            B_hi_b=B,
+            h_lo_b=h,
+            h_hi_b=h,
+            X_b=None,
+            B_hi_o=np.zeros((0, p_dim)),
+            h_hi_o=np.zeros(0),
+            X_only_hi=None,
+            B_lo_o=np.zeros((0, p_dim)),
+            h_lo_o=np.zeros(0),
+            X_only_lo=None,
+        )
+        w_lo_b, w_hi_b, _, _ = _truncation_weights(ctx, _NORM_OPS)
+
+        assert np.isfinite(w_hi_b[0]), f"w_hi_b must be finite, got {w_hi_b[0]}"
+        assert np.isfinite(w_lo_b[0]), f"w_lo_b must be finite, got {w_lo_b[0]}"
+        # Clipped at _LOG_FLOAT_MAX, the weight is ~exp(_LOG_FLOAT_MAX).
+        # The previous buggy implementation returned exactly 0.0.
+        threshold = np.exp(0.5 * _LOG_FLOAT_MAX)
+        assert w_hi_b[0] > threshold, (
+            f"narrow-window weight must be large, got {w_hi_b[0]} "
+            "(buggy code silently returned 0.0)"
+        )
+        assert w_lo_b[0] > threshold
+
+
+# ---------------------------------------------------------------------------
 # Gradient correctness via scipy.optimize.check_grad
 # ---------------------------------------------------------------------------
 

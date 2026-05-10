@@ -25,7 +25,8 @@ from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.special import comb
+from scipy.interpolate import CubicSpline
+from scipy.special import comb, log_ndtr
 from scipy.stats import chi2, norm
 
 from pymlt.basis import BernsteinBasis
@@ -35,10 +36,15 @@ from pymlt.likelihood import (
     InfeasibleParameterError,
     _get_dist,
     _neg_score,
+    _validate_offset,
+    _validate_weights_offset,
     log_likelihood,
 )
 from pymlt.likelihood import (
     hessian as _hessian,
+)
+from pymlt.likelihood import (
+    intercept_score as _intercept_score,
 )
 from pymlt.likelihood import (
     score_matrix as _score_matrix,
@@ -88,8 +94,11 @@ _VALID_CONFBAND_WHAT = (
     "hazard",
 )
 
-# Small epsilon used for bracket safety in brentq
+# Small epsilon used for bracket safety in the quantile bisection
 _BRENTQ_EPS = 1e-10
+
+# Grid size used by R's qmlt() default quantile inversion.
+_QMLT_GRID_POINTS = 50
 
 # simulate(): clip Uniform(0,1) draws to [_SIMULATE_U_EPS, 1 − _SIMULATE_U_EPS]
 # before inverting through F⁻¹ in _predict_quantile.  At u = 0 / u = 1 the
@@ -105,15 +114,33 @@ _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
 
 def _extract_feature_names(X: object) -> list[str] | None:
-    """Extract column names from a pandas DataFrame, else ``None``.
+    """Extract column names from DataFrame-like ``X``, else ``None``.
 
     Kept as a free function so no pandas import is required at module load
-    time — we only touch pandas attributes by duck-typing.
+    time — we only touch DataFrame-like attributes by duck-typing.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` exposes both ``columns`` and a 2-D ``shape``, but the column
+        name count does not match ``shape[1]``.
     """
     columns = getattr(X, "columns", None)
     if columns is None:
         return None
-    return [str(c) for c in columns]
+    feature_names = [str(c) for c in columns]
+    shape = getattr(X, "shape", None)
+    if (
+        isinstance(shape, tuple)
+        and len(shape) >= 2
+        and isinstance(shape[1], int | np.integer)
+        and len(feature_names) != int(shape[1])
+    ):
+        raise ValueError(
+            f"X columns metadata has length {len(feature_names)} but X has "
+            f"{int(shape[1])} columns."
+        )
+    return feature_names
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +218,21 @@ class ConditionalTransformationModel:
 
         # Score matrix — computed eagerly at the end of fit().
         self._estfun_cache_: NDArray[np.float64] | None = None
+
+        self.weights_: NDArray[np.float64] | None = None
+        """Observation weights supplied to the last :meth:`fit` call.
+        ``None`` when no weights were used."""
+
+        self.offset_: NDArray[np.float64] | None = None
+        """Per-observation offset supplied to the last :meth:`fit` call.
+        ``None`` when no offset was used."""
+
+        # Training response/covariates retained for residuals().  Stored as
+        # copies so subsequent caller mutations cannot affect diagnostics.
+        self._y_train_: NDArray[np.float64] | CensoredData | None = None
+        self._X_train_: NDArray[np.float64] | None = None
+        self._weights_train_: NDArray[np.float64] | None = None
+        self._offset_train_: NDArray[np.float64] | None = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -277,6 +319,8 @@ class ConditionalTransformationModel:
         self,
         y: NDArray[np.float64] | CensoredData,
         X: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> "ConditionalTransformationModel":
         """Fit the transformation model by maximum likelihood.
 
@@ -289,6 +333,15 @@ class ConditionalTransformationModel:
         X:
             Optional covariate matrix of shape ``(n, q)``.  If given, the
             last ``q`` entries of ``theta_`` are regression coefficients.
+        weights:
+            Optional non-negative per-observation weights of shape ``(n,)``.
+            The weighted log-likelihood ``Σ w_i · ℓ_i`` is maximised; no
+            normalisation is applied.  ``None`` is equivalent to all-ones.
+        offset:
+            Optional per-observation offset of shape ``(n,)``.  Added to
+            ``h(y|x)`` before distribution calls on every likelihood
+            evaluation: ``h_eff = B·θ_b + X·β + offset``.  ``None`` is
+            equivalent to all-zeros.
 
         Returns
         -------
@@ -300,10 +353,13 @@ class ConditionalTransformationModel:
         Raises
         ------
         ValueError
-            If ``y`` contains values outside ``basis.support``.
+            If ``y`` contains values outside ``basis.support``, or if
+            ``weights``/``offset`` have the wrong shape or invalid values.
         """
         feature_names = _extract_feature_names(X)
         y_clean, X_clean = self._validate_input(y, X)
+        n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
+        weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
 
         result = optimize(
             self.basis,
@@ -312,12 +368,14 @@ class ConditionalTransformationModel:
             censoring=self.censoring,
             config=self.optimizer_config,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
 
         if not result.converged:
             warnings.warn(
-                f"Optimization did not converge after {result.n_restarts}"
-                f"restarts. Solver message: {result.solver_message}."
+                f"Optimization did not converge after {result.n_restarts} "
+                f"restarts. Solver message: {result.solver_message}. "
                 "The result is the best found, but may not be the MLE.",
                 ConvergenceWarning,
                 stacklevel=2,
@@ -334,7 +392,7 @@ class ConditionalTransformationModel:
         # Feature names for the covariate block of theta_.
         if X_clean is not None:
             q = X_clean.shape[1]
-            if feature_names is None or len(feature_names) != q:
+            if feature_names is None:
                 feature_names = [f"X{j + 1}" for j in range(q)]
             self.feature_names_in_ = feature_names
         else:
@@ -345,6 +403,9 @@ class ConditionalTransformationModel:
         # ``vcov()`` or ``estfun()`` results.  Failures here indicate a real
         # modelling problem (degenerate basis, constraint-binding fit);
         # surface them.
+        self.weights_ = weights_clean
+        self.offset_ = offset_clean
+
         self.hessian_ = _hessian(
             self.theta_,
             self.basis,
@@ -352,6 +413,8 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
         self._estfun_cache_ = _score_matrix(
             self.theta_,
@@ -360,7 +423,36 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
+
+        # Snapshot the training response and covariates for diagnostics
+        # (residuals()).  Defensive copies so caller mutations of the
+        # original ``y``/``X`` cannot leak into later diagnostic calls.
+        if isinstance(y_clean, CensoredData):
+            self._y_train_ = CensoredData(
+                exact=y_clean.exact.copy(),
+                lower=y_clean.lower.copy(),
+                upper=y_clean.upper.copy(),
+                trunc_lower=(
+                    y_clean.trunc_lower.copy()
+                    if y_clean.trunc_lower is not None
+                    else None
+                ),
+                trunc_upper=(
+                    y_clean.trunc_upper.copy()
+                    if y_clean.trunc_upper is not None
+                    else None
+                ),
+            )
+        else:
+            self._y_train_ = y_clean.copy()
+        self._X_train_ = X_clean.copy() if X_clean is not None else None
+        self._weights_train_ = (
+            weights_clean.copy() if weights_clean is not None else None
+        )
+        self._offset_train_ = offset_clean.copy() if offset_clean is not None else None
         return self
 
     def predict(
@@ -383,6 +475,7 @@ class ConditionalTransformationModel:
             "logodds",
             "quantile",
         ] = "distribution",
+        offset_new: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
 
@@ -393,6 +486,9 @@ class ConditionalTransformationModel:
             For all other ``what``: response values in ``basis.support``.
         X_new:
             Optional covariate matrix of shape ``(m, q)``.
+        offset_new:
+            Optional per-observation offset of shape ``(m,)``.  Added to
+            ``h(y|x)`` before distribution calls.
         what:
             Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
             ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
@@ -410,7 +506,8 @@ class ConditionalTransformationModel:
             * ``"logcumhazard"``    — ``log(−log S(h))``
             * ``"odds"``            — ``F(h) / S(h)``
             * ``"logodds"``         — ``log F(h) − log S(h)``
-            * ``"quantile"``        — Quantile via numerical inversion (brentq)
+            * ``"quantile"``        — Quantile via inversion; right-censored
+              models use an R-compatible grid+spline inversion.
 
         Returns
         -------
@@ -425,9 +522,9 @@ class ConditionalTransformationModel:
 
         Notes
         -----
-        Log-scale variants use ``dist.logcdf``/``logsf``/``logpdf`` directly
-        and are numerically stable in the tails where the primal quantities
-        would under- or overflow.
+        Log-scale variants use ``scipy.special.log_ndtr`` for the normal
+        distribution's log-CDF (more accurate in the tails) and
+        ``dist.logcdf``/``logsf``/``logpdf`` otherwise.
 
         Examples
         --------
@@ -448,6 +545,10 @@ class ConditionalTransformationModel:
         theta_b = self.theta_[:p]
 
         y_arr = np.asarray(y_new, dtype=float).ravel()
+        m = y_arr.shape[0]
+        offset_arr: NDArray[np.float64] | None = (
+            _validate_offset(offset_new, m) if offset_new is not None else None
+        )
         X_arr: NDArray[np.float64] | None = None
         if X_new is not None:
             X_arr = np.asarray(X_new, dtype=float)
@@ -475,7 +576,9 @@ class ConditionalTransformationModel:
                         f"model has {beta.shape[0]} covariate coefficients."
                     )
                 xbeta = X_arr @ beta
-            return self._predict_quantile(y_arr, theta_b, xbeta=xbeta)
+            return self._predict_quantile(
+                y_arr, theta_b, xbeta=xbeta, offset=offset_arr
+            )
 
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -487,7 +590,11 @@ class ConditionalTransformationModel:
             beta = self.theta_[p:]
             h = h + X_arr @ beta
 
+        if offset_arr is not None:
+            h = h + offset_arr
+
         dist = _get_dist(self.base_distribution)
+        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
             raise InfeasibleParameterError(
                 f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
@@ -518,7 +625,7 @@ class ConditionalTransformationModel:
         if what == "distribution":
             return cast(NDArray[np.float64], dist.cdf(h_c))
         if what == "logdistribution":
-            return cast(NDArray[np.float64], dist.logcdf(h_c))
+            return cast(NDArray[np.float64], _logcdf(h_c))
         if what == "survivor":
             return cast(NDArray[np.float64], dist.sf(h_c))
         if what == "logsurvivor":
@@ -542,22 +649,27 @@ class ConditionalTransformationModel:
         if what == "logcumhazard":
             return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
         if what == "odds":
-            return cast(NDArray[np.float64], np.exp(dist.logcdf(h_c) - dist.logsf(h_c)))
+            return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
         # logodds
-        return cast(NDArray[np.float64], dist.logcdf(h_c) - dist.logsf(h_c))
+        return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
 
     def _predict_quantile(
         self,
         probs: NDArray[np.float64],
         theta_b: NDArray[np.float64],
         xbeta: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
-        """Numerically invert the conditional transformation via brentq.
+        """Numerically invert the fitted distribution for quantile prediction.
 
-        Solves ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i]`` for each ``i``,
-        where ``h_baseline(y) = B_k(y) · theta_b`` and ``F⁻¹`` is the
-        quantile function of the base distribution.  When ``xbeta is None``
-        this reduces to the marginal inversion ``h_baseline(q) = F⁻¹(p)``.
+        For right-censored models, follow R ``mlt::qmlt`` semantics:
+        evaluate a CDF curve on a fixed grid and invert that curve via
+        spline/interpolation.
+
+        For other censoring types, solve
+        ``h_baseline(q_i) = F⁻¹(p_i) − xbeta[i] − offset[i]`` directly via
+        vectorised bisection, where ``h_baseline(y) = B_k(y) · theta_b`` and
+        ``F⁻¹`` is the base-distribution quantile function.
 
         Parameters
         ----------
@@ -568,6 +680,8 @@ class ConditionalTransformationModel:
         xbeta:
             Per-row linear predictor ``X @ beta`` of shape ``(len(probs),)``,
             or ``None`` for the baseline (no-covariate) case.
+        offset:
+            Per-row offset of shape ``(len(probs),)``, or ``None``.
 
         Returns
         -------
@@ -576,18 +690,124 @@ class ConditionalTransformationModel:
         a, b = self.basis.support
         k = self.basis.order
         theta_b = np.asarray(theta_b, dtype=float)
+        probs_arr = np.asarray(probs, dtype=np.float64)
 
-        n_probs = len(probs)
+        n_probs = len(probs_arr)
         if n_probs == 0:
             return np.empty(0, dtype=float)
+
+        dist = _get_dist(self.base_distribution)
+        shift: NDArray[np.float64] = (
+            np.zeros(n_probs, dtype=np.float64)
+            if xbeta is None
+            else np.asarray(xbeta, dtype=np.float64)
+        )
+        if offset is not None:
+            shift = shift + np.asarray(offset, dtype=np.float64)
+
+        # R-compatible quantile inversion path for right-censored models:
+        # qmlt() evaluates CDF on a K-point grid and .invf() inverts with
+        # spline+approx. This avoids support-bracket clipping artifacts in
+        # Coxph quantiles with covariate shifts.
+        if self.censoring is CensoringType.RIGHT:
+            q_grid = np.linspace(0.0, b, _QMLT_GRID_POINTS, dtype=np.float64)
+
+            i_arr = np.arange(k + 1, dtype=float)
+            j_arr = k - i_arr
+            binom_theta = comb(k, i_arr, exact=False) * theta_b
+            inv_width = 1.0 / (b - a)
+            t_grid = (q_grid - a) * inv_width
+            T_grid = (t_grid[:, None] ** i_arr) * ((1.0 - t_grid)[:, None] ** j_arr)
+            h_base_grid = cast(NDArray[np.float64], T_grid @ binom_theta)
+
+            eps = float(np.sqrt(np.finfo(float).eps))
+            out = np.empty(n_probs, dtype=np.float64)
+            saturated = False
+
+            for i, p in enumerate(probs_arr):
+                cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+                # For survival-time responses, R's grid starts at 0 and the
+                # CDF at time zero is treated as zero.
+                cdf_grid[0] = 0.0
+
+                finite = np.isfinite(cdf_grid)
+                if not np.any(finite):
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                cmin = float(np.min(cdf_grid[finite]))
+                cmax = float(np.max(cdf_grid[finite]))
+                remove = ~finite
+                flat_low = np.where(cdf_grid < cmin + eps)[0]
+                flat_high = np.where(cdf_grid > cmax - eps)[0]
+                if flat_low.size > 1:
+                    remove[flat_low[:-1]] = True
+                if flat_high.size > 1:
+                    remove[flat_high[1:]] = True
+
+                keep = ~remove
+                qk = q_grid[keep]
+                ck = cdf_grid[keep]
+                if qk.size < 2:
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                n_spline = max(3 * qk.size, 3)
+                q_s = np.linspace(
+                    float(qk[0]),
+                    float(qk[-1]),
+                    n_spline,
+                    dtype=np.float64,
+                )
+                c_s = cast(
+                    NDArray[np.float64],
+                    CubicSpline(qk, ck, bc_type="not-a-knot", extrapolate=False)(q_s),
+                )
+
+                finite_s = np.isfinite(c_s)
+                if not np.any(finite_s):
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+                q_s = q_s[finite_s]
+                c_s = c_s[finite_s]
+
+                order = np.argsort(c_s)
+                c_s = c_s[order]
+                q_s = q_s[order]
+                uniq = np.concatenate(([True], np.diff(c_s) > 0.0))
+                c_s = c_s[uniq]
+                q_s = q_s[uniq]
+                if c_s.size == 0:
+                    out[i] = q_grid[0]
+                    saturated = True
+                    continue
+
+                if p < c_s[0]:
+                    out[i] = q_grid[0]
+                    saturated = True
+                elif p > c_s[-1]:
+                    out[i] = q_grid[-1]
+                    saturated = True
+                else:
+                    out[i] = float(np.interp(p, c_s, q_s))
+
+            if saturated:
+                warnings.warn(
+                    "predict(what='quantile'): probability target lies outside "
+                    "the finite R-style inversion grid at one or more points; "
+                    "returning boundary-saturated quantiles.",
+                    stacklevel=2,
+                )
+            return out
 
         # Bracket-clip range for h_baseline — independent of xbeta.
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
-        dist = _get_dist(self.base_distribution)
-        shift = 0.0 if xbeta is None else np.asarray(xbeta, dtype=float)
-        z_raw = dist.ppf(probs) - shift
+        z_raw = dist.ppf(probs_arr) - shift
         if np.any((z_raw < z_min) | (z_raw > z_max)):
             warnings.warn(
                 "predict(what='quantile'): F⁻¹(p) − xβ exceeds the basis "
@@ -612,21 +832,28 @@ class ConditionalTransformationModel:
             T = (t[:, None] ** i_arr) * ((1.0 - t)[:, None] ** j_arr)
             return cast(NDArray[np.float64], T @ binom_theta)
 
-        # Vectorised bisection. 60 iters bracket-shrink: (b-a) · 2^-60 ≪ 1e-6
-        # for any practically-sized support.
+        # Vectorised bisection. At most 60 iterations; breaks early once the
+        # widest remaining bracket is < _BRENTQ_EPS (same tolerance used for
+        # bracket endpoints).  For a width-100 support this exits after ~40
+        # iters; for width-1 after ~33.
         lo = np.full(n_probs, a, dtype=float)
         hi = np.full(n_probs, b, dtype=float)
+        mid = 0.5 * (lo + hi)
         for _ in range(60):
-            mid = 0.5 * (lo + hi)
+            if np.max(hi - lo) < _BRENTQ_EPS:
+                break
             below = _h_vec(mid) < z
             lo = np.where(below, mid, lo)
             hi = np.where(below, hi, mid)
-        return cast(NDArray[np.float64], 0.5 * (lo + hi))
+            mid = 0.5 * (lo + hi)
+        return cast(NDArray[np.float64], mid)
 
     def score(
         self,
         y: NDArray[np.float64] | CensoredData,
         X: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -638,6 +865,10 @@ class ConditionalTransformationModel:
             Response observations.
         X:
             Optional covariate matrix.
+        weights:
+            Optional per-observation weights.
+        offset:
+            Optional per-observation offset added to ``h``.
 
         Returns
         -------
@@ -654,6 +885,8 @@ class ConditionalTransformationModel:
                 "Model parameters (theta_) are unexpectedly missing after fitting."
             )
         y_clean, X_clean = self._validate_input(y, X)
+        n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
+        weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
         return log_likelihood(
             self.theta_,
             self.basis,
@@ -661,6 +894,8 @@ class ConditionalTransformationModel:
             X_clean,
             self.censoring,
             base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
         )
 
     def vcov(self) -> NDArray[np.float64]:
@@ -738,6 +973,138 @@ class ConditionalTransformationModel:
     def score_contributions(self) -> NDArray[np.float64]:
         """Alias for :meth:`estfun`.  See that method for details."""
         return self.estfun()
+
+    def residuals(
+        self,
+        type: Literal["score", "cox-snell", "deviance"] = "score",
+    ) -> NDArray[np.float64]:
+        """Per-observation residuals for model diagnostics.
+
+        Computed at the training data passed to :meth:`fit`.  Mirrors R
+        ``mlt::residuals`` for ``type="score"``; the Cox-Snell and deviance
+        forms are derived from the fitted survivor function.
+
+        Parameters
+        ----------
+        type:
+            Which residual to compute.
+
+            * ``"score"`` (default) — score residual w.r.t. an artificial
+              intercept added to ``h(y|x)``: for exact ``-ψ(h_i)``; for
+              right-censored ``f(h)/S(h)``; for left-censored
+              ``-f(h)/F(h)``; for interval
+              ``-(f(h_b) - f(h_a)) / (F(h_b) - F(h_a))``.  Sign matches R
+              ``mlt::residuals`` (the negative of the positive-log-likelihood
+              score).  At the MLE the sum is zero up to optimiser tolerance.
+            * ``"cox-snell"`` — ``r_i = -log S(y_i|x_i)``.  Under a correctly
+              specified model these are approximately ``Exp(1)``.  For
+              censored observations ``y_i`` is the censoring threshold
+              (``lower`` for right-censored, ``upper`` for left-censored,
+              the midpoint for interval-censored); the resulting residuals
+              for those observations are themselves censored ``Exp(1)``
+              variates.
+            * ``"deviance"`` — ``sign(r_i - 1) · sqrt(2·|r_i - log(r_i) - 1|)``
+              where ``r_i`` is the Cox-Snell residual.  Under a correctly
+              specified model these are approximately standard normal.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Vector of length :attr:`n_obs_`.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``type`` is not one of the supported residual kinds.
+
+        Notes
+        -----
+        - ``type="score"`` matches R ``mlt::residuals(mlt_fit)`` exactly,
+          element-wise to ``rtol=1e-6``.
+        - ``type="cox-snell"`` uses the same evaluation point convention as
+          R's ``-log(predict(mlt_fit, type = "survivor"))``.
+        - ``r_i`` is clipped at ``np.finfo(float).tiny`` before
+          ``log(r_i)`` in the deviance formula to avoid ``-inf``.
+        """
+        self._check_is_fitted()
+        if type not in {"score", "cox-snell", "deviance"}:
+            raise ValueError(
+                f"type={type!r} is invalid. Allowed: 'score', 'cox-snell', 'deviance'."
+            )
+        if self.theta_ is None or self._y_train_ is None:
+            raise RuntimeError(
+                "Training data is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
+
+        if type == "score":
+            # R's ``mlt::residuals`` returns the negative of the
+            # positive-log-likelihood intercept score (so the residual is
+            # interpretable as ``∂(-ℓ_i)/∂α``).  Negate to match.
+            return -_intercept_score(
+                self.theta_,
+                self.basis,
+                self._y_train_,
+                self._X_train_,
+                self.censoring,
+                base_distribution=self.base_distribution,
+                weights=self._weights_train_,
+                offset=self._offset_train_,
+            )
+
+        # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per
+        # observation.  Pick the point per censoring status of each row.
+        y_eval = self._cox_snell_eval_points()
+        p = self.basis.order + 1
+        theta_b = self.theta_[:p]
+        B = self.basis.evaluate(y_eval)
+        h = B @ theta_b
+        if self._X_train_ is not None and len(self.theta_) > p:
+            beta = self.theta_[p:]
+            h = h + self._X_train_ @ beta
+        if self._offset_train_ is not None:
+            h = h + self._offset_train_
+        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+        dist = _get_dist(self.base_distribution)
+        r = -dist.logsf(h_c)
+
+        if type == "cox-snell":
+            return cast(NDArray[np.float64], r)
+
+        # deviance
+        r_safe = np.clip(r, np.finfo(float).tiny, None)
+        sign = np.sign(r - 1.0)
+        return cast(
+            NDArray[np.float64],
+            sign * np.sqrt(2.0 * np.abs(r - np.log(r_safe) - 1.0)),
+        )
+
+    def _cox_snell_eval_points(self) -> NDArray[np.float64]:
+        """Per-observation evaluation point for ``-log S`` residuals.
+
+        Exact obs: the observed value.  Right-censored: ``lower`` (censoring
+        time).  Left-censored: ``upper`` (censoring time).  Interval-censored:
+        midpoint of ``[lower, upper]``.
+        """
+        y = self._y_train_
+        if isinstance(y, np.ndarray):
+            return y
+        if not isinstance(y, CensoredData):
+            raise RuntimeError(
+                f"Unexpected stored training response type: {type(y).__name__!r}."
+            )
+        out = np.empty(y.n, dtype=np.float64)
+        mask_e = y.is_exact_mask
+        out[mask_e] = y.exact[mask_e]
+        mask_r = y.is_right_censored_mask
+        out[mask_r] = y.lower[mask_r]
+        mask_l = y.is_left_censored_mask
+        out[mask_l] = y.upper[mask_l]
+        mask_i = y.is_interval_censored_mask
+        out[mask_i] = 0.5 * (y.lower[mask_i] + y.upper[mask_i])
+        return out
 
     def standard_errors(self) -> NDArray[np.float64]:
         """Vector of asymptotic standard errors for :attr:`theta_`.
@@ -842,6 +1209,7 @@ class ConditionalTransformationModel:
         what: Literal[
             "trafo", "distribution", "survivor", "density", "hazard"
         ] = "distribution",
+        offset: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Pointwise delta-method confidence band for a predicted curve.
 
@@ -883,6 +1251,10 @@ class ConditionalTransformationModel:
         what:
             One of ``"trafo"``, ``"distribution"``, ``"survivor"``,
             ``"density"``, ``"hazard"``.  Defaults to ``"distribution"``.
+        offset:
+            Optional per-grid-point offset of shape ``(len(y_grid),)``.
+            Added to ``h`` before computing the band; does not affect the
+            delta-method Jacobian (offset is constant w.r.t. ``theta``).
 
         Returns
         -------
@@ -962,6 +1334,9 @@ class ConditionalTransformationModel:
 
         y_arr = np.asarray(y_grid, dtype=float).ravel()
         m = y_arr.size
+        offset_arr: NDArray[np.float64] | None = (
+            _validate_offset(offset, m) if offset is not None else None
+        )
         V = self.vcov()
 
         B = self.basis.evaluate(y_arr)  # (m, p)
@@ -970,6 +1345,9 @@ class ConditionalTransformationModel:
         hp = D @ theta_b
         if x_row is not None and beta is not None:
             h = h + float(x_row @ beta)
+
+        if offset_arr is not None:
+            h = h + offset_arr
 
         # Assemble per-grid-point Jacobian J of shape (m, p+q).
         # For scales whose η involves log h', also validate h' > 0.
