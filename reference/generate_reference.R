@@ -161,6 +161,60 @@ cat(sprintf(
 ))
 
 # ---------------------------------------------------------------------------
+# Left-truncated (delayed-entry) + right-censored reference
+#
+# Counting-process Surv(start, stop, event) gives R's delayed-entry encoding:
+# observation i is only at risk during [trunc_lo[i], y_lt[i]], so the mlt
+# log-likelihood divides each row by P(Y_i > trunc_lo[i] | x_i) — exactly
+# the truncation correction we are validating in pymlt.
+#
+# Files emitted (parallel to the right-censored block above):
+#   ll_trunc_y.txt      — 200 observed/censored thresholds
+#   ll_trunc_event.txt  — 0/1 event indicator
+#   ll_trunc_lower.txt  — left-truncation (delayed-entry) times
+#   ll_trunc_theta.txt  — Bernstein coefficients fitted by mlt
+#   ll_trunc_ll.txt     — scalar log-likelihood from mlt::logLik
+# ---------------------------------------------------------------------------
+
+set.seed(11)
+n_lt     <- 200
+y_lt     <- runif(n_lt, 0.30, 0.95)
+event_lt <- rbinom(n_lt, size = 1, prob = 0.7)
+trunc_lo <- y_lt - runif(n_lt, 0.05, 0.25)
+
+b_lt    <- Bernstein_basis(m, order = 4, ui = "increasing")
+ctm_lt  <- ctm(b_lt)
+
+# mlt's Surv(start, stop, event) path is buggy in 1.7.4 (see
+# https://github.com/cran/mlt — `tmp[[response]] <- object$tleft[il]`
+# fails when the truncated rows count differs from the response column).
+# The supported encoding for combined right-censoring + left-truncation is
+# the explicit ``R()`` constructor wrapped in ``I()`` so ``data.frame``
+# preserves its class.
+exact_lt  <- ifelse(event_lt == 1, y_lt, NA_real_)
+cleft_lt  <- ifelse(event_lt == 1, NA_real_, y_lt)
+cright_lt <- ifelse(event_lt == 1, NA_real_, Inf)
+yvar_lt   <- R(object = exact_lt,
+               cleft  = cleft_lt,
+               cright = cright_lt,
+               tleft  = trunc_lo)
+fit_lt  <- mlt(ctm_lt, data = data.frame(y = I(yvar_lt)))
+
+theta_lt <- coef(fit_lt)
+ll_lt    <- as.numeric(logLik(fit_lt))
+
+writeLines(format(y_lt,     digits = 15), con = file.path(out_dir, "ll_trunc_y.txt"))
+writeLines(as.character(event_lt),        con = file.path(out_dir, "ll_trunc_event.txt"))
+writeLines(format(trunc_lo, digits = 15), con = file.path(out_dir, "ll_trunc_lower.txt"))
+writeLines(format(theta_lt, digits = 15), con = file.path(out_dir, "ll_trunc_theta.txt"))
+writeLines(format(ll_lt,    digits = 15), con = file.path(out_dir, "ll_trunc_ll.txt"))
+
+cat(sprintf(
+  "Left-truncated: n=%d, observed=%d, ll=%.6f\n",
+  n_lt, sum(event_lt == 1), ll_lt
+))
+
+# ---------------------------------------------------------------------------
 # max_extreme_value (standard Gumbel, right) reference
 #
 # Fit mlt with todistr = "MaxExtrVal" on uncensored data, then write:

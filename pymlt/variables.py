@@ -146,6 +146,48 @@ class CensoredData:
         exact = np.full(len(lower), np.nan)
         return cls(exact=exact, lower=lower, upper=upper)
 
+    @classmethod
+    def left_truncated(
+        cls,
+        y: NDArray[np.float64],
+        trunc_lower: NDArray[np.float64],
+        censored: NDArray[np.bool_] | None = None,
+    ) -> CensoredData:
+        """Left-truncated (delayed-entry) data, optionally with right censoring.
+
+        Mirrors R's ``Surv(start, stop, event)`` counting-process encoding
+        used by the survival package: each observation is only at risk
+        starting from ``trunc_lower[i]``.  When ``censored`` is given, the
+        same boolean convention as :meth:`right_censored` applies — ``True``
+        means the actual event time is *above* ``y[i]``.
+
+        Parameters
+        ----------
+        y:
+            Observed value (exact event time, or right-censoring threshold).
+        trunc_lower:
+            Length-n array of left-truncation points (delayed-entry times).
+        censored:
+            Optional boolean array of right-censoring indicators.  ``None``
+            (default) treats all observations as exactly observed.
+        """
+        y = np.asarray(y, dtype=float)
+        trunc_lower = np.asarray(trunc_lower, dtype=float)
+        if len(trunc_lower) != len(y):
+            raise ValueError("trunc_lower must have the same length as y")
+        if censored is None:
+            exact = y.copy()
+            lower = y.copy()
+            upper = y.copy()
+        else:
+            censored = np.asarray(censored, dtype=bool)
+            if len(censored) != len(y):
+                raise ValueError("y and censored must have the same length")
+            exact = np.where(censored, np.nan, y)
+            lower = y.copy()
+            upper = np.where(censored, np.inf, y)
+        return cls(exact=exact, lower=lower, upper=upper, trunc_lower=trunc_lower)
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -397,8 +439,7 @@ class OrderedVariable:
             codes_arr = raw.astype(np.intp)
         else:
             raise TypeError(
-                f"codes must have an integer or floating dtype, "
-                f"got {raw.dtype!r}."
+                f"codes must have an integer or floating dtype, got {raw.dtype!r}."
             )
         if codes_arr.size and (codes_arr.min() < 1 or codes_arr.max() > self.K):
             raise ValueError(
