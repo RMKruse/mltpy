@@ -94,7 +94,7 @@ _VALID_CONFBAND_WHAT = (
     "hazard",
 )
 
-# Small epsilon used for bracket safety in brentq
+# Small epsilon used for bracket safety in the quantile bisection
 _BRENTQ_EPS = 1e-10
 
 # Grid size used by R's qmlt() default quantile inversion.

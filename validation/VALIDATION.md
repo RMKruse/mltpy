@@ -67,7 +67,7 @@ These test outputs derived from the fitted transformation. They are blocking **o
 | Metric | Tolerance | Grid/Levels | Description |
 |--------|-----------|-------------|-------------|
 | PDF / density | max\|Dpdf\| <= 0.05 | Same 100-point grid as CDF | f(h(y)) * h'(y) |
-| Quantile | max\|Dquant\| <= 0.05 | p = {0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95} | Numerical inversion via brentq; extreme tails (p < 0.05, p > 0.95) excluded |
+| Quantile | max\|Dquant\| <= 0.05 | p = {0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95} | Numerical inversion via vectorised bisection; extreme tails (p < 0.05, p > 0.95) excluded |
 | Hazard | max\|Dhaz\| <= 0.10 | Same 100-point grid, restricted to CDF < 0.95 | f(h)/S(h); only for right-censored models; compared only where S(t) > 0.05 |
 
 #### Extended predict-type checks (10 additional derived metrics)
