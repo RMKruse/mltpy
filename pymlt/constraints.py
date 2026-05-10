@@ -186,7 +186,121 @@ class BoundaryConstraint:
 
 
 # ---------------------------------------------------------------------------
-# Public builder
+# Constraint matrix dataclass for auglag solver
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ConstraintMatrices:
+    """Constraint matrices in the canonical form used by :func:`auglag_minimize`.
+
+    Represents the linear constraints as:
+
+        A_ineq @ θ ≥ b_ineq   (inequality)
+        C_eq   @ θ  = d_eq    (equality)
+
+    Parameters
+    ----------
+    A_ineq:
+        Inequality constraint matrix, shape (m_ineq, total_params).
+    b_ineq:
+        Inequality right-hand side, shape (m_ineq,).
+    C_eq:
+        Equality constraint matrix, shape (m_eq, total_params).
+        Zero-row matrix when there are no equality constraints.
+    d_eq:
+        Equality right-hand side, shape (m_eq,).
+        Zero-length array when there are no equality constraints.
+    """
+
+    A_ineq: NDArray[np.float64]
+    b_ineq: NDArray[np.float64]
+    C_eq: NDArray[np.float64]
+    d_eq: NDArray[np.float64]
+
+
+def build_constraint_matrices(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> ConstraintMatrices:
+    """Build constraint matrices for the augmented Lagrangian solver.
+
+    Returns a :class:`ConstraintMatrices` dataclass whose fields are passed
+    directly to :func:`~pymlt._auglag.auglag_minimize`.
+
+    **This slice implements monotonicity only.**  The ``lower``, ``upper``,
+    and ``nonneg_lower`` handlers raise :exc:`NotImplementedError` and will
+    be filled in subsequent slices.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients (= ``BernsteinBasis.order + 1``).
+    lower:
+        Reserved for Slice 2 (boundary equality).  Must be ``None``.
+    upper:
+        Reserved for Slice 2 (boundary equality).  Must be ``None``.
+    total_params:
+        Total parameter-vector length including any regression coefficients.
+        When ``total_params > n_params`` the monotonicity matrix is padded
+        with zero columns for the ``beta`` block.  Defaults to ``n_params``.
+    nonneg_lower:
+        Reserved for Slice 3 (exponential support).  Must be ``False``.
+    X:
+        Reserved for Slice 3.  Must be ``None``.
+
+    Returns
+    -------
+    ConstraintMatrices
+        ``A_ineq`` is the padded forward-difference matrix D (shape
+        ``(n_params-1, total_params)``), ``b_ineq`` is all-zeros.
+        ``C_eq`` and ``d_eq`` are zero-row / zero-length (no equalities
+        this slice).
+
+    Raises
+    ------
+    NotImplementedError
+        If ``lower``, ``upper``, ``nonneg_lower``, or ``X`` are non-default.
+    """
+    if lower is not None or upper is not None:
+        raise NotImplementedError(
+            "Boundary equality constraints (lower/upper) are not yet implemented "
+            "for the auglag solver.  They will be added in Slice 2."
+        )
+    if nonneg_lower:
+        raise NotImplementedError(
+            "Exponential support inequality (nonneg_lower) is not yet implemented "
+            "for the auglag solver.  It will be added in Slice 3."
+        )
+    if X is not None:
+        raise NotImplementedError(
+            "Per-row support constraints (X) are not yet implemented for the "
+            "auglag solver.  They will be added in Slice 3."
+        )
+
+    total = total_params if total_params is not None else n_params
+    mono = MonotonicityConstraint(n_params)
+    D = mono.as_matrix()  # shape (n_params-1, n_params)
+
+    if total > n_params:
+        D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
+
+    m_ineq = D.shape[0]
+    return ConstraintMatrices(
+        A_ineq=D,
+        b_ineq=np.zeros(m_ineq, dtype=np.float64),
+        C_eq=np.zeros((0, total), dtype=np.float64),
+        d_eq=np.zeros(0, dtype=np.float64),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public builder (SLSQP / trust-constr)
 # ---------------------------------------------------------------------------
 
 
