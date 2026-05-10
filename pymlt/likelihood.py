@@ -2224,7 +2224,7 @@ def _hess_left(
             h_raw_c = h_raw_c + o_c
         h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        mu = np.exp(dist.logpdf(h_c) - _logcdf(h_c))
+        mu = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         psi = -_neg_score(h_c, dist)
         w = mu * (mu - psi)  # = -d²logF/dh² → NLL contribution
         if w_c is not None:
@@ -2321,7 +2321,8 @@ def _hess_interval(
                 shift_o = shift_o + o_c[only_hi]
             h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
             _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-            mu = np.exp(dist.logpdf(h_hi_o) - _logcdf(h_hi_o))
+            log_mu = dist.logpdf(h_hi_o) - _logcdf(h_hi_o)
+            mu = np.exp(np.minimum(log_mu, _LOG_FLOAT_MAX))
             psi = -_neg_score(h_hi_o, dist)
             w_block = mu * (mu - psi)
             if w_c is not None:
