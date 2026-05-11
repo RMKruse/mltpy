@@ -233,22 +233,24 @@ def build_constraint_matrices(
     Returns a :class:`ConstraintMatrices` dataclass whose fields are passed
     directly to :func:`~pymlt._auglag.auglag_minimize`.
 
-    **This slice implements monotonicity only.**  The ``lower``, ``upper``,
-    and ``nonneg_lower`` handlers raise :exc:`NotImplementedError` and will
-    be filled in subsequent slices.
+    Monotonicity (``A_ineq @ θ ≥ 0``) is always included.  When ``lower`` or
+    ``upper`` are provided, equality rows pinning ``θ[0] = lower`` and/or
+    ``θ[n_params-1] = upper`` are added to ``C_eq``/``d_eq`` — mirroring
+    :class:`BoundaryConstraint`.
 
     Parameters
     ----------
     n_params:
         Number of Bernstein coefficients (= ``BernsteinBasis.order + 1``).
     lower:
-        Reserved for Slice 2 (boundary equality).  Must be ``None``.
+        If not ``None``, pins ``θ[0] = lower`` (equality).
     upper:
-        Reserved for Slice 2 (boundary equality).  Must be ``None``.
+        If not ``None``, pins ``θ[n_params-1] = upper`` (equality).
     total_params:
         Total parameter-vector length including any regression coefficients.
-        When ``total_params > n_params`` the monotonicity matrix is padded
-        with zero columns for the ``beta`` block.  Defaults to ``n_params``.
+        When ``total_params > n_params`` both the monotonicity matrix and the
+        boundary rows are padded with zero columns for the ``beta`` block.
+        Defaults to ``n_params``.
     nonneg_lower:
         Reserved for Slice 3 (exponential support).  Must be ``False``.
     X:
@@ -258,20 +260,15 @@ def build_constraint_matrices(
     -------
     ConstraintMatrices
         ``A_ineq`` is the padded forward-difference matrix D (shape
-        ``(n_params-1, total_params)``), ``b_ineq`` is all-zeros.
-        ``C_eq`` and ``d_eq`` are zero-row / zero-length (no equalities
-        this slice).
+        ``(n_params-1, total_params)``), ``b_ineq`` is all-zeros.  ``C_eq``
+        has 0, 1, or 2 rows depending on which of ``lower``/``upper`` are
+        provided; ``d_eq`` carries the corresponding right-hand-side values.
 
     Raises
     ------
     NotImplementedError
-        If ``lower``, ``upper``, ``nonneg_lower``, or ``X`` are non-default.
+        If ``nonneg_lower`` or ``X`` are non-default.
     """
-    if lower is not None or upper is not None:
-        raise NotImplementedError(
-            "Boundary equality constraints (lower/upper) are not yet implemented "
-            "for the auglag solver.  They will be added in Slice 2."
-        )
     if nonneg_lower:
         raise NotImplementedError(
             "Exponential support inequality (nonneg_lower) is not yet implemented "
@@ -291,11 +288,33 @@ def build_constraint_matrices(
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
     m_ineq = D.shape[0]
+
+    # Boundary equality rows.  Mirrors BoundaryConstraint: a single row per
+    # active side picking out θ[0] (lower) or θ[n_params-1] (upper).
+    if lower is None and upper is None:
+        C_eq = np.zeros((0, total), dtype=np.float64)
+        d_eq = np.zeros(0, dtype=np.float64)
+    else:
+        rows: list[NDArray[np.float64]] = []
+        rhs: list[float] = []
+        if lower is not None:
+            e0 = np.zeros(total, dtype=np.float64)
+            e0[0] = 1.0
+            rows.append(e0)
+            rhs.append(float(lower))
+        if upper is not None:
+            e_upper = np.zeros(total, dtype=np.float64)
+            e_upper[n_params - 1] = 1.0
+            rows.append(e_upper)
+            rhs.append(float(upper))
+        C_eq = np.vstack(rows)
+        d_eq = np.array(rhs, dtype=np.float64)
+
     return ConstraintMatrices(
         A_ineq=D,
         b_ineq=np.zeros(m_ineq, dtype=np.float64),
-        C_eq=np.zeros((0, total), dtype=np.float64),
-        d_eq=np.zeros(0, dtype=np.float64),
+        C_eq=C_eq,
+        d_eq=d_eq,
     )
 
 
