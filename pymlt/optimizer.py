@@ -69,6 +69,18 @@ class OptimizerConfig:
         so repeated fits with the same config and data are bit-identical.
         If a :class:`numpy.random.Generator`, it is used directly.
         If ``None`` (default), draws are non-reproducible across runs.
+    auglag_options:
+        :class:`~pymlt._auglag.AugLagOptions` controlling the PHR outer loop.
+        Only consulted when ``solver="auglag"``; ignored otherwise.  ``None``
+        (default) uses :class:`AugLagOptions` defaults (alabama parity).
+    lower:
+        If not ``None``, fixes ``θ[0] = lower`` as an equality constraint
+        (pins the lower-boundary Bernstein coefficient).  Honoured by every
+        solver: passes through to :func:`~pymlt.constraints.build_constraints`
+        for SLSQP/trust-constr and
+        :func:`~pymlt.constraints.build_constraint_matrices` for auglag.
+    upper:
+        If not ``None``, fixes ``θ[n_params−1] = upper`` analogously.
     """
 
     solver: Literal["slsqp", "trust-constr", "auglag"] = "slsqp"
@@ -79,6 +91,8 @@ class OptimizerConfig:
     verbose: bool = False
     random_state: int | np.random.Generator | None = None
     auglag_options: AugLagOptions | None = None
+    lower: float | None = None
+    upper: float | None = None
 
 
 @dataclass
@@ -267,7 +281,12 @@ def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
     return {"maxiter": config.max_iter, "gtol": config.tol}
 
 
-def _initial_theta(n_params: int, X: NDArray[np.float64] | None) -> NDArray[np.float64]:
+def _initial_theta(
+    n_params: int,
+    X: NDArray[np.float64] | None,
+    lower: float | None = None,
+    upper: float | None = None,
+) -> NDArray[np.float64]:
     """Default starting point: linearly spaced basis coefficients and zero
     beta components.
 
@@ -278,15 +297,33 @@ def _initial_theta(n_params: int, X: NDArray[np.float64] | None) -> NDArray[np.f
     X : NDArray[np.float64] | None
         Covariate matrix, shape `(n, q)`. If covariates exist, their initial weights
         will be zero-initialized and concatenated with the starting theta vector.
+    lower : float | None, default=None
+        When provided alongside ``upper``, the basis coefficients are seeded
+        from ``np.linspace(lower, upper, n_params)`` so the start already
+        satisfies both boundary-equality constraints (``θ[0] = lower``,
+        ``θ[n_params-1] = upper``).  When only one side is pinned, the start
+        is shifted so that side matches but the spacing is unchanged.
+    upper : float | None, default=None
+        See ``lower``.
 
     Returns
     -------
     NDArray[np.float64]
         Initial concatenated parameter vector of shape `(p + q,)`.
-        ``np.linspace(0, 1, n_params)`` is non-decreasing by construction, therefore
-        guaranteeing the constraint is met for the first trial.
+        Always non-decreasing by construction, so the monotonicity constraint
+        is satisfied at the first trial.  When ``lower`` / ``upper`` are
+        provided the starting point also satisfies the boundary equality
+        constraints, sparing the augmented-Lagrangian penalty an unnecessary
+        initial gradient swing.
     """
-    theta_b = np.linspace(0.0, 1.0, n_params)
+    if lower is not None and upper is not None:
+        theta_b = np.linspace(float(lower), float(upper), n_params)
+    elif lower is not None:
+        theta_b = np.linspace(0.0, 1.0, n_params) + (float(lower) - 0.0)
+    elif upper is not None:
+        theta_b = np.linspace(0.0, 1.0, n_params) + (float(upper) - 1.0)
+    else:
+        theta_b = np.linspace(0.0, 1.0, n_params)
     if X is not None:
         beta = np.zeros(X.shape[1])
         return cast(NDArray[np.float64], np.concatenate([theta_b, beta]))
@@ -397,7 +434,7 @@ def optimize(
     else:
         rng = np.random.default_rng(config.random_state)
 
-    theta_init = _initial_theta(n_params, X)
+    theta_init = _initial_theta(n_params, X, lower=config.lower, upper=config.upper)
 
     if config.solver == "auglag":
         return _optimize_auglag(
@@ -418,13 +455,15 @@ def optimize(
         )
 
     # ------------------------------------------------------------------
-    # SLSQP / trust-constr path — unchanged from before
+    # SLSQP / trust-constr path
     # ------------------------------------------------------------------
     # Exponential has support [0, ∞); enforce h(y|x) >= 0.  Without covariates
     # this reduces to theta_b[0] >= 0; with covariates we add one linear
     # inequality per training row: theta_b[0] + X_i @ beta >= 0.
     constraints = build_constraints(
         n_params,
+        lower=config.lower,
+        upper=config.upper,
         solver=config.solver,
         total_params=total_params,
         nonneg_lower=nonneg_lower,
@@ -554,7 +593,12 @@ def _optimize_auglag(
     always uses gradients regardless of ``config.use_gradient`` because
     L-BFGS-B requires them.
     """
-    cm = build_constraint_matrices(n_params, total_params=total_params)
+    cm = build_constraint_matrices(
+        n_params,
+        lower=config.lower,
+        upper=config.upper,
+        total_params=total_params,
+    )
     # auglag always needs gradients for the L-BFGS-B inner solver
     obj = _make_objective(
         basis,

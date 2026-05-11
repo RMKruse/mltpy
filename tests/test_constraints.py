@@ -11,6 +11,7 @@ from scipy.optimize import LinearConstraint, minimize
 from pymlt.constraints import (
     BoundaryConstraint,
     MonotonicityConstraint,
+    build_constraint_matrices,
     build_constraints,
 )
 
@@ -495,6 +496,87 @@ class TestNonnegLower:
                 nonneg_lower=True,
                 X=np.zeros((4, 3)),  # 3 cols vs expected 5-3=2
             )
+
+
+# ---------------------------------------------------------------------------
+# build_constraint_matrices — boundary equality (auglag path)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConstraintMatricesBoundary:
+    """Parallel to :class:`TestBoundaryConstraint` for the auglag entry point.
+
+    Each case checks that the equality rows in ``C_eq``/``d_eq`` pin the
+    correct index of ``theta`` to the requested value — mirroring the
+    behaviour of :class:`BoundaryConstraint` but expressed as the dense
+    matrices the augmented Lagrangian solver consumes directly.
+    """
+
+    def test_no_boundary_returns_zero_row_c_eq(self):
+        cm = build_constraint_matrices(4)
+        assert cm.C_eq.shape == (0, 4)
+        assert cm.d_eq.shape == (0,)
+
+    def test_lower_only_one_row(self):
+        cm = build_constraint_matrices(4, lower=0.0)
+        assert cm.C_eq.shape == (1, 4)
+        # Row picks out theta[0]; equality residual C @ theta - d at the
+        # boundary value must be zero.
+        theta = np.array([0.0, 1.0, 2.0, 3.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.C_eq[0], [1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(cm.d_eq, [0.0])
+
+    def test_upper_only_one_row(self):
+        cm = build_constraint_matrices(4, upper=5.0)
+        assert cm.C_eq.shape == (1, 4)
+        # Row picks out theta[n_params-1].
+        theta = np.array([1.0, 2.0, 3.0, 5.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.C_eq[0], [0.0, 0.0, 0.0, 1.0])
+        np.testing.assert_array_equal(cm.d_eq, [5.0])
+
+    def test_both_bounds_two_rows(self):
+        cm = build_constraint_matrices(4, lower=1.0, upper=4.0)
+        assert cm.C_eq.shape == (2, 4)
+        # First row pins theta[0]=1.0; second pins theta[3]=4.0.
+        theta = np.array([1.0, 2.0, 3.0, 4.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.d_eq, [1.0, 4.0])
+
+    def test_lower_residual_non_zero(self):
+        cm = build_constraint_matrices(4, lower=1.0)
+        theta = np.array([2.0, 2.0, 3.0, 4.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, [1.0])  # 2 - 1
+
+    def test_upper_residual_non_zero(self):
+        cm = build_constraint_matrices(4, upper=3.0)
+        theta = np.array([1.0, 2.0, 3.0, 5.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, [2.0])  # 5 - 3
+
+    def test_total_params_pads_c_eq(self):
+        # With beta entries, equality rows must be padded with zero columns
+        # so they apply to the Bernstein block only.  upper still points at
+        # theta[n_params-1], not the last column of the padded vector.
+        cm = build_constraint_matrices(4, lower=0.0, upper=1.0, total_params=6)
+        assert cm.C_eq.shape == (2, 6)
+        np.testing.assert_array_equal(cm.C_eq[:, 4:], 0.0)
+        theta = np.array([0.0, 0.5, 0.8, 1.0, 99.0, 99.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+
+    def test_total_params_preserves_monotonicity_padding(self):
+        cm = build_constraint_matrices(4, lower=0.0, total_params=6)
+        assert cm.A_ineq.shape == (3, 6)
+        np.testing.assert_array_equal(cm.A_ineq[:, 4:], 0.0)
+
+    @pytest.mark.parametrize(
+        "lower,upper,expected_rows",
+        [(None, None, 0), (0.0, None, 1), (None, 1.0, 1), (0.0, 1.0, 2)],
+    )
+    def test_row_count(self, lower, upper, expected_rows):
+        cm = build_constraint_matrices(5, lower=lower, upper=upper)
+        assert cm.C_eq.shape[0] == expected_rows
+        assert cm.d_eq.shape == (expected_rows,)
 
 
 # ---------------------------------------------------------------------------
