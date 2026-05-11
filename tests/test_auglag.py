@@ -343,14 +343,6 @@ class TestBuildConstraintMatrices:
         # Beta columns must be zero
         np.testing.assert_array_equal(cm.A_ineq[:, n_params:], 0.0)
 
-    def test_boundary_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="Slice 2"):
-            build_constraint_matrices(4, lower=-5.0)
-
-    def test_upper_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="Slice 2"):
-            build_constraint_matrices(4, upper=5.0)
-
     def test_nonneg_lower_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError, match="Slice 3"):
             build_constraint_matrices(4, nonneg_lower=True)
