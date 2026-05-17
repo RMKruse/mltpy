@@ -433,6 +433,116 @@ class Coxph(_TramModel):
 
 
 # ---------------------------------------------------------------------------
+# Lehmann
+# ---------------------------------------------------------------------------
+
+
+class Lehmann(_TramModel):
+    """Lehmann (proportional reverse-time hazards) model for right-censored data.
+
+    Dual of :class:`Coxph`.  Fits a monotone transformation h(t) under
+    right-censoring using the maximum extreme value (``"max_extreme_value"``)
+    base distribution — the standard Gumbel distribution.  With covariates
+    entering linearly this parameterisation satisfies
+    ``-log F(t | x) = h(t) + x'β``, which is the Lehmann alternative
+    (proportional reverse-time hazards) model.
+
+    Parameters
+    ----------
+    support:
+        Closed interval ``(a, b)`` with ``a > 0`` and ``b`` at least as
+        large as the longest observed follow-up time.
+    order:
+        Polynomial degree of the Bernstein basis.  Defaults to 6.
+    optimizer_config:
+        Optimisation settings.  If ``None``, library defaults are used.
+
+    Examples
+    --------
+    >>> from pymlt.tram import Lehmann
+    >>> from pymlt.variables import CensoredData
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> y_time   = rng.exponential(scale=2.0, size=200)
+    >>> y_status = rng.binomial(1, 0.7, size=200).astype(bool)
+    >>> cd = CensoredData.right_censored(y_time, censored=~y_status)
+    >>> model = Lehmann(support=(0.01, y_time.max()))
+    >>> model.fit(cd)
+    >>> surv = model.survival(y_time)
+    """
+
+    def __init__(
+        self,
+        support: tuple[float, float],
+        order: int = 6,
+        optimizer_config: OptimizerConfig | None = None,
+    ) -> None:
+        super().__init__(
+            order=order,
+            support=support,
+            censoring=CensoringType.RIGHT,
+            optimizer_config=optimizer_config,
+            base_distribution="max_extreme_value",
+        )
+
+    def survival(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the survival function S(y) = 1 − F(y|x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``basis.support``.
+        X:
+            Optional covariate matrix of shape ``(m, q)``.
+        offset:
+            Optional per-observation offset added to ``h``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        return 1.0 - self.predict(y, X_new=X, what="distribution", offset_new=offset)
+
+    def hazard(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``basis.support``.
+        X:
+            Optional covariate matrix of shape ``(m, q)``.
+        offset:
+            Optional per-observation offset added to ``h``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with non-negative values.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        return self.predict(y, X_new=X, what="hazard", offset_new=offset)
+
+
+# ---------------------------------------------------------------------------
 # Colr
 # ---------------------------------------------------------------------------
 
