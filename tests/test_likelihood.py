@@ -1011,7 +1011,21 @@ class TestGetDist:
 
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
-            _get_dist("cauchy")
+            _get_dist("student-t")
+
+    def test_laplace_returns_laplace(self):
+        from scipy.stats import laplace
+
+        ops = _get_dist("laplace")
+        assert ops.kind == "laplace"
+        assert ops.scipy is laplace
+
+    def test_cauchy_returns_cauchy(self):
+        from scipy.stats import cauchy
+
+        ops = _get_dist("cauchy")
+        assert ops.kind == "cauchy"
+        assert ops.scipy is cauchy
 
     def test_error_message_contains_valid_options(self):
         with pytest.raises(ValueError, match="normal"):
@@ -1029,6 +1043,8 @@ class TestGetDist:
             "min_extreme_value",
             "max_extreme_value",
             "exponential",
+            "laplace",
+            "cauchy",
         }
 
 
@@ -1037,7 +1053,7 @@ def test_log_likelihood_invalid_distribution_raises():
     theta = ascending_theta(basis.order)
     y = np.linspace(0.1, 0.9, 20)
     with pytest.raises(ValueError, match="base_distribution"):
-        log_likelihood(theta, basis, y, base_distribution="cauchy")
+        log_likelihood(theta, basis, y, base_distribution="student-t")
 
 
 def test_negative_log_likelihood_invalid_distribution_raises():
@@ -1114,6 +1130,26 @@ class TestNegScore:
             _neg_score(h, _LOGIS_OPS), self._fd_neg_score(_LOGIS_OPS, h), rtol=1e-4
         )
 
+    def test_laplace(self):
+        from pymlt.likelihood import _LAPLACE_OPS, _neg_score
+
+        h = np.array([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0])
+        expected = np.sign(h)
+        np.testing.assert_allclose(_neg_score(h, _LAPLACE_OPS), expected, rtol=1e-12)
+        np.testing.assert_allclose(
+            _neg_score(h, _LAPLACE_OPS), self._fd_neg_score(_LAPLACE_OPS, h), rtol=1e-4
+        )
+
+    def test_cauchy(self):
+        from pymlt.likelihood import _CAUCHY_OPS, _neg_score
+
+        h = np.linspace(-2.0, 2.0, 9)
+        expected = 2.0 * h / (1.0 + h**2)
+        np.testing.assert_allclose(_neg_score(h, _CAUCHY_OPS), expected, rtol=1e-12)
+        np.testing.assert_allclose(
+            _neg_score(h, _CAUCHY_OPS), self._fd_neg_score(_CAUCHY_OPS, h), rtol=1e-4
+        )
+
     def test_unhandled_kind_raises_neg_score(self):
         """Exhaustiveness guard: an unknown kind fails loudly, no logistic fallthrough."""
         from pymlt.likelihood import DistOps, _neg_score
@@ -1140,7 +1176,15 @@ class TestNegScore:
 
 @pytest.mark.parametrize(
     "base_distribution",
-    ["normal", "logistic", "min_extreme_value", "max_extreme_value", "exponential"],
+    [
+        "normal",
+        "logistic",
+        "min_extreme_value",
+        "max_extreme_value",
+        "exponential",
+        "laplace",
+        "cauchy",
+    ],
 )
 class TestPerDistributionLikelihood:
     """End-to-end per-distribution coverage of log_likelihood and its gradient."""

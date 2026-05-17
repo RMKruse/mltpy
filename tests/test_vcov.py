@@ -26,6 +26,7 @@ from pymlt import (
     CensoredData,
     CensoringType,
     NotFittedError,
+    WaldTestResult,
     hessian,
     negative_log_likelihood,
     score_matrix,
@@ -442,3 +443,153 @@ class TestSummaryCoefTable:
         m = BoxCox(support=(float(y.min() - 0.1), float(y.max() + 0.1)), order=4).fit(y)
         summary = m.summary()
         assert "Coefficients:" not in summary
+
+
+# ---------------------------------------------------------------------------
+# Sandwich variance–covariance matrix
+# ---------------------------------------------------------------------------
+
+
+class TestSandwichVcov:
+    def setup_method(self):
+        rng = np.random.default_rng(42)
+        n = 200
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.5 * self.X[:, 0] - 0.3 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+
+    def test_sandwich_vcov_shape(self):
+        V = self.m.sandwich_vcov()
+        k = self.m.theta_.size
+        assert V.shape == (k, k)
+
+    def test_sandwich_vcov_symmetric(self):
+        V = self.m.sandwich_vcov()
+        np.testing.assert_allclose(V, V.T, atol=1e-12)
+
+    def test_sandwich_vcov_positive_diagonal(self):
+        V = self.m.sandwich_vcov()
+        assert np.all(np.diag(V) > 0)
+
+    def test_sandwich_vcov_formula(self):
+        """V_sandwich = H^{-1} M H^{-1} where M = estfun().T @ estfun()."""
+        V = self.m.sandwich_vcov()
+        H = self.m.hessian_
+        H_inv = np.linalg.inv(H)
+        ef = self.m.estfun()
+        M = ef.T @ ef
+        V_expected = H_inv @ M @ H_inv
+        np.testing.assert_allclose(V, V_expected, atol=1e-12)
+
+    def test_sandwich_vcov_unfitted_raises(self):
+        m = MLT(order=3, support=(0.0, 1.0))
+        with pytest.raises(NotFittedError):
+            m.sandwich_vcov()
+
+    def test_sandwich_se_positive(self):
+        se = self.m.sandwich_se()
+        assert se.shape == (self.m.theta_.size,)
+        assert np.all(se > 0)
+
+    def test_sandwich_se_unfitted_raises(self):
+        m = MLT(order=3, support=(0.0, 1.0))
+        with pytest.raises(NotFittedError):
+            m.sandwich_se()
+
+
+# ---------------------------------------------------------------------------
+# Wald tests
+# ---------------------------------------------------------------------------
+
+
+class TestWaldTest:
+    def setup_method(self):
+        rng = np.random.default_rng(99)
+        n = 300
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.7 * self.X[:, 0] - 0.4 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+        # Bernstein + 2 covariate params
+        self.p = self.m.theta_.size
+
+    def test_wald_test_returns_WaldTestResult(self):
+        R = np.eye(1, self.p, self.p - 1)  # test last param = 0
+        result = self.m.wald_test(R)
+        assert isinstance(result, WaldTestResult)
+
+    def test_wald_test_fields(self):
+        R = np.eye(1, self.p, self.p - 1)
+        result = self.m.wald_test(R)
+        assert result.statistic >= 0
+        assert result.df == 1
+        assert 0.0 <= result.p_value <= 1.0
+
+    def test_wald_test_two_constraints(self):
+        # Test both covariate params jointly = 0
+        R = np.zeros((2, self.p))
+        R[0, -2] = 1.0
+        R[1, -1] = 1.0
+        result = self.m.wald_test(R)
+        assert result.df == 2
+        # Both should be non-zero (generated with non-zero beta), so should reject
+        assert result.p_value < 0.05
+
+    def test_wald_test_with_r_vector(self):
+        """H0: theta[last] = r should match H0: theta[last] - r = 0."""
+        k = self.p
+        R = np.eye(1, k, k - 1)
+        r_val = self.m.theta_[-1]  # test at the MLE value → statistic near 0
+        result_at_mle = self.m.wald_test(R, r=np.array([r_val]))
+        assert result_at_mle.statistic < 0.01  # near 0 at MLE
+
+    def test_wald_test_statistic_formula(self):
+        """W = (Rθ - r)^T [R V R^T]^{-1} (Rθ - r) / df."""
+        R = np.zeros((2, self.p))
+        R[0, -2] = 1.0
+        R[1, -1] = 1.0
+        r = np.zeros(2)
+        result = self.m.wald_test(R, r=r)
+        V = self.m.vcov()
+        diff = R @ self.m.theta_ - r
+        RVR = R @ V @ R.T
+        W_expected = float(diff @ np.linalg.inv(RVR) @ diff)
+        np.testing.assert_allclose(result.statistic, W_expected, rtol=1e-10)
+
+    def test_wald_test_sandwich_uses_sandwich_vcov(self):
+        """With vcov='sandwich' the test uses sandwich_vcov()."""
+        R = np.zeros((2, self.p))
+        R[0, -2] = 1.0
+        R[1, -1] = 1.0
+        r = np.zeros(2)
+        result_sandwich = self.m.wald_test(R, r=r, vcov="sandwich")
+        # Statistic differs when sandwich != information vcov
+        V_sand = self.m.sandwich_vcov()
+        diff = R @ self.m.theta_ - r
+        RVR = R @ V_sand @ R.T
+        W_sandwich = float(diff @ np.linalg.inv(RVR) @ diff)
+        np.testing.assert_allclose(result_sandwich.statistic, W_sandwich, rtol=1e-10)
+
+    def test_wald_test_unfitted_raises(self):
+        m = MLT(order=3, support=(0.0, 1.0))
+        R = np.eye(1, 4, 3)
+        with pytest.raises(NotFittedError):
+            m.wald_test(R)
+
+    def test_wald_test_invalid_R_shape_raises(self):
+        # R must have self.p columns
+        R = np.eye(2, self.p + 1)
+        with pytest.raises(ValueError, match="columns"):
+            self.m.wald_test(R)
+
+    def test_wald_test_repr(self):
+        R = np.eye(1, self.p, self.p - 1)
+        result = self.m.wald_test(R)
+        s = repr(result)
+        assert "Wald" in s
+        assert "statistic" in s or "W" in s

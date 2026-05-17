@@ -77,9 +77,11 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import log_ndtr
+from scipy.stats import cauchy as _cauchy
 from scipy.stats import expon as _expon
 from scipy.stats import gumbel_l as _mev
 from scipy.stats import gumbel_r as _maxev
+from scipy.stats import laplace as _laplace
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
@@ -92,6 +94,8 @@ BaseDistribution = Literal[
     "min_extreme_value",
     "max_extreme_value",
     "exponential",
+    "laplace",
+    "cauchy",
 ]
 _VALID_BASE_DISTRIBUTIONS = (
     "normal",
@@ -99,6 +103,8 @@ _VALID_BASE_DISTRIBUTIONS = (
     "min_extreme_value",
     "max_extreme_value",
     "exponential",
+    "laplace",
+    "cauchy",
 )
 
 
@@ -135,6 +141,8 @@ _LOGIS_OPS = DistOps("logistic", _logistic)
 _MEV_OPS = DistOps("min_extreme_value", _mev)
 _MAXEV_OPS = DistOps("max_extreme_value", _maxev)
 _EXPON_OPS = DistOps("exponential", _expon)
+_LAPLACE_OPS = DistOps("laplace", _laplace)
+_CAUCHY_OPS = DistOps("cauchy", _cauchy)
 
 
 def _get_dist(base_distribution: str) -> DistOps:
@@ -157,6 +165,13 @@ def _get_dist(base_distribution: str) -> DistOps:
       ``h(y|x) >= 0`` via :func:`pymlt.constraints.build_constraints`.  With
       no covariates this collapses to ``theta_b[0] >= 0``; with covariates,
       one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row.
+    * ``"laplace"``            — :data:`scipy.stats.laplace`, the standard
+      Laplace (double exponential) distribution.  Score function is
+      ``sign(h)``; the link realises a median regression model.
+    * ``"cauchy"``             — :data:`scipy.stats.cauchy`, the standard
+      Cauchy distribution.  Score function is ``2h/(1+h²)``.  Note that
+      Cauchy is **not** log-concave, so the Hessian of the negative
+      log-likelihood may not be positive semi-definite.
 
     The returned :class:`DistOps` forwards attribute access to the underlying
     scipy distribution, so ``_get_dist("normal").logpdf(h)`` is equivalent to
@@ -178,6 +193,10 @@ def _get_dist(base_distribution: str) -> DistOps:
         return _MAXEV_OPS
     if base_distribution == "exponential":
         return _EXPON_OPS
+    if base_distribution == "laplace":
+        return _LAPLACE_OPS
+    if base_distribution == "cauchy":
+        return _CAUCHY_OPS
     raise ValueError(
         f"base_distribution={base_distribution!r} is not supported. "
         f"Choose one of {_VALID_BASE_DISTRIBUTIONS}."
@@ -414,6 +433,8 @@ def _neg_score(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
         * min_extreme_value (gumbel_l): ``exp(h) - 1``
         * max_extreme_value (gumbel_r): ``1 - exp(-h)``
         * exponential:                  ``1`` (constant)
+        * laplace:                      ``sign(h)``
+        * cauchy:                       ``2h / (1 + h²)``
     """
     kind = dist.kind
     if kind == "normal":
@@ -426,6 +447,10 @@ def _neg_score(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
         return 1.0 - np.exp(-h)
     if kind == "exponential":
         return np.ones_like(h)
+    if kind == "laplace":
+        return cast(NDArray[np.float64], np.sign(h))
+    if kind == "cauchy":
+        return 2.0 * h / (1.0 + h**2)
     raise AssertionError(f"unhandled dist.kind={kind!r}")
 
 
@@ -449,13 +474,16 @@ def _d2_logpdf(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
         * min_extreme_value (gumbel_l): ``-exp(h)``
         * max_extreme_value (gumbel_r): ``-exp(-h)``
         * exponential:                  ``0``  (log f is linear in h)
+        * laplace:                      ``0``  (log f is piecewise linear; a.e.)
+        * cauchy:                       ``2(h² - 1) / (1 + h²)²``
+                                        (not log-concave: positive for |h| > 1)
 
     Notes
     -----
     Used to assemble the analytical Hessian of the log-likelihood.  For
-    log-concave base distributions (all five supported choices),
-    ``ψ'(h) ≤ 0`` for every h, which makes the exact-observation Hessian
-    of the *negative* log-likelihood positive on the ``β`` block.
+    log-concave base distributions, ``ψ'(h) ≤ 0`` for every h.  Note that
+    Cauchy is *not* log-concave, so ``ψ'(h)`` can be positive for ``|h| > 1``,
+    meaning the Hessian of the negative log-likelihood may not be PSD.
     """
     kind = dist.kind
     if kind == "normal":
@@ -468,6 +496,11 @@ def _d2_logpdf(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
         return cast(NDArray[np.float64], -np.exp(-h))
     if kind == "exponential":
         return np.zeros_like(h)
+    if kind == "laplace":
+        return np.zeros_like(h)
+    if kind == "cauchy":
+        denom = 1.0 + h**2
+        return 2.0 * (h**2 - 1.0) / denom**2
     raise AssertionError(f"unhandled dist.kind={kind!r}")
 
 

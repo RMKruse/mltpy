@@ -641,7 +641,7 @@ class TestBaseDistributionValidation:
     def test_ctm_invalid_raises(self):
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         with pytest.raises(ValueError, match="base_distribution"):
-            ConditionalTransformationModel(basis, base_distribution="cauchy")
+            ConditionalTransformationModel(basis, base_distribution="student-t")
 
     def test_mlt_invalid_raises(self):
         with pytest.raises(ValueError, match="base_distribution"):

@@ -1128,6 +1128,161 @@ class ConditionalTransformationModel:
             )
         return cast(NDArray[np.float64], np.sqrt(diag))
 
+    def sandwich_vcov(self) -> NDArray[np.float64]:
+        """Sandwich (robust) variance–covariance matrix of :attr:`theta_`.
+
+        Computes the HC0 sandwich estimator
+
+        .. math::
+            V_{\\text{sand}} = H^{-1} M H^{-1},
+            \\quad M = \\sum_i s_i s_i^\\top,
+
+        where :math:`H` is the observed information matrix (:attr:`hessian_`)
+        and :math:`s_i = \\partial\\ell_i/\\partial\\theta` is the score
+        contribution of observation :math:`i` (row :math:`i` of
+        :meth:`estfun`).  At the MLE, :math:`M` equals the *meat* of the
+        sandwich.
+
+        Under model mis-specification this is more robust than the
+        inverse-information :meth:`vcov`.  Under the correctly specified model
+        both converge to the same limit.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Symmetric ``(p+q, p+q)`` matrix.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            If the Hessian is singular.
+        """
+        self._check_is_fitted()
+        if self.hessian_ is None:
+            raise RuntimeError(
+                "hessian_ is unexpectedly missing after fitting. "
+                "Please call fit(y) again."
+            )
+        try:
+            H_inv = np.linalg.inv(self.hessian_)
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "sandwich_vcov() could not be computed: the Hessian is singular."
+            ) from exc
+        ef = self.estfun()
+        meat = ef.T @ ef
+        return cast(NDArray[np.float64], H_inv @ meat @ H_inv)
+
+    def sandwich_se(self) -> NDArray[np.float64]:
+        """Sandwich (robust) standard errors for :attr:`theta_`.
+
+        Computed as ``sqrt(diag(sandwich_vcov()))``.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            Vector of length ``len(theta_)``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        RuntimeError
+            Propagated from :meth:`sandwich_vcov` on singular Hessians, or if
+            the sandwich variance matrix has negative diagonal entries.
+        """
+        diag = np.diag(self.sandwich_vcov())
+        if np.any(diag < 0):
+            raise RuntimeError(
+                "sandwich_vcov() contains negative diagonal entries — the "
+                "sandwich matrix is not positive definite."
+            )
+        return cast(NDArray[np.float64], np.sqrt(diag))
+
+    def wald_test(
+        self,
+        R: NDArray[np.float64],
+        r: NDArray[np.float64] | None = None,
+        vcov: Literal["information", "sandwich"] = "information",
+    ) -> "WaldTestResult":
+        """Wald test for linear restrictions ``Rθ = r``.
+
+        Computes the chi-squared Wald statistic
+
+        .. math::
+            W = (R\\hat\\theta - r)^\\top
+                \\bigl[R\\,V\\,R^\\top\\bigr]^{-1}
+                (R\\hat\\theta - r)
+            \\;\\sim\\; \\chi^2(k),
+
+        where :math:`k` is the number of rows in :math:`R` and :math:`V` is
+        either the inverse-information :meth:`vcov` or the sandwich estimator
+        :meth:`sandwich_vcov`.
+
+        Parameters
+        ----------
+        R : NDArray[np.float64]
+            Contrast matrix of shape ``(k, p+q)``.  Each row encodes one
+            linear restriction on :attr:`theta_`.
+        r : NDArray[np.float64] | None
+            Null-hypothesis value vector of length ``k``.  Defaults to the
+            zero vector (i.e. ``Rθ = 0``).
+        vcov : ``"information"`` | ``"sandwich"``
+            Which variance–covariance matrix to use.  ``"information"`` (the
+            default) uses the observed Fisher information :meth:`vcov`;
+            ``"sandwich"`` uses the HC0 sandwich estimator
+            :meth:`sandwich_vcov`.
+
+        Returns
+        -------
+        WaldTestResult
+            Dataclass with fields ``statistic``, ``df``, ``p_value``, and
+            ``vcov_type``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ValueError
+            If ``R`` does not have ``len(theta_)`` columns or ``r`` has the
+            wrong length.
+        RuntimeError
+            If ``R V R^T`` is singular (the restriction is degenerate or
+            collinear).
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are unexpectedly missing after fitting."
+            )
+        R = np.atleast_2d(np.asarray(R, dtype=np.float64))
+        k, p = R.shape
+        if p != self.theta_.size:
+            raise ValueError(
+                f"R has {p} columns but model has {self.theta_.size} parameters."
+            )
+        if r is None:
+            r_vec = np.zeros(k, dtype=np.float64)
+        else:
+            r_vec = np.asarray(r, dtype=np.float64).ravel()
+            if r_vec.size != k:
+                raise ValueError(f"r has {r_vec.size} elements but R has {k} rows.")
+        V = self.vcov() if vcov == "information" else self.sandwich_vcov()
+        diff = R @ self.theta_ - r_vec
+        RVR = R @ V @ R.T
+        try:
+            RVR_inv = np.linalg.inv(RVR)
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "wald_test(): R V R^T is singular — the restrictions may be "
+                "collinear or the model is not identified."
+            ) from exc
+        W = float(diff @ RVR_inv @ diff)
+        p_value = float(chi2.sf(W, df=k))
+        return WaldTestResult(statistic=W, df=k, p_value=p_value, vcov_type=vcov)
+
     def confint(
         self,
         level: float = 0.95,
@@ -1716,6 +1871,36 @@ class AnovaResult:
                 f"{p_str:>12}"
             )
         return "\n".join(rows)
+
+
+@dataclass(frozen=True)
+class WaldTestResult:
+    """Result of a Wald test for linear restrictions on model parameters.
+
+    Parameters
+    ----------
+    statistic : float
+        Wald chi-squared statistic ``W = (Rθ - r)^T [R V R^T]^{-1} (Rθ - r)``.
+    df : int
+        Degrees of freedom (number of restrictions, i.e. number of rows in ``R``).
+    p_value : float
+        Right-tail probability ``Pr(χ²(df) > W)``.
+    vcov_type : str
+        Which variance–covariance matrix was used: ``"information"`` or
+        ``"sandwich"``.
+    """
+
+    statistic: float
+    df: int
+    p_value: float
+    vcov_type: str
+
+    def __repr__(self) -> str:
+        return (
+            f"Wald test ({self.vcov_type} vcov)\n"
+            f"  W = {self.statistic:.4f}, df = {self.df}, "
+            f"p-value = {self.p_value:.4g}"
+        )
 
 
 def anova(*models: ConditionalTransformationModel) -> AnovaResult:
