@@ -4,88 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Added
-
-- Observation weights and offset support across the full model pipeline
-  (`fit`, `predict`, `score`, `confband`, `residuals`, `estfun`):
-  - `fit(y, X=None, weights=None, offset=None)` — weighted log-likelihood
-    `Σ w_i·ℓ_i`; offset adds a per-observation constant to `h(y|x)` before
-    all distribution calls.  Weights and offset are stored as `weights_` /
-    `offset_` and snapshotted as `_weights_train_` / `_offset_train_` for
-    later use by `residuals()`.
-  - `predict(..., offset_new=None)` — offset shifts `h` at prediction time.
-  - `score(..., weights=None, offset=None)` — evaluates the weighted LL at any
-    (y, X) pair.
-  - `confband(..., offset=None)` — offset shifts `h` before the delta-method
-    band is computed; the Jacobian is unaffected (offset is constant in θ).
-  - `Coxph.survival(y, X, offset=None)` and `Coxph.hazard(y, X, offset=None)`.
-  - New public helper `_validate_weights_offset(weights, offset, n)` in
-    `likelihood.py` — raises `ValueError` for wrong shapes, negative weights,
-    or non-finite values.
-  - R reference generation extended with weighted BoxCox / Colr / Coxph fits
-    (`reference/generate_reference.R`), producing `weights_<model>_*.txt` files.
-  - Full test coverage in `tests/test_weights_offset.py` (41 tests): input
-    validation, identity (`weights=ones ≡ no weights`, `offset=zeros ≡ no
-    offset`), uniform-doubling invariance, replication invariance, offset-shifts-
-    trafo, quantile-with-offset, R-parity (skipped until R files are generated).
-
-- `residuals(type=...)` method on `ConditionalTransformationModel` —
-  per-observation diagnostics mirroring R `mlt::residuals`.  Three types:
-  `"score"` (default; ∂(-ℓ_i)/∂α at α=0 for an artificial intercept
-  added to `h(y|x)` — sign matches R `mlt::residuals`),
-  `"cox-snell"` (`-log S(y_i|x_i)`, ~Exp(1) under correct model),
-  and `"deviance"` (closed form on Cox-Snell, ~N(0,1) under correct
-  model).  All censoring types (none, left, right, interval) and base
-  distributions are supported; the score residual reuses a new public
-  `intercept_score()` helper in `likelihood.py`.  Cox-Snell evaluates
-  at the observed point regardless of censoring (lower for right-cens,
-  upper for left-cens, midpoint for interval-cens).
-  R-validated against `residuals(fit)` and
-  `-log(predict(fit, type="survivor"))` for BoxCox / Colr / Coxph fits
-  (`pymlt/model.py`, `pymlt/likelihood.py`,
-  `reference/residuals_*`, `tests/test_model.py::TestResiduals*`)
-- `Lm` class — `_TramModel` subclass fixing `order=1`, normal base, and
-  uncensored data; exposes `sigma_`, `intercept_`, `coef_`, and
-  `fitted_transformation(y)`. Re-exported via `pymlt.Lm`.
-  R-validated against `tram::Lm` and `lm()` for both the intercept-only and
-  single-covariate cases (`tram.py`, `reference/lm_*`, `tests/test_tram.py`)
-- Analytical observed information / variance–covariance machinery:
-  new private `_d2_logpdf` and per-censoring `_hess_*` / `_scores_*` in
-  `likelihood.py`; public top-level `hessian()` and `score_matrix()`;
-  eager Hessian computation in `fit()`; new model methods `vcov()`,
-  `estfun()` / `score_contributions()`, and `standard_errors()`.
-  `_TramModel.summary()` now emits a Wald coefficient table for β.
-  R-validated against `vcov(as.mlt(fit))` and `sandwich::estfun(fit)` for
-  BoxCox / Colr / Coxph fits (`likelihood.py`, `model.py`, `tram.py`,
-  `reference/vcov_*`, `tests/test_vcov.py`)
-- Wald confidence intervals (`confint(level, parm)`) and pointwise
-  delta-method confidence bands (`confband(y_grid, X, level, what)`) on
-  `ConditionalTransformationModel`. `confband` supports
-  `what ∈ {trafo, distribution, survivor, density, hazard}` — the Wald
-  interval is computed on the appropriate linear-predictor scale (``h`` for
-  the first three; ``log f(h) + log h'`` with an optional ``− log S(h)``
-  term for density / hazard) and back-transformed so probability bands
-  stay in `[0, 1]` and density / hazard bands stay positive.
-  R-validated via hand-computed delta-method bands on a baseline MLT fit
-  plus Wald CIs for BoxCox / Colr / Coxph (`model.py`,
-  `reference/confint_*`, `reference/confband_baseline_*`,
-  `tests/test_confidence.py`)
-
-### Changed
-
-- Right-censored quantile prediction now follows R `mlt::qmlt` semantics:
-  quantiles are obtained by inverting a fixed CDF grid (`K=50`) via cubic
-  interpolation, with saturation to grid boundaries when targets fall outside
-  the finite inversion range. This removes Coxph quantile mismatches caused by
-  strict support-bracket root clipping in the previous implementation.
-
-- GitHub Actions workflows are temporarily deactivated while the repository is
-  private. Workflow files were moved from `.github/workflows/` to
-  `.github/workflows-disabled/`. Move them back to re-enable Actions.
-
-## [0.3.0] — 2026-04-17
+## [0.3.0] — 2026-05-17
 
 ### Added
 
@@ -113,6 +32,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   pandas, lifelines, jupyter, ipykernel), `[docs]` (Sphinx + theme + nbsphinx)
 - `base_distribution` parameter threaded through `CTM.__init__`, `MLT.__init__`,
   `fit()`, `optimize()`, `score()`, and `log_likelihood()`
+- `Lm` class — `_TramModel` subclass fixing `order=1`, normal base, and
+  uncensored data; exposes `sigma_`, `intercept_`, `coef_`, and
+  `fitted_transformation(y)`. Re-exported via `pymlt.Lm`.
+  R-validated against `tram::Lm` and `lm()` for both the intercept-only and
+  single-covariate cases (`tram.py`, `reference/lm_*`, `tests/test_tram.py`)
+- `Polr` (proportional-odds ordinal regression) — subclass of
+  `ConditionalTransformationModel` that defers basis construction until
+  `fit()` (the response level count `K` is only known then). Uses
+  `OrdinalBasis(K)` (degenerate one-hot cutpoint basis) and interval
+  censoring; exposes `predict_proba` / `predict_class`. Sign convention:
+  pymlt parameterises `h + X·β`, so `Polr.coef_` is the negative of R
+  `tram::Polr`'s `beta`.
+- PHR augmented Lagrangian solver (`_auglag.py`: `auglag_minimize`,
+  `AugLagOptions`, `AugLagResult`) — mirrors R `mlt`'s `alabama::auglag` and
+  is now the default `OptimizerConfig.solver`. `OptimizationResult` gains
+  `n_outer_iter` and `kkt_residual` (both `None` for legacy solvers).
+  `"slsqp"` and `"trust-constr"` remain available as opt-in alternatives.
+- Analytical observed information / variance–covariance machinery:
+  new private `_d2_logpdf` and per-censoring `_hess_*` / `_scores_*` in
+  `likelihood.py`; public top-level `hessian()` and `score_matrix()`;
+  eager Hessian computation in `fit()`; new model methods `vcov()`,
+  `estfun()` / `score_contributions()`, and `standard_errors()`.
+  `_TramModel.summary()` now emits a Wald coefficient table for β.
+  R-validated against `vcov(as.mlt(fit))` and `sandwich::estfun(fit)` for
+  BoxCox / Colr / Coxph fits (`likelihood.py`, `model.py`, `tram.py`,
+  `reference/vcov_*`, `tests/test_vcov.py`)
+- Wald confidence intervals (`confint(level, parm)`) and pointwise
+  delta-method confidence bands (`confband(y_grid, X, level, what)`) on
+  `ConditionalTransformationModel`. `confband` supports
+  `what ∈ {trafo, distribution, survivor, density, hazard}` — the Wald
+  interval is computed on the appropriate linear-predictor scale (`h` for
+  the first three; `log f(h) + log h'` with an optional `− log S(h)` term
+  for density / hazard) and back-transformed so probability bands stay in
+  `[0, 1]` and density / hazard bands stay positive.
+  R-validated via hand-computed delta-method bands on a baseline MLT fit
+  plus Wald CIs for BoxCox / Colr / Coxph (`model.py`,
+  `reference/confint_*`, `reference/confband_baseline_*`,
+  `tests/test_confidence.py`)
+- `residuals(type=...)` method on `ConditionalTransformationModel` —
+  per-observation diagnostics mirroring R `mlt::residuals`. Three types:
+  `"score"` (default; ∂(-ℓ_i)/∂α at α=0 for an artificial intercept added
+  to `h(y|x)` — sign matches R `mlt::residuals`), `"cox-snell"`
+  (`-log S(y_i|x_i)`, ~Exp(1) under correct model), and `"deviance"`
+  (closed form on Cox-Snell, ~N(0,1) under correct model). All censoring
+  types (none, left, right, interval) and base distributions are supported;
+  the score residual reuses a new public `intercept_score()` helper in
+  `likelihood.py`. Cox-Snell evaluates at the observed point regardless of
+  censoring (lower for right-cens, upper for left-cens, midpoint for
+  interval-cens). R-validated against `residuals(fit)` and
+  `-log(predict(fit, type="survivor"))` for BoxCox / Colr / Coxph fits
+  (`pymlt/model.py`, `pymlt/likelihood.py`, `reference/residuals_*`,
+  `tests/test_model.py::TestResiduals*`)
+- Observation weights and offset support across the full model pipeline
+  (`fit`, `predict`, `score`, `confband`, `residuals`, `estfun`):
+  - `fit(y, X=None, weights=None, offset=None)` — weighted log-likelihood
+    `Σ w_i·ℓ_i`; offset adds a per-observation constant to `h(y|x)` before
+    all distribution calls. Weights and offset are stored as `weights_` /
+    `offset_` and snapshotted as `_weights_train_` / `_offset_train_` for
+    later use by `residuals()`.
+  - `predict(..., offset_new=None)` — offset shifts `h` at prediction time.
+  - `score(..., weights=None, offset=None)` — evaluates the weighted LL at
+    any (y, X) pair.
+  - `confband(..., offset=None)` — offset shifts `h` before the delta-method
+    band is computed; the Jacobian is unaffected (offset is constant in θ).
+  - `Coxph.survival(y, X, offset=None)` and `Coxph.hazard(y, X, offset=None)`.
+  - New public helper `_validate_weights_offset(weights, offset, n)` in
+    `likelihood.py` — raises `ValueError` for wrong shapes, negative weights,
+    or non-finite values.
+  - R reference generation extended with weighted BoxCox / Colr / Coxph fits
+    (`reference/generate_reference.R`), producing `weights_<model>_*.txt`
+    files.
+  - Full test coverage in `tests/test_weights_offset.py` (41 tests): input
+    validation, identity (`weights=ones ≡ no weights`, `offset=zeros ≡ no
+    offset`), uniform-doubling invariance, replication invariance,
+    offset-shifts-trafo, quantile-with-offset, R-parity (skipped until R
+    files are generated).
 
 ### Changed
 
@@ -120,6 +115,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (fixes validation case 06; the previous default did not realise the
   proportional hazards link)
 - Minimum Python version raised from 3.10 to 3.11; CI matrix is 3.11 / 3.12
+- Default optimizer changed from SLSQP/trust-constr to the new PHR augmented
+  Lagrangian (`OptimizerConfig.solver = "auglag"`) for closer parity with
+  R `mlt`'s `alabama::auglag`. `OptimizerConfig.max_iter` and `.tol` now
+  apply only to the SLSQP/trust-constr paths; auglag has its own outer/inner
+  budgets via `AugLagOptions`.
+- Right-censored quantile prediction now follows R `mlt::qmlt` semantics:
+  quantiles are obtained by inverting a fixed CDF grid (`K=50`) via cubic
+  interpolation, with saturation to grid boundaries when targets fall
+  outside the finite inversion range. This removes Coxph quantile
+  mismatches caused by strict support-bracket root clipping in the previous
+  implementation.
+- GitHub Actions workflows are temporarily deactivated while the repository
+  is private. Workflow files were moved from `.github/workflows/` to
+  `.github/workflows-disabled/`. Move them back to re-enable Actions.
 
 ### Fixed
 
