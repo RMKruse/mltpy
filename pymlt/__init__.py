@@ -15,6 +15,7 @@ from pymlt.model import (
     ConditionalTransformationModel,
     ConvergenceWarning,
     NotFittedError,
+    WaldTestResult,
     anova,
 )
 from pymlt.optimizer import OptimizerConfig
@@ -38,6 +39,7 @@ __all__ = [
     # Inference
     "anova",
     "AnovaResult",
+    "WaldTestResult",
     # Likelihood primitives
     "log_likelihood",
     "negative_log_likelihood",
