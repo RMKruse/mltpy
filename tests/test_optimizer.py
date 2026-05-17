@@ -344,7 +344,7 @@ class TestOptimizeReproducibility:
 class TestBaseDistributionValidation:
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
-            optimize(make_basis(), simple_data(), base_distribution="cauchy")
+            optimize(make_basis(), simple_data(), base_distribution="student-t")
 
     @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
     def test_case_sensitive_aliases_rejected(self, bad):
