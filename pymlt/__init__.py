@@ -18,7 +18,7 @@ from pymlt.model import (
     anova,
 )
 from pymlt.optimizer import OptimizerConfig
-from pymlt.tram import BoxCox, Colr, Coxph, Lm, Polr
+from pymlt.tram import BoxCox, Colr, Coxph, Lm, Polr, Survreg
 from pymlt.variables import CensoredData, CensoringType, OrderedVariable
 
 __version__ = "0.3.0"
@@ -33,6 +33,7 @@ __all__ = [
     "Colr",
     "Lm",
     "Polr",
+    "Survreg",
     # Inference
     "anova",
     "AnovaResult",

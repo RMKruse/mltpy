@@ -28,8 +28,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import norm as _norm
 
-from pymlt.basis import OrdinalBasis
-from pymlt.likelihood import _H_CLIP, _get_dist
+from pymlt.basis import LogBernsteinBasis, OrdinalBasis
+from pymlt.likelihood import _H_CLIP, BaseDistribution, _get_dist
 from pymlt.model import MLT, ConditionalTransformationModel
 from pymlt.optimizer import OptimizerConfig
 from pymlt.variables import CensoringType, OrderedVariable
@@ -652,6 +652,260 @@ class Lm(_TramModel):
         y_arr = np.asarray(y, dtype=float).ravel()
         B = self.basis.evaluate(y_arr)
         return B @ theta_b
+
+
+# ---------------------------------------------------------------------------
+# Survreg — parametric survival (log-scale models)
+# ---------------------------------------------------------------------------
+
+SurvregDistribution = Literal["weibull", "lognormal", "loglogistic"]
+
+_SURVREG_DIST_MAP: dict[str, str] = {
+    "weibull": "min_extreme_value",
+    "lognormal": "normal",
+    "loglogistic": "logistic",
+}
+
+
+class Survreg(_TramModel):
+    """Parametric survival model on the log-time scale (R ``tram::Survreg``).
+
+    Fits a monotone transformation h(log t) such that h(log T | X) follows a
+    standard distribution.  This is equivalent to fitting a TRAM on
+    ``Y = log(T)`` — hence the name *Survreg*.  Supported distributions:
+
+    * ``"weibull"``     — Weibull (minimum extreme value / reversed Gumbel link)
+    * ``"lognormal"``   — Log-normal (standard normal link)
+    * ``"loglogistic"`` — Log-logistic (standard logistic link)
+
+    With covariates X the model is proportional (Weibull / log-logistic) or
+    additive (log-normal) on the log-time scale.
+
+    Parameters
+    ----------
+    support:
+        Closed interval ``(a, b)`` with ``0 < a < b`` on the *original*
+        positive time scale (not log-scale).  Should bracket all observed
+        survival times.
+    distribution:
+        Parametric family: ``"weibull"`` (default), ``"lognormal"``, or
+        ``"loglogistic"``.
+    order:
+        Polynomial degree of the Bernstein basis on the log scale.  Defaults
+        to 6.
+    optimizer_config:
+        Optimisation settings.  If ``None``, library defaults are used.
+
+    Examples
+    --------
+    >>> from pymlt.tram import Survreg
+    >>> from pymlt.variables import CensoredData
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(0)
+    >>> t = rng.lognormal(mean=1.0, sigma=0.5, size=200)
+    >>> status = rng.binomial(1, 0.7, size=200).astype(bool)
+    >>> cd = CensoredData.right_censored(t, censored=~status)
+    >>> model = Survreg(support=(t.min() * 0.9, t.max() * 1.1)).fit(cd)
+    >>> surv = model.survival(t)
+    """
+
+    def __init__(
+        self,
+        support: tuple[float, float],
+        distribution: SurvregDistribution = "weibull",
+        order: int = 6,
+        optimizer_config: OptimizerConfig | None = None,
+    ) -> None:
+        if distribution not in _SURVREG_DIST_MAP:
+            raise ValueError(
+                f"distribution={distribution!r} is not supported. "
+                f"Valid options: {sorted(_SURVREG_DIST_MAP)}."
+            )
+        base_dist = cast(BaseDistribution, _SURVREG_DIST_MAP[distribution])
+        log_basis = LogBernsteinBasis(order=order, support=support)
+
+        # Bypass MLT.__init__ and call ConditionalTransformationModel directly,
+        # because MLT builds a BernsteinBasis internally.  We store _order/_support
+        # for _TramModel.__repr__.
+        ConditionalTransformationModel.__init__(
+            self,
+            basis=log_basis,  # type: ignore[arg-type]
+            censoring=CensoringType.RIGHT,
+            optimizer_config=optimizer_config,
+            base_distribution=base_dist,
+        )
+        self._order = order
+        self._support = support
+        self._distribution = distribution
+
+    # ------------------------------------------------------------------
+    # Survival / hazard convenience methods (mirrors Coxph)
+    # ------------------------------------------------------------------
+
+    def survival(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the survival function S(t) = 1 − F(t | x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``support``.
+        X:
+            Optional covariate matrix of shape ``(m, q)``.
+        offset:
+            Optional per-observation offset.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
+        """
+        return 1.0 - self.predict(y, X_new=X, what="distribution", offset_new=offset)
+
+    def hazard(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the hazard rate h_T(t) = f(t | x) / S(t | x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``support``.
+        X:
+            Optional covariate matrix.
+        offset:
+            Optional per-observation offset.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with non-negative values.
+        """
+        return self.predict(y, X_new=X, what="hazard", offset_new=offset)
+
+    # ------------------------------------------------------------------
+    # Quantile prediction override
+    # ------------------------------------------------------------------
+
+    def _predict_quantile(
+        self,
+        probs: NDArray[np.float64],
+        theta_b: NDArray[np.float64],
+        xbeta: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Quantile inversion using basis.evaluate (handles log-transform).
+
+        Overrides the parent to avoid the inlined Bernstein polynomial that
+        bypasses the log-transform in LogBernsteinBasis.
+        """
+        import warnings
+
+        from scipy.interpolate import CubicSpline
+
+        from pymlt.likelihood import _get_dist
+        from pymlt.model import _QMLT_GRID_POINTS
+
+        a, b = self.basis.support
+        theta_b = np.asarray(theta_b, dtype=float)
+        probs_arr = np.asarray(probs, dtype=np.float64)
+        n_probs = len(probs_arr)
+        if n_probs == 0:
+            return np.empty(0, dtype=float)
+
+        dist = _get_dist(self.base_distribution)
+        shift: NDArray[np.float64] = (
+            np.zeros(n_probs, dtype=np.float64)
+            if xbeta is None
+            else np.asarray(xbeta, dtype=np.float64)
+        )
+        if offset is not None:
+            shift = shift + np.asarray(offset, dtype=np.float64)
+
+        # Right-censored: R-compatible grid+spline inversion on positive time grid.
+        # Start at a (not 0) since log(0) = -inf for LogBernsteinBasis.
+        q_grid = np.linspace(a, b, _QMLT_GRID_POINTS, dtype=np.float64)
+        h_base_grid: NDArray[np.float64] = self.basis.evaluate(q_grid) @ theta_b
+
+        eps = float(np.sqrt(np.finfo(float).eps))
+        out = np.empty(n_probs, dtype=np.float64)
+        saturated = False
+
+        for i, p in enumerate(probs_arr):
+            cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+
+            finite = np.isfinite(cdf_grid)
+            if not np.any(finite):
+                out[i] = q_grid[0]
+                saturated = True
+                continue
+
+            cmin = float(np.min(cdf_grid[finite]))
+            cmax = float(np.max(cdf_grid[finite]))
+            remove = ~finite
+            flat_low = np.where(cdf_grid < cmin + eps)[0]
+            flat_high = np.where(cdf_grid > cmax - eps)[0]
+            if flat_low.size > 1:
+                remove[flat_low[:-1]] = True
+            if flat_high.size > 1:
+                remove[flat_high[1:]] = True
+
+            keep = ~remove
+            qk = q_grid[keep]
+            ck = cdf_grid[keep]
+            if qk.size < 2:
+                out[i] = q_grid[0]
+                saturated = True
+                continue
+
+            n_spline = max(3 * qk.size, 3)
+            q_s = np.linspace(float(qk[0]), float(qk[-1]), n_spline, dtype=np.float64)
+            c_s = cast(
+                NDArray[np.float64],
+                CubicSpline(qk, ck, bc_type="not-a-knot", extrapolate=False)(q_s),
+            )
+
+            finite_s = np.isfinite(c_s)
+            if not np.any(finite_s):
+                out[i] = q_grid[0]
+                saturated = True
+                continue
+            q_s = q_s[finite_s]
+            c_s = c_s[finite_s]
+
+            order = np.argsort(c_s)
+            c_s = c_s[order]
+            q_s = q_s[order]
+            uniq = np.concatenate(([True], np.diff(c_s) > 0.0))
+            c_s = c_s[uniq]
+            q_s = q_s[uniq]
+            if c_s.size == 0:
+                out[i] = q_grid[0]
+                saturated = True
+                continue
+
+            if p < c_s[0]:
+                out[i] = q_grid[0]
+                saturated = True
+            elif p > c_s[-1]:
+                out[i] = q_grid[-1]
+                saturated = True
+            else:
+                out[i] = float(np.interp(p, c_s, q_s))
+
+        if saturated:
+            warnings.warn(
+                "predict(what='quantile'): probability target lies outside "
+                "the finite inversion grid at one or more points; "
+                "returning boundary-saturated quantiles.",
+                stacklevel=3,
+            )
+        return out
 
 
 # ---------------------------------------------------------------------------
