@@ -43,7 +43,9 @@ def simple_data(n: int = 60, seed: int = 0) -> np.ndarray:
 class TestOptimizerConfig:
     def test_defaults(self):
         cfg = OptimizerConfig()
-        assert cfg.solver == "slsqp"
+        # auglag is the default (PHR augmented Lagrangian) — matches R `mlt`
+        # which uses `alabama::auglag`.  SLSQP / trust-constr remain opt-in.
+        assert cfg.solver == "auglag"
         assert cfg.max_iter == 1000
         assert cfg.tol == 1e-8
         assert cfg.max_restarts == 3
@@ -157,47 +159,60 @@ class TestPerturbAndProject:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("solver", ["auglag", "slsqp", "trust-constr"])
 class TestOptimizeConvergence:
-    def test_converges_on_simple_data(self):
+    """Convergence and feasibility under every supported solver.
+
+    Parametrising over all three solvers turns the full assertion set into a
+    regression net for the new auglag default while keeping SLSQP / trust-constr
+    exercised for as long as they remain opt-in alternatives.
+    """
+
+    def test_converges_on_simple_data(self, solver):
+        cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=3)
         y = simple_data(n=80)
-        result = optimize(basis, y)
+        result = optimize(basis, y, config=cfg)
         assert result.converged, f"Did not converge: {result.solver_message}"
 
-    def test_theta_is_non_decreasing(self):
+    def test_theta_is_non_decreasing(self, solver):
+        cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=4)
         y = simple_data(n=80)
-        result = optimize(basis, y)
+        result = optimize(basis, y, config=cfg)
         n_params = basis.order + 1
         theta_b = result.theta[:n_params]
         assert np.all(np.diff(theta_b) >= -1e-6), f"theta not non-decreasing: {theta_b}"
 
-    def test_nll_decreased_from_init(self):
+    def test_nll_decreased_from_init(self, solver):
         """Optimised NLL ≤ initial NLL."""
         from pymlt.likelihood import negative_log_likelihood
 
+        cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=3)
         y = simple_data(n=60)
         theta_init = _initial_theta(basis.order + 1, None)
         nll_init = negative_log_likelihood(theta_init, basis, y)
-        result = optimize(basis, y)
+        result = optimize(basis, y, config=cfg)
         assert -result.log_likelihood <= nll_init + 1e-6
 
-    def test_monotonicity_constraint_satisfied(self):
+    def test_monotonicity_constraint_satisfied(self, solver):
         """D @ theta_b >= 0 for the optimised parameters."""
+        cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=5)
         y = simple_data(n=100)
-        result = optimize(basis, y)
+        result = optimize(basis, y, config=cfg)
         D = MonotonicityConstraint(basis.order + 1).as_matrix()
         violations = D @ result.theta[: basis.order + 1]
         assert np.all(violations >= -1e-6), (
             f"Constraint violated: {violations.min():.2e}"
         )
 
-    def test_log_likelihood_is_finite(self):
+    def test_log_likelihood_is_finite(self, solver):
+        cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=3)
         y = simple_data(n=50)
-        result = optimize(basis, y)
+        result = optimize(basis, y, config=cfg)
         assert np.isfinite(result.log_likelihood)
 
 
@@ -281,11 +296,25 @@ class TestOptimizeRestarts:
 
 
 class TestOptimizeReproducibility:
-    """`OptimizerConfig.random_state` controls the restart-perturbation RNG."""
+    """``OptimizerConfig.random_state`` controls the restart-perturbation RNG.
+
+    Pinned to ``solver="slsqp"``: the restart-RNG plumbing is shared with the
+    auglag path, but ``max_iter=1`` is the SLSQP-specific knob that forces
+    scipy to bail early and trigger the restart loop.  Auglag has its own outer
+    budget via :class:`~pymlt._auglag.AugLagOptions` and does not honour
+    ``max_iter``; on this easy fixture it converges on the first attempt so the
+    RNG is never consulted.  Testing the same code path through SLSQP is
+    sufficient — both solvers wrap the same ``_perturb_and_project`` /
+    ``np.random.default_rng`` machinery in ``optimize()``.
+    """
 
     def _run(self, random_state):
         cfg = OptimizerConfig(
-            max_iter=1, max_restarts=3, random_state=random_state, verbose=False
+            solver="slsqp",
+            max_iter=1,
+            max_restarts=3,
+            random_state=random_state,
+            verbose=False,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -447,6 +476,12 @@ class TestMakeObjectivePenalty:
 
 
 class TestOptimizeExceptionFallback:
+    """SLSQP-specific failure handling: the SLSQP / trust-constr path calls
+    ``scipy.optimize.minimize`` directly, so monkeypatching that import
+    is the lever for forcing a ``LinAlgError``.  The auglag path goes through
+    :func:`~pymlt._auglag.auglag_minimize`; equivalent failure-mode coverage
+    for that path lives in ``tests/test_auglag.py``."""
+
     def test_linalg_error_retries_and_falls_back(self, monkeypatch):
         """Every scipy call raises LinAlgError → fallback returns initial theta."""
         from numpy.linalg import LinAlgError
@@ -456,7 +491,7 @@ class TestOptimizeExceptionFallback:
 
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
-        cfg = OptimizerConfig(max_restarts=2)
+        cfg = OptimizerConfig(solver="slsqp", max_restarts=2)
         basis = make_basis(order=3)
         result = optimize(basis, simple_data(), config=cfg)
 
@@ -474,7 +509,7 @@ class TestOptimizeExceptionFallback:
 
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
-        cfg = OptimizerConfig(max_restarts=2)
+        cfg = OptimizerConfig(solver="slsqp", max_restarts=2)
         with pytest.raises(RuntimeError, match="scipy blew up"):
             optimize(make_basis(order=3), simple_data(), config=cfg)
 
@@ -487,7 +522,7 @@ class TestOptimizeExceptionFallback:
 
         monkeypatch.setattr("pymlt.optimizer.minimize", boom)
 
-        cfg = OptimizerConfig(max_restarts=0, verbose=True)
+        cfg = OptimizerConfig(solver="slsqp", max_restarts=0, verbose=True)
         with pytest.warns(RuntimeWarning, match="hit"):
             optimize(make_basis(), simple_data(), config=cfg)
 
@@ -538,7 +573,12 @@ class TestMakeObjectiveNarrowCatch:
 
 class TestOptimizeVerboseNonConvergence:
     def test_verbose_warns_on_non_convergence(self):
-        """Tight iter budget → scipy returns success=False → verbose warning."""
-        cfg = OptimizerConfig(max_iter=1, max_restarts=3, verbose=True)
+        """Tight iter budget → scipy returns success=False → verbose warning.
+
+        Pinned to SLSQP: ``max_iter`` is the SLSQP/trust-constr iteration cap.
+        Auglag uses :attr:`~pymlt._auglag.AugLagOptions.max_outer_iter` (its
+        own verbose-warning path is unit-tested in ``test_auglag.py``).
+        """
+        cfg = OptimizerConfig(solver="slsqp", max_iter=1, max_restarts=3, verbose=True)
         with pytest.warns(RuntimeWarning, match="did not converge"):
             optimize(make_basis(order=3), simple_data(n=80), config=cfg)

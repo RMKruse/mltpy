@@ -46,9 +46,11 @@ class OptimizerConfig:
     Parameters
     ----------
     solver:
-        ``"slsqp"`` (default), ``"trust-constr"``, or ``"auglag"``.
-        SLSQP is faster; trust-constr handles ill-conditioned problems better;
-        ``"auglag"`` uses the PHR augmented Lagrangian solver (opt-in).
+        ``"auglag"`` (default), ``"slsqp"``, or ``"trust-constr"``.  Auglag is
+        the PHR augmented Lagrangian (matches R ``mlt`` / ``alabama::auglag``
+        and gives the best parity with the reference implementation).  SLSQP
+        and trust-constr remain opt-in alternatives — SLSQP is faster on
+        easy problems, trust-constr handles ill-conditioned ones better.
     max_iter:
         Maximum number of iterations passed to scipy.
     tol:
@@ -83,7 +85,7 @@ class OptimizerConfig:
         If not ``None``, fixes ``θ[n_params−1] = upper`` analogously.
     """
 
-    solver: Literal["slsqp", "trust-constr", "auglag"] = "slsqp"
+    solver: Literal["auglag", "slsqp", "trust-constr"] = "auglag"
     max_iter: int = 1000
     tol: float = 1e-8
     max_restarts: int = 3
@@ -113,6 +115,17 @@ class OptimizationResult:
         Number of restarts that were needed (0 if first attempt succeeded).
     solver_message:
         scipy's ``result.message`` from the best attempt, unchanged.
+    n_outer_iter:
+        Number of PHR outer iterations the auglag solver used.  ``None``
+        for SLSQP / trust-constr fits (those solvers have no outer loop).
+        Appears in ``repr()`` so users can see at a glance how many
+        Lagrange-multiplier updates the fit required.
+    kkt_residual:
+        Final KKT residual reported by the auglag solver — the
+        ``max(‖h(θ)‖∞, ‖min(g(θ), μ/ρ)‖∞, ‖∇L_A(θ)‖∞)`` value at the
+        returned ``theta``.  ``None`` for SLSQP / trust-constr fits.
+        Useful when ``converged=False`` to judge how close the run got
+        before exhausting its outer-iteration budget.
     """
 
     theta: NDArray[np.float64]

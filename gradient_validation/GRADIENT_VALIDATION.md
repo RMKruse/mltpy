@@ -173,3 +173,5 @@ All four analytical gradient functions (`_grad_none`, `_grad_right`, `_grad_left
 The one subtlety surfaced by the test suite is the deliberate inconsistency between `_log_diff_ndtr`'s Taylor branch (used in the LL) and the wide-formula gradient (always used by `_grad_interval`). These differ by O(width²), which is well within the relaxed tolerance for the narrow-interval test and represents a smoothness-preserving design choice rather than a bug.
 
 **Conclusion**: The analytical gradients in `pymlt/likelihood.py` are mathematically correct. Any discrepancy observed in R-comparison validation (e.g. `case_06` Coxph) is not caused by gradient errors — it must be due to optimizer behavior, initialization, or numerical conditioning differences.
+
+> **Note on `case_06`:** the original `case_06` Coxph divergence was traced to `Coxph` hardcoding `base_distribution="normal"`; the fix changed it to `"min_extreme_value"` (the reversed-Gumbel link Cox PH actually assumes).  The companion diagnostic script `gradient_validation/case_06_debug.py` was retired in the auglag rollout — the fix lives in `pymlt/tram.py` and the investigation history is preserved in git.

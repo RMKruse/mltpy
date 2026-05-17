@@ -328,16 +328,17 @@ def _interpret(
         f"the smallest is at "
         f"n={slowest_key.n}, order={slowest_key.order}, "
         f"censoring={slowest_key.censoring} ({_fmt_speedup(ratios[slowest_key])}). ",
-        "Both backends are dominated by the optimiser's inner loop; "
-        "absolute per-fit times of a few milliseconds at small `n` mean "
+        "Both backends now use the same PHR augmented Lagrangian solver — "
+        "pymlt's pure-Python ``_auglag.py`` and R `mlt`'s `alabama::auglag` "
+        "share the outer multiplier-update loop and the inner BFGS sub-problem, "
+        "so iteration counts at the same precision land in the same ballpark "
+        "and the divergent-basin caveat that applied under SLSQP no longer "
+        "holds.  The remaining per-fit gap reflects per-iteration cost: every "
+        "outer step in pymlt re-enters ``scipy.optimize.minimize``, whereas "
+        "`alabama` keeps the inner solver state in Fortran across updates.  "
+        "Absolute per-fit times of a few milliseconds at small `n` mean "
         "timing noise can shift individual cells by 10–30%, so treat "
-        "small-`n` ratios as indicative rather than precise. "
-        "The two backends use different constrained solvers — pymlt uses "
-        "scipy SLSQP, R `mlt` uses `alabama::auglag` (augmented Lagrangian "
-        "with inner BFGS) — so iteration counts at the same precision can "
-        "differ by 2× without either being wrong; cells where pymlt is "
-        "slower are typically driven by extra SLSQP steps near the "
-        "constrained optimum, not by per-iteration cost.",
+        "small-`n` ratios as indicative rather than precise.",
     ]
     return "".join(parts)
 

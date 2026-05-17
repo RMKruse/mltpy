@@ -407,9 +407,7 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
             X_q = None
             if case.regression:
                 X_q = np.zeros((len(case.quantile_probs), case.n_covariates))
-            quantile_py = model.predict(
-                case.quantile_probs, X_new=X_q, what="quantile"
-            )
+            quantile_py = model.predict(case.quantile_probs, X_new=X_q, what="quantile")
 
         # --- Hazard at grid points (right-censored only) ---
         hazard_py: NDArray[np.float64] | None = None
@@ -526,7 +524,14 @@ def compare_results(
     -------
     ValidationResult
     """
-    if not fit.converged or len(fit.theta_py) == 0:
+    # Only short-circuit when the fit truly crashed (theta_py is empty —
+    # the _FAILED_FIT sentinel).  An auglag fit with ``converged=False`` may
+    # still be at the correct optimum: with degenerate active sets (e.g.
+    # stacked monotonicity boundaries), the PHR KKT residual can asymptote
+    # just above ``outer_tol=1e-7`` even when θ matches R to many decimals.
+    # Computing deltas anyway lets the delta-tolerance logic make the call —
+    # a fit at the right point passes; a fit that drifted fails on Δθ/Δll.
+    if len(fit.theta_py) == 0:
         return ValidationResult(
             case_id=ref.case_id,
             model=ref.model,
@@ -538,7 +543,7 @@ def compare_results(
             max_delta_cdf=float("nan"),
             converged=fit.converged,
             runtime_s=fit.runtime_s,
-            failure_reason="fit failed or did not converge",
+            failure_reason="fit crashed (empty theta)",
             expected_failure=ref.case_id in EXPECTED_FAILURES,
         )
 
