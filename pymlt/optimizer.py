@@ -17,7 +17,7 @@ from typing import Any, Callable, Literal, cast
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
-from scipy.optimize import minimize
+from scipy.optimize import LinearConstraint, minimize
 
 from pymlt._auglag import AugLagOptions, AugLagResult, auglag_minimize
 from pymlt.basis import BernsteinBasis, InteractionBasis
@@ -608,16 +608,18 @@ def _optimize_interaction(
 ) -> OptimizationResult:
     """Optimisation path for InteractionBasis (stratified / fully-interacting CTM).
 
-    Uses the augmented Lagrangian solver with the Kronecker monotonicity
-    constraint ``(D ⊗ I_q) @ vec(Θ) ≥ 0``.  X is required (it cannot be
-    None for an interaction model).
+    Dispatches on ``config.solver`` and uses the Kronecker monotonicity
+    constraint ``(D ⊗ I_q) @ vec(Θ) ≥ 0`` (built once via
+    :func:`~pymlt.constraints.build_constraint_matrices_interaction`) in the
+    form each solver expects.  X is required — it cannot be ``None`` for an
+    interaction model.
     """
     if X is None:
         raise ValueError(
             "InteractionBasis.fit() requires X (covariate matrix). "
             "Pass the stratum labels as X."
         )
-    x_arr = basis._coerce_x(X)  # 1-D category labels
+    x_arr = basis._coerce_x(X)
 
     cm = build_constraint_matrices_interaction(basis)
 
@@ -625,7 +627,6 @@ def _optimize_interaction(
     q = basis.n_x_params
     total_params = p * q
 
-    # Feasible initialisation: each column of Theta = linspace(0, 1, p)
     Theta_init = np.outer(np.linspace(0.0, 1.0, p), np.ones(q))
     theta_init = Theta_init.ravel().copy()
 
@@ -651,6 +652,57 @@ def _optimize_interaction(
         except InfeasibleParameterError:
             return float("inf"), np.zeros(total_params)
 
+    def perturb(theta_seed: NDArray[np.float64]) -> NDArray[np.float64]:
+        Theta_try = theta_seed.reshape(p, q) + rng.normal(0.0, 0.1, size=(p, q))
+        for j in range(q):
+            Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
+        return cast(NDArray[np.float64], Theta_try.ravel())
+
+    if config.solver == "auglag":
+        return _interaction_auglag(
+            obj=obj,
+            theta_init=theta_init,
+            cm=cm,
+            config=config,
+            basis=basis,
+            y=y,
+            x_arr=x_arr,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            perturb=perturb,
+        )
+
+    return _interaction_scipy(
+        obj=obj,
+        theta_init=theta_init,
+        cm=cm,
+        config=config,
+        basis=basis,
+        y=y,
+        x_arr=x_arr,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        perturb=perturb,
+    )
+
+
+def _interaction_auglag(
+    *,
+    obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    theta_init: NDArray[np.float64],
+    cm: Any,
+    config: OptimizerConfig,
+    basis: InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    x_arr: NDArray[np.float64],
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+) -> OptimizationResult:
+    """PHR augmented-Lagrangian path for the interaction basis."""
     auglag_opts = (
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
@@ -660,16 +712,9 @@ def _optimize_interaction(
     n_restarts_used = 0
 
     for attempt in range(config.max_restarts + 1):
-        if attempt == 0:
-            theta_try = theta_init.copy()
-        else:
+        theta_try = theta_init.copy() if attempt == 0 else perturb(theta_init)
+        if attempt > 0:
             n_restarts_used = attempt
-            # Perturb each column independently and project to feasibility
-            Theta_try = Theta_init + rng.normal(0.0, 0.1, size=(p, q))
-            # Project each column: cumulative max to enforce monotonicity
-            for j in range(q):
-                Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
-            theta_try = Theta_try.ravel()
 
         try:
             result = auglag_minimize(
@@ -733,6 +778,110 @@ def _optimize_interaction(
         solver_message=best_result.message,
         n_outer_iter=best_result.n_outer_iter,
         kkt_residual=best_result.kkt_residual,
+    )
+
+
+def _interaction_scipy(
+    *,
+    obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    theta_init: NDArray[np.float64],
+    cm: Any,
+    config: OptimizerConfig,
+    basis: InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    x_arr: NDArray[np.float64],
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+) -> OptimizationResult:
+    """SLSQP / trust-constr path for the interaction basis.
+
+    Both methods consume the same ``A_ineq`` block-diagonal matrix that
+    :func:`~pymlt.constraints.build_constraint_matrices_interaction` builds —
+    SLSQP via a ``type='ineq'`` dict and trust-constr via a
+    :class:`scipy.optimize.LinearConstraint` — without code changes anywhere
+    else.
+    """
+    A_ineq = cm.A_ineq
+
+    if config.solver == "slsqp":
+        constraints: Any = [
+            {
+                "type": "ineq",
+                "fun": lambda theta, _A=A_ineq: _A @ theta,
+                "jac": lambda theta, _A=A_ineq: _A,
+            }
+        ]
+    else:  # trust-constr
+        constraints = [LinearConstraint(A_ineq, lb=0.0, ub=np.inf)]
+
+    options = _scipy_options(config)
+    best_scipy_result = None
+    best_nll = float("inf")
+    n_restarts_used = 0
+
+    for attempt in range(config.max_restarts + 1):
+        theta_try = theta_init.copy() if attempt == 0 else perturb(theta_init)
+        if attempt > 0:
+            n_restarts_used = attempt
+        try:
+            scipy_result = minimize(
+                obj,
+                theta_try,
+                method=config.solver,
+                jac=True,
+                constraints=constraints,
+                options=options,
+            )
+        except LinAlgError as exc:
+            if config.verbose:
+                warnings.warn(
+                    f"optimizer.py (interaction): attempt {attempt + 1} "
+                    f"hit {exc!r}; retrying",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            continue
+
+        if scipy_result.fun < best_nll:
+            best_nll = float(scipy_result.fun)
+            best_scipy_result = scipy_result
+
+        if scipy_result.success:
+            break
+
+    if best_scipy_result is None:
+        _nll = cast(
+            float,
+            _negative_log_likelihood_from_dist(
+                theta_init,
+                basis,
+                y,
+                x_arr,
+                CensoringType.NONE,
+                gradient=False,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+            ),
+        )
+        return OptimizationResult(
+            theta=theta_init,
+            log_likelihood=float(-_nll),
+            converged=False,
+            n_iter=0,
+            n_restarts=n_restarts_used,
+            solver_message=("All interaction-model scipy attempts raised LinAlgError."),
+        )
+
+    return OptimizationResult(
+        theta=best_scipy_result.x,
+        log_likelihood=float(-best_scipy_result.fun),
+        converged=bool(best_scipy_result.success),
+        n_iter=int(getattr(best_scipy_result, "nit", 0)),
+        n_restarts=n_restarts_used,
+        solver_message=str(best_scipy_result.message),
     )
 
 

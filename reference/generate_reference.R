@@ -871,3 +871,100 @@ writeLines(format(flatten_row_major(X_polr), digits = 15),
 .write_polr_link("logistic", "logistic")
 .write_polr_link("probit",   "probit")
 .write_polr_link("cloglog",  "cloglog")
+
+# ---------------------------------------------------------------------------
+# Bernstein-y × Bernstein-x interacting CTM — issue #65
+#
+# Fits mlt::ctm(response = Bernstein_basis(y),
+#               interacting = Bernstein_basis(x),
+#               todistr = <distribution>)
+# for two base distributions (Normal, Logistic) on a small but well-mixed
+# synthetic dataset.  Writes:
+#
+#   reference/interaction_bs_bs_y_train.txt   — training y, length n
+#   reference/interaction_bs_bs_x_train.txt   — training x, length n
+#   reference/interaction_bs_bs_y_support.txt — "a b" on one line
+#   reference/interaction_bs_bs_y_grid.txt    — held-out y grid, length m_y
+#   reference/interaction_bs_bs_x_grid.txt    — held-out x grid, length m_x
+#
+# Per distribution (label ∈ {"normal", "logistic"}):
+#   reference/interaction_bs_bs_<label>_theta.txt   — coef(fit) in mlt's order
+#                                                     (column-major over Θ[i,j],
+#                                                     j varies slowest, i within;
+#                                                     length p*q)
+#   reference/interaction_bs_bs_<label>_loglik.txt  — scalar logLik
+#   reference/interaction_bs_bs_<label>_cdf.txt     — fitted CDF on
+#                                                     expand.grid(y_grid, x_grid),
+#                                                     length m_y*m_x
+#   reference/interaction_bs_bs_<label>_pdf.txt     — fitted PDF on same grid
+#
+# Coefficient-order note: mlt names coefficients "Bs<i>(y):Bs<j>(x)" with the
+# y-index ``i`` varying fastest as ``j`` cycles 1..q.  In the Python test we
+# reshape ``theta_R`` as ``Θ[i, j] = theta_R.reshape(q, p).T`` and compare to
+# ``model.Theta_`` directly.
+# ---------------------------------------------------------------------------
+
+set.seed(20260517)
+n_int <- 300
+p_int <- 3L  # number of Bernstein-y functions
+q_int <- 3L  # number of Bernstein-x functions
+x_int <- runif(n_int, 0, 1)
+# Mild conditional shift, low homoscedastic noise.  Keeps the MLE strictly in
+# the interior of the monotone cone — no stacked active constraints — so
+# alabama::auglag and pymlt's PHR solver converge to the same θ to within
+# their respective KKT tolerances.
+y_int <- 0.5 + 1.0 * x_int + rnorm(n_int, sd = 0.6)
+a_int <- min(y_int) - 0.2
+b_int <- max(y_int) + 0.2
+
+m_y_int <- numeric_var("y", support = c(a_int, b_int))
+m_x_int <- numeric_var("x", support = c(0, 1))
+b_y_int <- Bernstein_basis(m_y_int, order = p_int - 1L, ui = "increasing")
+b_x_int <- Bernstein_basis(m_x_int, order = q_int - 1L)
+
+y_grid_int <- seq(a_int + 0.05 * (b_int - a_int),
+                  b_int - 0.05 * (b_int - a_int),
+                  length.out = 7L)
+x_grid_int <- c(0.10, 0.30, 0.50, 0.70, 0.90)
+grid_int   <- expand.grid(y = y_grid_int, x = x_grid_int)  # y fastest
+
+writeLines(format(y_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_y_train.txt"))
+writeLines(format(x_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_x_train.txt"))
+writeLines(paste(format(a_int, digits = 15), format(b_int, digits = 15)),
+           con = file.path(out_dir, "interaction_bs_bs_y_support.txt"))
+writeLines(format(y_grid_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_y_grid.txt"))
+writeLines(format(x_grid_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_x_grid.txt"))
+
+.write_interaction <- function(todistr, label) {
+  ctm_int <- ctm(response = b_y_int,
+                 interacting = b_x_int,
+                 todistr = todistr)
+  fit_int <- mlt(ctm_int, data = data.frame(y = y_int, x = x_int))
+  theta_int  <- coef(fit_int)
+  ll_int     <- as.numeric(logLik(fit_int))
+  cdf_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "distribution"))
+  pdf_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "density"))
+  writeLines(format(theta_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_theta.txt", label)))
+  writeLines(format(ll_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_loglik.txt", label)))
+  writeLines(format(cdf_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_cdf.txt", label)))
+  writeLines(format(pdf_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_pdf.txt", label)))
+  cat(sprintf("interaction_bs_bs %-8s ref: n=%d, p=%d, q=%d, ll=%.6f\n",
+              label, n_int, p_int, q_int, ll_int))
+}
+
+.write_interaction("Normal",   "normal")
+.write_interaction("Logistic", "logistic")
