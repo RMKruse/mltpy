@@ -186,7 +186,184 @@ class BoundaryConstraint:
 
 
 # ---------------------------------------------------------------------------
-# Public builder
+# Constraint matrix dataclass for auglag solver
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ConstraintMatrices:
+    """Constraint matrices in the canonical form used by :func:`auglag_minimize`.
+
+    Represents the linear constraints as:
+
+        A_ineq @ θ ≥ b_ineq   (inequality)
+        C_eq   @ θ  = d_eq    (equality)
+
+    Parameters
+    ----------
+    A_ineq:
+        Inequality constraint matrix, shape (m_ineq, total_params).
+    b_ineq:
+        Inequality right-hand side, shape (m_ineq,).
+    C_eq:
+        Equality constraint matrix, shape (m_eq, total_params).
+        Zero-row matrix when there are no equality constraints.
+    d_eq:
+        Equality right-hand side, shape (m_eq,).
+        Zero-length array when there are no equality constraints.
+    """
+
+    A_ineq: NDArray[np.float64]
+    b_ineq: NDArray[np.float64]
+    C_eq: NDArray[np.float64]
+    d_eq: NDArray[np.float64]
+
+
+def build_constraint_matrices(
+    n_params: int,
+    lower: float | None = None,
+    upper: float | None = None,
+    *,
+    total_params: int | None = None,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+) -> ConstraintMatrices:
+    """Build constraint matrices for the augmented Lagrangian solver.
+
+    Returns a :class:`ConstraintMatrices` dataclass whose fields are passed
+    directly to :func:`~pymlt._auglag.auglag_minimize`.
+
+    Monotonicity (``A_ineq @ θ ≥ 0``) is always included.  When ``lower`` or
+    ``upper`` are provided, equality rows pinning ``θ[0] = lower`` and/or
+    ``θ[n_params-1] = upper`` are added to ``C_eq``/``d_eq`` — mirroring
+    :class:`BoundaryConstraint`.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients (= ``BernsteinBasis.order + 1``).
+    lower:
+        If not ``None``, pins ``θ[0] = lower`` (equality).
+    upper:
+        If not ``None``, pins ``θ[n_params-1] = upper`` (equality).
+    total_params:
+        Total parameter-vector length including any regression coefficients.
+        When ``total_params > n_params`` both the monotonicity matrix and the
+        boundary rows are padded with zero columns for the ``beta`` block.
+        Defaults to ``n_params``.
+    nonneg_lower:
+        If ``True``, append support-feasibility inequality rows so the
+        transformation stays in the exponential support ``[0, ∞)``.  Mirrors
+        the ``nonneg_lower`` branch of :func:`build_constraints`:
+
+        * No covariates (``X is None``): a single row ``[1, 0, …, 0]``
+          enforcing ``θ_b[0] ≥ 0``.
+        * With covariates: one row ``[1, 0, …, 0 | X_i]`` per observation,
+          enforcing ``θ_b[0] + X_i · β ≥ 0``.
+
+    X:
+        Covariate matrix, shape ``(n, q)``.  Only consulted when
+        ``nonneg_lower=True``; ``q`` must equal ``total_params - n_params``.
+
+    Returns
+    -------
+    ConstraintMatrices
+        ``A_ineq`` is the padded forward-difference matrix D (shape
+        ``(n_params-1, total_params)``) optionally followed by the support
+        rows; ``b_ineq`` is all-zeros.  ``C_eq`` has 0, 1, or 2 rows
+        depending on which of ``lower``/``upper`` are provided; ``d_eq``
+        carries the corresponding right-hand-side values.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` has invalid shape, if ``X`` columns do not match
+        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted.
+    """
+    total = total_params if total_params is not None else n_params
+    mono = MonotonicityConstraint(n_params)
+    D = mono.as_matrix()  # shape (n_params-1, n_params)
+
+    if total > n_params:
+        D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
+
+    # Support-feasibility rows for the exponential base distribution.  Same
+    # layout as in build_constraints: one row [1, 0, ..., 0] when no
+    # covariates, or one row [1, 0, ..., 0 | X_i] per training observation.
+    support_rows: NDArray[np.float64] | None = None
+    if nonneg_lower:
+        if X is None:
+            if total > n_params:
+                raise ValueError(
+                    "X must be provided when nonneg_lower=True and "
+                    "total_params > n_params so support-feasibility "
+                    "constraints can include the regression coefficients."
+                )
+            support_rows = np.zeros((1, total), dtype=np.float64)
+            support_rows[0, 0] = 1.0
+        else:
+            X_arr = np.asarray(X, dtype=np.float64)
+            if X_arr.ndim != 2:
+                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
+            if total_params is None:
+                raise ValueError(
+                    "total_params must be provided when nonneg_lower=True and "
+                    "X is passed. Expected full parameter length "
+                    "n_params + X.shape[1]."
+                )
+            if X_arr.shape[1] != total - n_params:
+                raise ValueError(
+                    f"X has {X_arr.shape[1]} columns but total_params - "
+                    f"n_params = {total - n_params}"
+                )
+            if X_arr.shape[1] == 0:
+                support_rows = np.zeros((1, total), dtype=np.float64)
+                support_rows[0, 0] = 1.0
+            else:
+                n_obs = X_arr.shape[0]
+                support_rows = np.zeros((n_obs, total), dtype=np.float64)
+                support_rows[:, 0] = 1.0
+                support_rows[:, n_params:] = X_arr
+
+    if support_rows is not None:
+        A_ineq = np.vstack([D, support_rows])
+    else:
+        A_ineq = D
+
+    m_ineq = A_ineq.shape[0]
+
+    # Boundary equality rows.  Mirrors BoundaryConstraint: a single row per
+    # active side picking out θ[0] (lower) or θ[n_params-1] (upper).
+    if lower is None and upper is None:
+        C_eq = np.zeros((0, total), dtype=np.float64)
+        d_eq = np.zeros(0, dtype=np.float64)
+    else:
+        rows: list[NDArray[np.float64]] = []
+        rhs: list[float] = []
+        if lower is not None:
+            e0 = np.zeros(total, dtype=np.float64)
+            e0[0] = 1.0
+            rows.append(e0)
+            rhs.append(float(lower))
+        if upper is not None:
+            e_upper = np.zeros(total, dtype=np.float64)
+            e_upper[n_params - 1] = 1.0
+            rows.append(e_upper)
+            rhs.append(float(upper))
+        C_eq = np.vstack(rows)
+        d_eq = np.array(rhs, dtype=np.float64)
+
+    return ConstraintMatrices(
+        A_ineq=A_ineq,
+        b_ineq=np.zeros(m_ineq, dtype=np.float64),
+        C_eq=C_eq,
+        d_eq=d_eq,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public builder (SLSQP / trust-constr)
 # ---------------------------------------------------------------------------
 
 

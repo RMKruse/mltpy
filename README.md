@@ -159,9 +159,15 @@ samples = model.simulate(n=1000, random_state=42)
 
 ### Custom optimizer settings
 
+The default solver is `"auglag"` — a Powell–Hestenes–Rockafellar augmented
+Lagrangian that mirrors R `mlt`'s `alabama::auglag` and gives the closest
+parity with the reference R implementation. `"slsqp"` and `"trust-constr"`
+remain as opt-in alternatives; SLSQP is faster on small unconstrained-like
+problems, trust-constr handles ill-conditioned ones better.
+
 ```python
 cfg = pymlt.OptimizerConfig(
-    solver="trust-constr",
+    solver="slsqp",          # opt-in alternative to the auglag default
     max_iter=2000,
     max_restarts=5,
     verbose=True,
@@ -238,8 +244,9 @@ observations is:
 ```
 
 with analogous terms for censored observations (log Φ, log(1 − Φ), or
-log(Φ(hᵢ_upper) − Φ(hᵢ_lower))). MLE is solved via scipy's SLSQP or
-trust-constr solvers with analytical gradients.
+log(Φ(hᵢ_upper) − Φ(hᵢ_lower))). MLE is solved with a Powell–Hestenes–
+Rockafellar augmented Lagrangian (mirrors R `mlt`'s `alabama::auglag`) using
+analytical gradients; scipy SLSQP and trust-constr are available opt-in.
 
 </details>
 

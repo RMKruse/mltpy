@@ -11,6 +11,7 @@ from scipy.optimize import LinearConstraint, minimize
 from pymlt.constraints import (
     BoundaryConstraint,
     MonotonicityConstraint,
+    build_constraint_matrices,
     build_constraints,
 )
 
@@ -495,6 +496,237 @@ class TestNonnegLower:
                 nonneg_lower=True,
                 X=np.zeros((4, 3)),  # 3 cols vs expected 5-3=2
             )
+
+
+# ---------------------------------------------------------------------------
+# build_constraint_matrices — boundary equality (auglag path)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConstraintMatricesBoundary:
+    """Parallel to :class:`TestBoundaryConstraint` for the auglag entry point.
+
+    Each case checks that the equality rows in ``C_eq``/``d_eq`` pin the
+    correct index of ``theta`` to the requested value — mirroring the
+    behaviour of :class:`BoundaryConstraint` but expressed as the dense
+    matrices the augmented Lagrangian solver consumes directly.
+    """
+
+    def test_no_boundary_returns_zero_row_c_eq(self):
+        cm = build_constraint_matrices(4)
+        assert cm.C_eq.shape == (0, 4)
+        assert cm.d_eq.shape == (0,)
+
+    def test_lower_only_one_row(self):
+        cm = build_constraint_matrices(4, lower=0.0)
+        assert cm.C_eq.shape == (1, 4)
+        # Row picks out theta[0]; equality residual C @ theta - d at the
+        # boundary value must be zero.
+        theta = np.array([0.0, 1.0, 2.0, 3.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.C_eq[0], [1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(cm.d_eq, [0.0])
+
+    def test_upper_only_one_row(self):
+        cm = build_constraint_matrices(4, upper=5.0)
+        assert cm.C_eq.shape == (1, 4)
+        # Row picks out theta[n_params-1].
+        theta = np.array([1.0, 2.0, 3.0, 5.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.C_eq[0], [0.0, 0.0, 0.0, 1.0])
+        np.testing.assert_array_equal(cm.d_eq, [5.0])
+
+    def test_both_bounds_two_rows(self):
+        cm = build_constraint_matrices(4, lower=1.0, upper=4.0)
+        assert cm.C_eq.shape == (2, 4)
+        # First row pins theta[0]=1.0; second pins theta[3]=4.0.
+        theta = np.array([1.0, 2.0, 3.0, 4.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+        np.testing.assert_array_equal(cm.d_eq, [1.0, 4.0])
+
+    def test_lower_residual_non_zero(self):
+        cm = build_constraint_matrices(4, lower=1.0)
+        theta = np.array([2.0, 2.0, 3.0, 4.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, [1.0])  # 2 - 1
+
+    def test_upper_residual_non_zero(self):
+        cm = build_constraint_matrices(4, upper=3.0)
+        theta = np.array([1.0, 2.0, 3.0, 5.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, [2.0])  # 5 - 3
+
+    def test_total_params_pads_c_eq(self):
+        # With beta entries, equality rows must be padded with zero columns
+        # so they apply to the Bernstein block only.  upper still points at
+        # theta[n_params-1], not the last column of the padded vector.
+        cm = build_constraint_matrices(4, lower=0.0, upper=1.0, total_params=6)
+        assert cm.C_eq.shape == (2, 6)
+        np.testing.assert_array_equal(cm.C_eq[:, 4:], 0.0)
+        theta = np.array([0.0, 0.5, 0.8, 1.0, 99.0, 99.0])
+        np.testing.assert_allclose(cm.C_eq @ theta - cm.d_eq, 0.0)
+
+    def test_total_params_preserves_monotonicity_padding(self):
+        cm = build_constraint_matrices(4, lower=0.0, total_params=6)
+        assert cm.A_ineq.shape == (3, 6)
+        np.testing.assert_array_equal(cm.A_ineq[:, 4:], 0.0)
+
+    @pytest.mark.parametrize(
+        "lower,upper,expected_rows",
+        [(None, None, 0), (0.0, None, 1), (None, 1.0, 1), (0.0, 1.0, 2)],
+    )
+    def test_row_count(self, lower, upper, expected_rows):
+        cm = build_constraint_matrices(5, lower=lower, upper=upper)
+        assert cm.C_eq.shape[0] == expected_rows
+        assert cm.d_eq.shape == (expected_rows,)
+
+
+# ---------------------------------------------------------------------------
+# build_constraint_matrices — exponential support inequality (auglag path)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConstraintMatricesNonnegLower:
+    """Parallel to :class:`TestNonnegLower` for the auglag entry point.
+
+    Verifies that the per-observation support-feasibility rows appended to
+    ``A_ineq`` match the ones :func:`build_constraints` emits as SLSQP
+    dictionaries — same row layout, ``b_ineq = 0``.
+    """
+
+    def test_no_covariates_single_support_row(self):
+        """Without X, nonneg_lower adds one row theta[0] >= 0."""
+        cm = build_constraint_matrices(4, nonneg_lower=True)
+        # Monotonicity has n_params - 1 = 3 rows; plus one support row.
+        assert cm.A_ineq.shape == (3 + 1, 4)
+        np.testing.assert_array_equal(cm.A_ineq[-1], [1.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(cm.b_ineq, np.zeros(4))
+
+    def test_no_covariates_feasibility_evaluation(self):
+        cm = build_constraint_matrices(4, nonneg_lower=True)
+        theta_feasible = np.array([0.0, 1.0, 2.0, 3.0])
+        theta_infeasible = np.array([-0.1, 1.0, 2.0, 3.0])
+        # Last row of A_ineq enforces the support condition.
+        assert (cm.A_ineq @ theta_feasible - cm.b_ineq)[-1] >= 0
+        assert (cm.A_ineq @ theta_infeasible - cm.b_ineq)[-1] < 0
+
+    def test_covariates_one_row_per_observation(self):
+        """With X, one row per observation: theta_b[0] + X_i @ beta >= 0."""
+        n_params = 4
+        X = np.array([[1.0, -0.5], [-2.0, 0.3], [0.5, 1.0]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, total_params=total, nonneg_lower=True, X=X
+        )
+        n_mono = n_params - 1  # monotonicity rows
+        # 3 monotonicity rows + 3 support rows
+        assert cm.A_ineq.shape == (n_mono + X.shape[0], total)
+        # Support rows: first column is 1, last q cols equal X
+        support = cm.A_ineq[n_mono:]
+        np.testing.assert_array_equal(support[:, 0], 1.0)
+        np.testing.assert_array_equal(support[:, 1:n_params], 0.0)
+        np.testing.assert_array_equal(support[:, n_params:], X)
+        np.testing.assert_array_equal(cm.b_ineq, np.zeros(cm.A_ineq.shape[0]))
+
+    def test_covariates_feasibility_evaluation(self):
+        """Support row i is feasible iff theta_b[0] + X_i @ beta >= 0."""
+        n_params = 4
+        X = np.array([[1.0, -0.5], [-2.0, 0.3], [0.5, 1.0]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, total_params=total, nonneg_lower=True, X=X
+        )
+        n_mono = n_params - 1
+        # theta_b[0] = 0.5, beta = 0  →  every row evaluates to 0.5.
+        theta = np.concatenate([np.array([0.5, 1.0, 2.0, 3.0]), np.zeros(2)])
+        support_vals = (cm.A_ineq @ theta - cm.b_ineq)[n_mono:]
+        np.testing.assert_allclose(support_vals, [0.5, 0.5, 0.5])
+
+        # beta = (1.0, 0.0): row 1 = 0.5 + (-2)*1 = -1.5 < 0 (infeasible).
+        theta = np.concatenate([np.array([0.5, 1.0, 2.0, 3.0]), [1.0, 0.0]])
+        support_vals = (cm.A_ineq @ theta - cm.b_ineq)[n_mono:]
+        assert support_vals[1] < 0
+
+    def test_covariates_monotonicity_preserved(self):
+        """nonneg_lower must not disturb the leading monotonicity block."""
+        n_params = 3
+        X = np.array([[0.7, -1.2], [0.1, 2.0], [-0.4, 0.5], [1.5, 0.3]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, total_params=total, nonneg_lower=True, X=X
+        )
+        # First (n_params - 1) rows = forward-difference monotonicity (padded).
+        D = np.diff(np.eye(n_params), axis=0)
+        np.testing.assert_array_equal(cm.A_ineq[: n_params - 1, :n_params], D)
+        # Beta columns of the monotonicity block must be zero.
+        np.testing.assert_array_equal(cm.A_ineq[: n_params - 1, n_params:], 0.0)
+
+    def test_b_ineq_always_zero(self):
+        n_params = 3
+        X = np.array([[0.7, -1.2], [0.1, 2.0]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, total_params=total, nonneg_lower=True, X=X
+        )
+        np.testing.assert_array_equal(cm.b_ineq, 0.0)
+
+    def test_wrong_X_shape_raises(self):
+        with pytest.raises(ValueError, match="X must be 2-D"):
+            build_constraint_matrices(
+                3, total_params=5, nonneg_lower=True, X=np.array([1.0, 2.0, 3.0])
+            )
+
+    def test_missing_total_params_with_covariates_raises(self):
+        with pytest.raises(ValueError, match="total_params must be provided"):
+            build_constraint_matrices(3, nonneg_lower=True, X=np.zeros((4, 2)))
+
+    def test_wrong_X_columns_raises(self):
+        with pytest.raises(ValueError, match="columns"):
+            build_constraint_matrices(
+                3, total_params=5, nonneg_lower=True, X=np.zeros((4, 3))
+            )
+
+    def test_no_X_with_extra_total_params_raises(self):
+        """nonneg_lower=True, X=None, but total_params has room for beta — ambiguous."""
+        with pytest.raises(ValueError, match="X must be provided"):
+            build_constraint_matrices(3, total_params=5, nonneg_lower=True)
+
+    def test_matches_slsqp_layout_no_covariates(self):
+        """Same row layout as build_constraints(..., solver='slsqp')."""
+        cm = build_constraint_matrices(4, nonneg_lower=True)
+        slsqp = build_constraints(4, solver="slsqp", nonneg_lower=True)
+        # build_constraints emits monotonicity dict (n-1 rows) + support dict (1 row).
+        np.testing.assert_array_equal(cm.A_ineq[:3], slsqp[0]["jac"](np.zeros(4)))
+        np.testing.assert_array_equal(cm.A_ineq[3:], slsqp[1]["jac"](np.zeros(4)))
+
+    def test_matches_slsqp_layout_with_covariates(self):
+        """Same per-observation rows as build_constraints with covariates."""
+        n_params = 3
+        X = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, total_params=total, nonneg_lower=True, X=X
+        )
+        slsqp = build_constraints(
+            n_params, solver="slsqp", total_params=total, nonneg_lower=True, X=X
+        )
+        # Support block (rows from monotonicity onwards) must match.
+        np.testing.assert_array_equal(
+            cm.A_ineq[n_params - 1 :], slsqp[1]["jac"](np.zeros(total))
+        )
+
+    def test_combines_with_boundary_equality(self):
+        """nonneg_lower (A_ineq rows) and lower= (C_eq row) can coexist."""
+        n_params = 4
+        X = np.array([[0.5], [-0.3]])
+        total = n_params + X.shape[1]
+        cm = build_constraint_matrices(
+            n_params, lower=0.0, total_params=total, nonneg_lower=True, X=X
+        )
+        # Inequalities: 3 monotonicity + 2 support.
+        assert cm.A_ineq.shape == (3 + 2, total)
+        # Equality: one row pinning theta[0]=0.
+        assert cm.C_eq.shape == (1, total)
+        np.testing.assert_array_equal(cm.C_eq[0], [1.0, 0.0, 0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(cm.d_eq, [0.0])
 
 
 # ---------------------------------------------------------------------------

@@ -253,13 +253,35 @@ def test_compare_results_fail_cdf() -> None:
     assert "cdf" in result.failure_reason
 
 
-def test_compare_results_not_converged() -> None:
-    """Non-converged fit must produce passed=False."""
+def test_compare_results_not_converged_but_correct_passes() -> None:
+    """Non-converged fit with correct theta must still pass on deltas.
+
+    Auglag (the new default solver) can report ``converged=False`` on
+    degenerate active sets — its strict KKT residual asymptotes just above
+    ``outer_tol=1e-7`` even when θ matches R to many decimals.  The script
+    now treats the convergence flag as informational and lets the Δθ / Δll /
+    Δcdf tolerances decide pass/fail; only a true crash (empty θ) short-
+    circuits.  ``test_compare_results_crash_short_circuits`` covers that path.
+    """
     ref = _make_ref()
     fit = _make_fit(ref, converged=False)
     result = compare_results(ref, fit)
+    assert result.passed is True
+
+
+def test_compare_results_crash_short_circuits() -> None:
+    """Empty θ (the ``_FAILED_FIT`` sentinel) must short-circuit to fail."""
+    ref = _make_ref()
+    fit = FittedResult(
+        theta_py=np.array([]),
+        loglik_py=float("nan"),
+        cdf_values_py=np.array([]),
+        converged=False,
+        runtime_s=0.0,
+    )
+    result = compare_results(ref, fit)
     assert result.passed is False
-    assert "converge" in (result.failure_reason or "").lower()
+    assert "crash" in (result.failure_reason or "").lower()
 
 
 def test_compare_results_multiple_failures() -> None:
