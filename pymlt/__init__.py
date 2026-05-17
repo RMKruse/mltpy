@@ -6,6 +6,7 @@ from pymlt.basis import (
     InterceptBasis,
     LegendreBasis,
     LogBasis,
+    OneHotBasis,
     OrdinalBasis,
     PolynomialBasis,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "CensoringType",
     "OrderedVariable",
     "OrdinalBasis",
+    "OneHotBasis",
     "PolynomialBasis",
     "LegendreBasis",
     "LogBasis",

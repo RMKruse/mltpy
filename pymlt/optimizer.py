@@ -20,9 +20,10 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize
 
 from pymlt._auglag import AugLagOptions, AugLagResult, auglag_minimize
-from pymlt.basis import BernsteinBasis
+from pymlt.basis import BernsteinBasis, InteractionBasis
 from pymlt.constraints import (
     build_constraint_matrices,
+    build_constraint_matrices_interaction,
     build_constraints,
 )
 from pymlt.likelihood import (
@@ -391,7 +392,7 @@ def _perturb_and_project(
 
 
 def optimize(
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
@@ -437,6 +438,18 @@ def optimize(
     dist = _get_dist(base_distribution)
     if config is None:
         config = OptimizerConfig()
+
+    if isinstance(basis, InteractionBasis):
+        return _optimize_interaction(
+            basis=basis,
+            y=y,
+            X=X,
+            config=config,
+            dist=dist,
+            base_distribution=base_distribution,
+            weights=weights,
+            offset=offset,
+        )
 
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0)
@@ -579,6 +592,147 @@ def optimize(
         n_iter=int(getattr(best_scipy_result, "nit", 0)),
         n_restarts=n_restarts_used,
         solver_message=str(best_scipy_result.message),
+    )
+
+
+def _optimize_interaction(
+    *,
+    basis: InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    config: OptimizerConfig,
+    dist: DistOps,
+    base_distribution: BaseDistribution,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> OptimizationResult:
+    """Optimisation path for InteractionBasis (stratified / fully-interacting CTM).
+
+    Uses the augmented Lagrangian solver with the Kronecker monotonicity
+    constraint ``(D ⊗ I_q) @ vec(Θ) ≥ 0``.  X is required (it cannot be
+    None for an interaction model).
+    """
+    if X is None:
+        raise ValueError(
+            "InteractionBasis.fit() requires X (covariate matrix). "
+            "Pass the stratum labels as X."
+        )
+    x_arr = basis._coerce_x(X)  # 1-D category labels
+
+    cm = build_constraint_matrices_interaction(basis)
+
+    p = basis.n_y_params
+    q = basis.n_x_params
+    total_params = p * q
+
+    # Feasible initialisation: each column of Theta = linspace(0, 1, p)
+    Theta_init = np.outer(np.linspace(0.0, 1.0, p), np.ones(q))
+    theta_init = Theta_init.ravel().copy()
+
+    if isinstance(config.random_state, np.random.Generator):
+        rng = config.random_state
+    else:
+        rng = np.random.default_rng(config.random_state)
+
+    def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
+        try:
+            result = _negative_log_likelihood_from_dist(
+                theta,
+                basis,
+                y,
+                x_arr,
+                CensoringType.NONE,
+                gradient=True,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+            )
+            return cast(tuple[float, NDArray[np.float64]], result)
+        except InfeasibleParameterError:
+            return float("inf"), np.zeros(total_params)
+
+    auglag_opts = (
+        config.auglag_options if config.auglag_options is not None else AugLagOptions()
+    )
+
+    best_result: AugLagResult | None = None
+    best_nll = float("inf")
+    n_restarts_used = 0
+
+    for attempt in range(config.max_restarts + 1):
+        if attempt == 0:
+            theta_try = theta_init.copy()
+        else:
+            n_restarts_used = attempt
+            # Perturb each column independently and project to feasibility
+            Theta_try = Theta_init + rng.normal(0.0, 0.1, size=(p, q))
+            # Project each column: cumulative max to enforce monotonicity
+            for j in range(q):
+                Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
+            theta_try = Theta_try.ravel()
+
+        try:
+            result = auglag_minimize(
+                obj,
+                theta_try,
+                A_ineq=cm.A_ineq,
+                b_ineq=cm.b_ineq,
+                C_eq=cm.C_eq,
+                d_eq=cm.d_eq,
+                options=auglag_opts,
+            )
+        except LinAlgError as exc:
+            if config.verbose:
+                warnings.warn(
+                    f"optimizer.py (interaction): attempt {attempt + 1} "
+                    f"hit {exc!r}; retrying",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            continue
+
+        if result.fun < best_nll:
+            best_nll = result.fun
+            best_result = result
+
+        if result.converged:
+            break
+
+    if best_result is None:
+        _nll = cast(
+            float,
+            _negative_log_likelihood_from_dist(
+                theta_init,
+                basis,
+                y,
+                x_arr,
+                CensoringType.NONE,
+                gradient=False,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+            ),
+        )
+        return OptimizationResult(
+            theta=theta_init,
+            log_likelihood=float(-_nll),
+            converged=False,
+            n_iter=0,
+            n_restarts=n_restarts_used,
+            solver_message="All interaction-model auglag attempts raised LinAlgError.",
+            n_outer_iter=None,
+            kkt_residual=None,
+        )
+
+    return OptimizationResult(
+        theta=best_result.theta,
+        log_likelihood=float(-best_nll),
+        converged=best_result.converged,
+        n_iter=best_result.n_inner_iter,
+        n_restarts=n_restarts_used,
+        solver_message=best_result.message,
+        n_outer_iter=best_result.n_outer_iter,
+        kkt_residual=best_result.kkt_residual,
     )
 
 

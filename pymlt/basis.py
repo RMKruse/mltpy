@@ -510,6 +510,14 @@ class OrdinalBasis:
         y_arr = np.atleast_1d(np.asarray(y, dtype=float))
         return np.zeros((y_arr.size, self.K - 1), dtype=np.float64)
 
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return evaluate(y) and derivative(y, order=1) in one pass."""
+        B = self.evaluate(y)
+        dB = self.derivative(y, order=1)
+        return B, dB
+
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Not defined for the ordinal basis — raises ``NotImplementedError``."""
         raise NotImplementedError(
@@ -1115,6 +1123,81 @@ class InterceptBasis:
 
 
 # ---------------------------------------------------------------------------
+# One-hot categorical x-basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OneHotBasis:
+    """One-hot encoding basis for K-level categorical covariates.
+
+    Each row of the design matrix is a standard basis vector ``e_k`` of
+    length ``K`` (1 in position ``k``, 0 elsewhere), where ``k`` is the
+    integer category label for that observation.
+
+    The basis is non-negative and a partition of unity (each row sums to 1),
+    making it compatible with the closed-form column-wise monotonicity
+    constraints in :class:`InteractionBasis`.  See ADR 0001, Decision 3.
+
+    Parameters
+    ----------
+    K:
+        Number of categories.  Labels must be integers in ``{0, …, K-1}``.
+        Must satisfy ``K >= 2``.
+    """
+
+    K: int  # noqa: N815
+
+    def __post_init__(self) -> None:
+        if self.K < 2:
+            raise ValueError(f"K must be >= 2, got {self.K}")
+
+    @property
+    def order(self) -> int:
+        """``K - 1`` so that ``order + 1 == K`` (K basis functions)."""
+        return self.K - 1
+
+    def evaluate(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
+        """One-hot design matrix for integer category labels.
+
+        Parameters
+        ----------
+        x:
+            Integer category labels, shape ``(n,)``.  Each value must be an
+            integer in ``{0, …, K-1}``.
+
+        Returns
+        -------
+        NDArray of shape ``(n, K)`` with row ``i`` equal to ``e_{int(x[i])}``.
+
+        Raises
+        ------
+        ValueError
+            If any element of ``x`` is not an integer in ``{0, …, K-1}``.
+        """
+        x_arr = np.atleast_1d(np.asarray(x, dtype=float))
+        if x_arr.ndim != 1:
+            raise ValueError(f"x must be 1-D, got shape {x_arr.shape}")
+        n = x_arr.size
+        if n == 0:
+            return np.zeros((0, self.K), dtype=np.float64)
+        codes = x_arr.astype(np.intp)
+        if not np.all(codes == x_arr):
+            raise ValueError(
+                "OneHotBasis.evaluate expects integer labels; "
+                "received non-integer values."
+            )
+        if codes.min() < 0 or codes.max() >= self.K:
+            raise ValueError(
+                f"OneHotBasis labels must be in [0, {self.K - 1}], got "
+                f"min={int(codes.min())}, max={int(codes.max())}."
+            )
+        out = np.zeros((n, self.K), dtype=np.float64)
+        out[np.arange(n), codes] = 1.0
+        return out
+
+
+# ---------------------------------------------------------------------------
 # Tensor-product interaction basis (stub — implementation in slice 2)
 # ---------------------------------------------------------------------------
 
@@ -1124,6 +1207,7 @@ _SUPPORTED_X_BASIS_TYPES: tuple[type, ...] = (
     BernsteinBasis,
     OrdinalBasis,
     InterceptBasis,
+    OneHotBasis,
 )
 
 
@@ -1178,11 +1262,7 @@ class InteractionBasis:
         | InterceptBasis
         | OrdinalBasis
     )
-    x_basis: (
-        BernsteinBasis
-        | OrdinalBasis
-        | InterceptBasis
-    )
+    x_basis: BernsteinBasis | OrdinalBasis | InterceptBasis
 
     def __post_init__(self) -> None:
         if not isinstance(self.x_basis, _SUPPORTED_X_BASIS_TYPES):
@@ -1219,6 +1299,13 @@ class InteractionBasis:
         """Total number of free parameters: ``n_y_params * n_x_params``."""
         return self.n_y_params * self.n_x_params
 
+    def _coerce_x(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Coerce X to 1-D if it has shape (n, 1), else leave as-is."""
+        x = np.asarray(X, dtype=float)
+        if x.ndim == 2 and x.shape[1] == 1:
+            x = x[:, 0]
+        return x
+
     def evaluate(
         self,
         y: NDArray[np.float64],
@@ -1231,22 +1318,22 @@ class InteractionBasis:
         y:
             Response observations, shape (n,).
         X:
-            Covariate matrix, shape (n, d) where d is the dimension of the
-            x-basis input.
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
 
         Returns
         -------
-        NDArray of shape (n, p*q).
-
-        Raises
-        ------
-        NotImplementedError
-            Until slice 2 is implemented.
+        NDArray of shape (n, p*q) where row i is ``np.kron(a(y_i), b(x_i))``.
+        The parameter layout is row-major: ``theta[i*q + j] = Θ[i, j]``.
         """
-        raise NotImplementedError(
-            "InteractionBasis.evaluate is not yet implemented. "
-            "This stub exists for import compatibility. "
-            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        x = self._coerce_x(X)
+        A = self.y_basis.evaluate(y)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = A.shape
+        q = B.shape[1]
+        # Row-wise Kronecker: (n, p, 1) * (n, 1, q) → (n, p, q) → (n, p*q)
+        return cast(
+            NDArray[np.float64],
+            (A[:, :, None] * B[:, None, :]).reshape(n, p * q),
         )
 
     def derivative(
@@ -1262,9 +1349,9 @@ class InteractionBasis:
         y:
             Response observations, shape (n,).
         X:
-            Covariate matrix, shape (n, d).
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
         order:
-            Derivative order.  Only order=1 is supported.
+            Derivative order w.r.t. y.  Only order=1 is supported.
 
         Returns
         -------
@@ -1272,13 +1359,21 @@ class InteractionBasis:
 
         Raises
         ------
-        NotImplementedError
-            Until slice 2 is implemented.
+        ValueError
+            If ``order`` is not 1.
         """
-        raise NotImplementedError(
-            "InteractionBasis.derivative is not yet implemented. "
-            "This stub exists for import compatibility. "
-            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        if order != 1:
+            raise ValueError(
+                f"InteractionBasis.derivative only supports order=1, got {order}"
+            )
+        x = self._coerce_x(X)
+        dA = self.y_basis.derivative(y, order=1)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = dA.shape
+        q = B.shape[1]
+        return cast(
+            NDArray[np.float64],
+            (dA[:, :, None] * B[:, None, :]).reshape(n, p * q),
         )
 
     def evaluate_with_derivative(
@@ -1293,49 +1388,48 @@ class InteractionBasis:
         y:
             Response observations, shape (n,).
         X:
-            Covariate matrix, shape (n, d).
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
 
         Returns
         -------
-        B  : NDArray of shape (n, p*q)
-        dB : NDArray of shape (n, p*q)
-
-        Raises
-        ------
-        NotImplementedError
-            Until slice 2 is implemented.
+        design  : NDArray of shape (n, p*q)
+        d_design : NDArray of shape (n, p*q)
         """
-        raise NotImplementedError(
-            "InteractionBasis.evaluate_with_derivative is not yet implemented. "
-            "This stub exists for import compatibility. "
-            "See docs/adr/0001-tensor-product-interaction-basis.md."
-        )
+        x = self._coerce_x(X)
+        A, dA = self.y_basis.evaluate_with_derivative(y)  # (n, p), (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = A.shape
+        q = B.shape[1]
+        design = (A[:, :, None] * B[:, None, :]).reshape(n, p * q)
+        d_design = (dA[:, :, None] * B[:, None, :]).reshape(n, p * q)
+        return cast(NDArray[np.float64], design), cast(NDArray[np.float64], d_design)
 
     def integrate(
         self,
         y: NDArray[np.float64],
         X: NDArray[np.float64],
     ) -> NDArray[np.float64]:
-        """Running integral of a(y) ⊗ b(x) w.r.t. y.
+        """Running integral of a(y) ⊗ b(x) w.r.t. y, shape (n, p*q).
+
+        Returns ``kron(∫_a^y a(s) ds, b(x_i))`` for each row i.
 
         Parameters
         ----------
         y:
             Response observations, shape (n,).
         X:
-            Covariate matrix, shape (n, d).
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
 
         Returns
         -------
         NDArray of shape (n, p*q).
-
-        Raises
-        ------
-        NotImplementedError
-            Until slice 2 is implemented.
         """
-        raise NotImplementedError(
-            "InteractionBasis.integrate is not yet implemented. "
-            "This stub exists for import compatibility. "
-            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        x = self._coerce_x(X)
+        iA = self.y_basis.integrate(y)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = iA.shape
+        q = B.shape[1]
+        return cast(
+            NDArray[np.float64],
+            (iA[:, :, None] * B[:, None, :]).reshape(n, p * q),
         )

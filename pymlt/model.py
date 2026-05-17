@@ -29,7 +29,7 @@ from scipy.interpolate import CubicSpline
 from scipy.special import comb, log_ndtr
 from scipy.stats import chi2, norm
 
-from pymlt.basis import BernsteinBasis
+from pymlt.basis import BernsteinBasis, InteractionBasis
 from pymlt.likelihood import (
     _H_CLIP,
     BaseDistribution,
@@ -169,8 +169,8 @@ class ConditionalTransformationModel:
 
     def __init__(
         self,
-        basis: BernsteinBasis,
-        censoring: CensoringType = CensoringType.NONE,
+        basis: BernsteinBasis | InteractionBasis,
+        censoring: CensoringType | None = CensoringType.NONE,
         optimizer_config: OptimizerConfig | None = None,
         base_distribution: BaseDistribution = "normal",
     ) -> None:
@@ -237,6 +237,19 @@ class ConditionalTransformationModel:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @property
+    def Theta_(self) -> NDArray[np.float64] | None:
+        """Coefficient matrix ``Θ`` of shape ``(p, q)`` for interaction models.
+
+        ``None`` before :meth:`fit` or for non-interaction models.
+        ``theta_[i*q + j] = Θ[i, j]`` (row-major layout).
+        """
+        if self.theta_ is None or not isinstance(self.basis, InteractionBasis):
+            return None
+        p = self.basis.n_y_params
+        q = self.basis.n_x_params
+        return self.theta_.reshape(p, q)
 
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
@@ -361,11 +374,12 @@ class ConditionalTransformationModel:
         n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
 
+        censoring_arg = CensoringType.NONE if self.censoring is None else self.censoring
         result = optimize(
             self.basis,
             y_clean,
             X=X_clean,
-            censoring=self.censoring,
+            censoring=censoring_arg,
             config=self.optimizer_config,
             base_distribution=self.base_distribution,
             weights=weights_clean,
@@ -411,7 +425,7 @@ class ConditionalTransformationModel:
             self.basis,
             y_clean,
             X_clean,
-            self.censoring,
+            censoring_arg,
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
@@ -421,7 +435,7 @@ class ConditionalTransformationModel:
             self.basis,
             y_clean,
             X_clean,
-            self.censoring,
+            censoring_arg,
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
@@ -541,9 +555,6 @@ class ConditionalTransformationModel:
         if what not in _VALID_WHAT:
             raise ValueError(f"what={what!r} is invalid. Allowed: {_VALID_WHAT}")
 
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-
         y_arr = np.asarray(y_new, dtype=float).ravel()
         m = y_arr.shape[0]
         offset_arr: NDArray[np.float64] | None = (
@@ -554,6 +565,77 @@ class ConditionalTransformationModel:
             X_arr = np.asarray(X_new, dtype=float)
             if X_arr.ndim == 1:
                 X_arr = X_arr[:, None]
+
+        # ------------------------------------------------------------------
+        # Interaction basis path
+        # ------------------------------------------------------------------
+        if isinstance(self.basis, InteractionBasis):
+            if X_arr is None:
+                raise ValueError(
+                    "InteractionBasis model requires X_new for prediction."
+                )
+            x_1d = self.basis._coerce_x(X_arr)
+            design = self.basis.evaluate(y_arr, x_1d)  # (m, p*q)
+            d_design = self.basis.derivative(y_arr, x_1d)  # (m, p*q)
+            h = design @ self.theta_
+            hp = d_design @ self.theta_
+            if offset_arr is not None:
+                h = h + offset_arr
+
+            dist = _get_dist(self.base_distribution)
+            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+
+            if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
+                raise InfeasibleParameterError(
+                    f"predict(what={what!r}) requires h'(y) > 0."
+                )
+            if what == "trafo":
+                return h
+            if np.any(np.abs(h) > _H_CLIP):
+                warnings.warn(
+                    f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
+                    "one or more points; clipping for numerical stability.",
+                    stacklevel=2,
+                )
+            h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+            if what == "distribution":
+                return cast(NDArray[np.float64], dist.cdf(h_c))
+            if what == "logdistribution":
+                return cast(NDArray[np.float64], _logcdf(h_c))
+            if what == "survivor":
+                return cast(NDArray[np.float64], dist.sf(h_c))
+            if what == "logsurvivor":
+                return cast(NDArray[np.float64], dist.logsf(h_c))
+            if what == "density":
+                return cast(NDArray[np.float64], dist.pdf(h_c) * hp)
+            if what == "logdensity":
+                with np.errstate(divide="ignore"):
+                    return cast(NDArray[np.float64], dist.logpdf(h_c) + np.log(hp))
+            if what == "hazard":
+                return cast(NDArray[np.float64], dist.pdf(h_c) * hp / dist.sf(h_c))
+            if what == "loghazard":
+                return cast(
+                    NDArray[np.float64],
+                    dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c),
+                )
+            if what == "cumhazard":
+                return cast(NDArray[np.float64], -dist.logsf(h_c))
+            if what == "logcumhazard":
+                return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
+            if what == "odds":
+                return cast(NDArray[np.float64], dist.cdf(h_c) / dist.sf(h_c))
+            if what == "logodds":
+                return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
+            raise ValueError(
+                f"what={what!r} is not supported for InteractionBasis predict. "
+                "Quantile prediction is not yet implemented for interaction models."
+            )
+
+        # ------------------------------------------------------------------
+        # Standard (shift) basis path
+        # ------------------------------------------------------------------
+        p = self.basis.order + 1
+        theta_b = self.theta_[:p]
 
         if what == "quantile":
             xbeta: NDArray[np.float64] | None = None
@@ -887,12 +969,13 @@ class ConditionalTransformationModel:
         y_clean, X_clean = self._validate_input(y, X)
         n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
+        cens = CensoringType.NONE if self.censoring is None else self.censoring
         return log_likelihood(
             self.theta_,
             self.basis,
             y_clean,
             X_clean,
-            self.censoring,
+            cens,
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
@@ -1029,6 +1112,10 @@ class ConditionalTransformationModel:
           ``log(r_i)`` in the deviance formula to avoid ``-inf``.
         """
         self._check_is_fitted()
+        if isinstance(self.basis, InteractionBasis):
+            raise NotImplementedError(
+                "residuals() is not supported for InteractionBasis models."
+            )
         if type not in {"score", "cox-snell", "deviance"}:
             raise ValueError(
                 f"type={type!r} is invalid. Allowed: 'score', 'cox-snell', 'deviance'."
@@ -1043,12 +1130,14 @@ class ConditionalTransformationModel:
             # R's ``mlt::residuals`` returns the negative of the
             # positive-log-likelihood intercept score (so the residual is
             # interpretable as ``∂(-ℓ_i)/∂α``).  Negate to match.
+            assert isinstance(self.basis, BernsteinBasis)
+            cens_r = CensoringType.NONE if self.censoring is None else self.censoring
             return -_intercept_score(
                 self.theta_,
                 self.basis,
                 self._y_train_,
                 self._X_train_,
-                self.censoring,
+                cens_r,
                 base_distribution=self.base_distribution,
                 weights=self._weights_train_,
                 offset=self._offset_train_,
@@ -1449,6 +1538,10 @@ class ConditionalTransformationModel:
         >>> ax.plot(grid, band[:, 0])
         """
         self._check_is_fitted()
+        if isinstance(self.basis, InteractionBasis):
+            raise NotImplementedError(
+                "confband() is not supported for InteractionBasis models."
+            )
         if self.theta_ is None:
             raise RuntimeError(
                 "Model parameters (theta_) are unexpectedly missing after fitting."
@@ -1732,7 +1825,8 @@ class ConditionalTransformationModel:
     def __repr__(self) -> str:
         name = type(self).__name__
         order = self.basis.order
-        censoring = self.censoring.name
+        cens = self.censoring if self.censoring is not None else CensoringType.NONE
+        censoring = cens.name
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(
@@ -1795,7 +1889,8 @@ class MLT(ConditionalTransformationModel):
         self._support = support
 
     def __repr__(self) -> str:
-        censoring = self.censoring.name
+        cens = self.censoring if self.censoring is not None else CensoringType.NONE
+        censoring = cens.name
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError(

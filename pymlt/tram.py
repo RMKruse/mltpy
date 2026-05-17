@@ -28,7 +28,12 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import norm as _norm
 
-from pymlt.basis import LogBernsteinBasis, OrdinalBasis
+from pymlt.basis import (
+    BernsteinBasis,
+    InteractionBasis,
+    LogBernsteinBasis,
+    OrdinalBasis,
+)
 from pymlt.likelihood import _H_CLIP, BaseDistribution, _get_dist
 from pymlt.model import MLT, ConditionalTransformationModel
 from pymlt.optimizer import OptimizerConfig
@@ -89,7 +94,8 @@ class _TramModel(MLT):
 
     def __repr__(self) -> str:
         name = type(self).__name__
-        censoring = self.censoring.name
+        cens = self.censoring if self.censoring is not None else CensoringType.NONE
+        censoring = cens.name
         if self.is_fitted_:
             if self.result_ is None:
                 raise RuntimeError("Unexpected None result_ for fitted model")
@@ -315,6 +321,7 @@ class BoxCox(_TramModel):
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError("Unexpected None theta_ for fitted model")
+        assert isinstance(self.basis, BernsteinBasis)
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -757,6 +764,7 @@ class Lm(_TramModel):
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError("Unexpected None theta_ for fitted model")
+        assert isinstance(self.basis, BernsteinBasis)
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -939,6 +947,7 @@ class Survreg(_TramModel):
 
         # Right-censored: R-compatible grid+spline inversion on positive time grid.
         # Start at a (not 0) since log(0) = -inf for LogBernsteinBasis.
+        assert not isinstance(self.basis, InteractionBasis)
         q_grid = np.linspace(a, b, _QMLT_GRID_POINTS, dtype=np.float64)
         h_base_grid: NDArray[np.float64] = self.basis.evaluate(q_grid) @ theta_b
 

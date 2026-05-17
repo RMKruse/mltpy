@@ -85,7 +85,7 @@ from scipy.stats import laplace as _laplace
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
-from pymlt.basis import BernsteinBasis
+from pymlt.basis import BernsteinBasis, InteractionBasis
 from pymlt.variables import CensoredData, CensoringType
 
 BaseDistribution = Literal[
@@ -2380,9 +2380,66 @@ def _hess_interval(
 # ---------------------------------------------------------------------------
 
 
+def _ll_interaction_none(
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
+    basis: InteractionBasis,
+    X: NDArray[np.float64],
+    dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
+) -> np.float64:
+    """Log-likelihood for exact data with an InteractionBasis."""
+    design, d_design = basis.evaluate_with_derivative(y, X)  # (n, p*q)
+    h_raw = design @ theta
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
+    hp = d_design @ theta
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        per_obs = log_pdf_h + np.log(hp)
+        if weights is not None:
+            return np.float64(np.dot(weights, per_obs))
+        return np.float64(np.sum(per_obs))
+
+
+def _ll_and_grad_interaction_none(
+    y: NDArray[np.float64],
+    theta: NDArray[np.float64],
+    basis: InteractionBasis,
+    X: NDArray[np.float64],
+    dist: DistOps = _NORM_OPS,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
+) -> tuple[np.float64, NDArray[np.float64]]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for exact data with InteractionBasis."""
+    design, d_design = basis.evaluate_with_derivative(y, X)  # (n, p*q)
+    h_raw = design @ theta
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
+    hp = d_design @ theta
+
+    ns = _neg_score(h, dist)
+    wns = ns if weights is None else weights * ns
+    ihp = _inverse_hp(hp, weights)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        if weights is not None:
+            ll = np.float64(np.dot(weights, log_pdf_h + np.log(hp)))
+        else:
+            ll = np.float64(np.sum(log_pdf_h) + np.sum(np.log(hp)))
+        grad = design.T @ wns - d_design.T @ ihp
+
+    return ll, grad
+
+
 def _log_likelihood_from_dist(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
@@ -2391,6 +2448,25 @@ def _log_likelihood_from_dist(
     offset: NDArray[np.float64] | None = None,
 ) -> float:
     """Internal log-likelihood evaluator for a pre-resolved base distribution."""
+    if isinstance(basis, InteractionBasis):
+        if X is None:
+            raise ValueError(
+                "InteractionBasis requires X to be provided for likelihood evaluation."
+            )
+        y_arr = (
+            np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
+        )
+        result = _ll_interaction_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
+        if not np.isfinite(result):
+            raise InfeasibleParameterError(
+                f"log_likelihood returned {result}.  Possible causes: theta "
+                "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+                "support, or extreme h values despite clipping."
+            )
+        return float(result)
+
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
         result = _ll_none(
@@ -2429,7 +2505,7 @@ def _log_likelihood_from_dist(
 
 def _negative_log_likelihood_from_dist(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None,
     censoring: CensoringType,
@@ -2439,6 +2515,36 @@ def _negative_log_likelihood_from_dist(
     offset: NDArray[np.float64] | None = None,
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Internal NLL evaluator for a pre-resolved base distribution."""
+    if isinstance(basis, InteractionBasis):
+        if X is None:
+            raise ValueError(
+                "InteractionBasis requires X to be provided for likelihood evaluation."
+            )
+        y_arr = (
+            np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
+        )
+        if not gradient:
+            result = _ll_interaction_none(
+                y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+            )
+            if not np.isfinite(result):
+                raise InfeasibleParameterError(
+                    f"log_likelihood returned {result}.  Possible causes: theta "
+                    "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+                    "support, or extreme h values despite clipping."
+                )
+            return float(-result)
+        ll, grad = _ll_and_grad_interaction_none(
+            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+        )
+        if not np.isfinite(ll):
+            raise InfeasibleParameterError(
+                f"log_likelihood returned {ll}.  Possible causes: theta "
+                "violates monotonicity (h'(y) ≤ 0), observations outside basis "
+                "support, or extreme h values despite clipping."
+            )
+        return float(-ll), grad
+
     if not gradient:
         return -_log_likelihood_from_dist(
             theta, basis, y, X, censoring, dist, weights=weights, offset=offset
@@ -2487,7 +2593,7 @@ def _negative_log_likelihood_from_dist(
 
 def log_likelihood(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
@@ -2548,7 +2654,7 @@ def log_likelihood(
 
 def negative_log_likelihood(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
@@ -2588,9 +2694,48 @@ def negative_log_likelihood(
     )
 
 
+def _hessian_interaction_fd(
+    theta: NDArray[np.float64],
+    basis: InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64],
+    dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
+    h_fd: float = 1e-5,
+) -> NDArray[np.float64]:
+    """Finite-difference Hessian of NLL for InteractionBasis models."""
+    m = theta.size
+    y_arr = np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
+
+    def nll(t: NDArray[np.float64]) -> float:
+        return float(
+            -_ll_interaction_none(
+                y_arr, t, basis, X, dist=dist, weights=weights, offset=offset
+            )
+        )
+
+    H = np.zeros((m, m), dtype=np.float64)
+    for i in range(m):
+        ei = np.zeros(m)
+        ei[i] = h_fd
+        for j in range(i, m):
+            ej = np.zeros(m)
+            ej[j] = h_fd
+            val = (
+                nll(theta + ei + ej)
+                - nll(theta + ei - ej)
+                - nll(theta - ei + ej)
+                + nll(theta - ei - ej)
+            ) / (4 * h_fd * h_fd)
+            H[i, j] = val
+            H[j, i] = val
+    return H
+
+
 def hessian(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
@@ -2617,8 +2762,7 @@ def hessian(
     Returns
     -------
     NDArray[np.float64]
-        Symmetric ``(p+q, p+q)`` Hessian of ``-ℓ`` where ``p = basis.order + 1``
-        and ``q = X.shape[1]`` (``0`` if ``X is None``).
+        Symmetric Hessian of ``-ℓ``.
 
     Raises
     ------
@@ -2630,6 +2774,18 @@ def hessian(
     dist = _get_dist(base_distribution)
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
+
+    if isinstance(basis, InteractionBasis):
+        if X is None:
+            raise ValueError("InteractionBasis requires X for hessian computation.")
+        result = _hessian_interaction_fd(
+            theta, basis, y, X, dist=dist, weights=weights, offset=offset
+        )
+        if not np.all(np.isfinite(result)):
+            raise InfeasibleParameterError(
+                "hessian() produced non-finite entries for InteractionBasis."
+            )
+        return result
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -2668,9 +2824,37 @@ def hessian(
     return result
 
 
+def _score_matrix_interaction(
+    theta: NDArray[np.float64],
+    basis: InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64],
+    dist: DistOps,
+    weights: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Per-observation score matrix for exact data with InteractionBasis."""
+    y_arr = np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
+    design, d_design = basis.evaluate_with_derivative(y_arr, X)  # (n, p*q)
+    h_raw = design @ theta
+    if offset is not None:
+        h_raw = h_raw + offset
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
+    hp = d_design @ theta
+
+    ns = _neg_score(h, dist)  # (n,) — negative score of log-density
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv_hp = 1.0 / hp  # (n,)
+    # ∂ℓ_i/∂θ = -ns_i * design_i + inv_hp_i * d_design_i
+    score = -ns[:, None] * design + inv_hp[:, None] * d_design  # (n, p*q)
+    if weights is not None:
+        score = weights[:, None] * score
+    return score
+
+
 def score_matrix(
     theta: NDArray[np.float64],
-    basis: BernsteinBasis,
+    basis: BernsteinBasis | InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     X: NDArray[np.float64] | None = None,
     censoring: CensoringType = CensoringType.NONE,
@@ -2710,6 +2894,20 @@ def score_matrix(
     dist = _get_dist(base_distribution)
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
+
+    if isinstance(basis, InteractionBasis):
+        if X is None:
+            raise ValueError(
+                "InteractionBasis requires X for score_matrix computation."
+            )
+        result = _score_matrix_interaction(
+            theta, basis, y, X, dist=dist, weights=weights, offset=offset
+        )
+        if not np.all(np.isfinite(result)):
+            raise InfeasibleParameterError(
+                "score_matrix() produced non-finite entries for InteractionBasis."
+            )
+        return result
 
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
