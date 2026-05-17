@@ -343,14 +343,6 @@ class TestBuildConstraintMatrices:
         # Beta columns must be zero
         np.testing.assert_array_equal(cm.A_ineq[:, n_params:], 0.0)
 
-    def test_nonneg_lower_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="Slice 3"):
-            build_constraint_matrices(4, nonneg_lower=True)
-
-    def test_x_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError, match="Slice 3"):
-            build_constraint_matrices(4, X=np.ones((5, 2)))
-
     @pytest.mark.parametrize("n_params", [1, 2, 5, 10])
     def test_shape_parametrized(self, n_params: int) -> None:
         cm = build_constraint_matrices(n_params)

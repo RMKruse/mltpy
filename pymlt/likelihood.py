@@ -1049,7 +1049,13 @@ def _ll_none(
     hp = D @ theta_b  # h-prime; must be > 0
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        per_obs = dist.logpdf(h) + np.log(hp)
+        # For exponential, use the analytical formula log f_exp(h) = -h for
+        # all h (matches R mlt; scipy returns -inf for h<0, which would crash
+        # penalty-based optimisers that legitimately evaluate slightly-
+        # infeasible iterates).  Support feasibility h >= 0 is enforced
+        # separately via build_constraints / build_constraint_matrices.
+        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        per_obs = log_pdf_h + np.log(hp)
         if weights is not None:
             return cast(np.float64, np.dot(weights, per_obs))
         return cast(np.float64, np.sum(per_obs))
@@ -1539,10 +1545,12 @@ def _ll_and_grad_none(
     wns = ns if weights is None else weights * ns
     ihp = _inverse_hp(hp, weights)
     with np.errstate(invalid="ignore", divide="ignore"):
+        # Smooth analytical extension for exponential at h<0 — see _ll_none.
+        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
         if weights is not None:
-            ll = np.dot(weights, dist.logpdf(h) + np.log(hp))
+            ll = np.dot(weights, log_pdf_h + np.log(hp))
         else:
-            ll = np.sum(dist.logpdf(h)) + np.sum(np.log(hp))
+            ll = np.sum(log_pdf_h) + np.sum(np.log(hp))
         grad_b = B.T @ wns - D.T @ ihp
     if X is not None and beta is not None:
         grad = np.concatenate([grad_b, X.T @ wns])

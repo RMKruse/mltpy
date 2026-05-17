@@ -252,34 +252,35 @@ def build_constraint_matrices(
         boundary rows are padded with zero columns for the ``beta`` block.
         Defaults to ``n_params``.
     nonneg_lower:
-        Reserved for Slice 3 (exponential support).  Must be ``False``.
+        If ``True``, append support-feasibility inequality rows so the
+        transformation stays in the exponential support ``[0, ∞)``.  Mirrors
+        the ``nonneg_lower`` branch of :func:`build_constraints`:
+
+        * No covariates (``X is None``): a single row ``[1, 0, …, 0]``
+          enforcing ``θ_b[0] ≥ 0``.
+        * With covariates: one row ``[1, 0, …, 0 | X_i]`` per observation,
+          enforcing ``θ_b[0] + X_i · β ≥ 0``.
+
     X:
-        Reserved for Slice 3.  Must be ``None``.
+        Covariate matrix, shape ``(n, q)``.  Only consulted when
+        ``nonneg_lower=True``; ``q`` must equal ``total_params - n_params``.
 
     Returns
     -------
     ConstraintMatrices
         ``A_ineq`` is the padded forward-difference matrix D (shape
-        ``(n_params-1, total_params)``), ``b_ineq`` is all-zeros.  ``C_eq``
-        has 0, 1, or 2 rows depending on which of ``lower``/``upper`` are
-        provided; ``d_eq`` carries the corresponding right-hand-side values.
+        ``(n_params-1, total_params)``) optionally followed by the support
+        rows; ``b_ineq`` is all-zeros.  ``C_eq`` has 0, 1, or 2 rows
+        depending on which of ``lower``/``upper`` are provided; ``d_eq``
+        carries the corresponding right-hand-side values.
 
     Raises
     ------
-    NotImplementedError
-        If ``nonneg_lower`` or ``X`` are non-default.
+    ValueError
+        If ``X`` has invalid shape, if ``X`` columns do not match
+        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted.
     """
-    if nonneg_lower:
-        raise NotImplementedError(
-            "Exponential support inequality (nonneg_lower) is not yet implemented "
-            "for the auglag solver.  It will be added in Slice 3."
-        )
-    if X is not None:
-        raise NotImplementedError(
-            "Per-row support constraints (X) are not yet implemented for the "
-            "auglag solver.  They will be added in Slice 3."
-        )
-
     total = total_params if total_params is not None else n_params
     mono = MonotonicityConstraint(n_params)
     D = mono.as_matrix()  # shape (n_params-1, n_params)
@@ -287,7 +288,50 @@ def build_constraint_matrices(
     if total > n_params:
         D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
 
-    m_ineq = D.shape[0]
+    # Support-feasibility rows for the exponential base distribution.  Same
+    # layout as in build_constraints: one row [1, 0, ..., 0] when no
+    # covariates, or one row [1, 0, ..., 0 | X_i] per training observation.
+    support_rows: NDArray[np.float64] | None = None
+    if nonneg_lower:
+        if X is None:
+            if total > n_params:
+                raise ValueError(
+                    "X must be provided when nonneg_lower=True and "
+                    "total_params > n_params so support-feasibility "
+                    "constraints can include the regression coefficients."
+                )
+            support_rows = np.zeros((1, total), dtype=np.float64)
+            support_rows[0, 0] = 1.0
+        else:
+            X_arr = np.asarray(X, dtype=np.float64)
+            if X_arr.ndim != 2:
+                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
+            if total_params is None:
+                raise ValueError(
+                    "total_params must be provided when nonneg_lower=True and "
+                    "X is passed. Expected full parameter length "
+                    "n_params + X.shape[1]."
+                )
+            if X_arr.shape[1] != total - n_params:
+                raise ValueError(
+                    f"X has {X_arr.shape[1]} columns but total_params - "
+                    f"n_params = {total - n_params}"
+                )
+            if X_arr.shape[1] == 0:
+                support_rows = np.zeros((1, total), dtype=np.float64)
+                support_rows[0, 0] = 1.0
+            else:
+                n_obs = X_arr.shape[0]
+                support_rows = np.zeros((n_obs, total), dtype=np.float64)
+                support_rows[:, 0] = 1.0
+                support_rows[:, n_params:] = X_arr
+
+    if support_rows is not None:
+        A_ineq = np.vstack([D, support_rows])
+    else:
+        A_ineq = D
+
+    m_ineq = A_ineq.shape[0]
 
     # Boundary equality rows.  Mirrors BoundaryConstraint: a single row per
     # active side picking out θ[0] (lower) or θ[n_params-1] (upper).
@@ -311,7 +355,7 @@ def build_constraint_matrices(
         d_eq = np.array(rhs, dtype=np.float64)
 
     return ConstraintMatrices(
-        A_ineq=D,
+        A_ineq=A_ineq,
         b_ineq=np.zeros(m_ineq, dtype=np.float64),
         C_eq=C_eq,
         d_eq=d_eq,

@@ -236,3 +236,105 @@ def test_auglag_bounded_boundary_satisfied(bounded_reference: dict) -> None:
         np.testing.assert_allclose(result.theta[0], config.lower, atol=1e-8)
     if config.upper is not None:
         np.testing.assert_allclose(result.theta[p - 1], config.upper, atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Exponential fixture — exercises the per-observation support-inequality
+# plumbing in build_constraint_matrices added in slice 3.
+# ---------------------------------------------------------------------------
+
+
+_REF_PATH_EXP = (
+    Path(__file__).resolve().parent
+    / "reference_data"
+    / "auglag"
+    / "exponential_n50_seed43.json"
+)
+
+
+@pytest.fixture(scope="module")
+def exponential_reference() -> dict:
+    """Load the exponential alabama::auglag reference JSON."""
+    if not _REF_PATH_EXP.is_file():
+        pytest.skip(f"Reference file not found: {_REF_PATH_EXP}")
+    with _REF_PATH_EXP.open() as fh:
+        return json.load(fh)
+
+
+def _exp_inputs(reference: dict) -> tuple:
+    """Decode arrays from the exponential fixture."""
+    y = np.array(reference["y"], dtype=np.float64)
+    X = np.array(reference["X"], dtype=np.float64)
+    support = tuple(float(v) for v in reference["support"])
+    return y, X, support
+
+
+def test_auglag_exponential_theta_matches_r(exponential_reference: dict) -> None:
+    """pymlt auglag theta must match alabama::auglag for exponential + covariates."""
+    from pymlt.basis import BernsteinBasis
+    from pymlt.optimizer import OptimizerConfig, optimize
+
+    y, X, support = _exp_inputs(exponential_reference)
+    theta_r = np.array(exponential_reference["theta"], dtype=np.float64)
+
+    basis = BernsteinBasis(order=exponential_reference["order"], support=support)
+    config = OptimizerConfig(solver="auglag")
+    result = optimize(basis, y, X=X, config=config, base_distribution="exponential")
+
+    np.testing.assert_allclose(
+        result.theta,
+        theta_r,
+        rtol=1e-6,
+        atol=1e-10,
+        err_msg=(
+            f"pymlt theta {result.theta} differs from R reference {theta_r} "
+            f"beyond tolerance (exponential fixture)"
+        ),
+    )
+
+
+def test_auglag_exponential_loglik_matches_r(exponential_reference: dict) -> None:
+    """pymlt auglag log-likelihood must match alabama::auglag for exponential."""
+    from pymlt.basis import BernsteinBasis
+    from pymlt.optimizer import OptimizerConfig, optimize
+
+    y, X, support = _exp_inputs(exponential_reference)
+    ll_r = float(exponential_reference["log_likelihood"])
+
+    basis = BernsteinBasis(order=exponential_reference["order"], support=support)
+    config = OptimizerConfig(solver="auglag")
+    result = optimize(basis, y, X=X, config=config, base_distribution="exponential")
+
+    np.testing.assert_allclose(
+        result.log_likelihood,
+        ll_r,
+        rtol=1e-6,
+        atol=1e-10,
+        err_msg=(
+            f"pymlt log-likelihood {result.log_likelihood:.10f} differs from "
+            f"R reference {ll_r:.10f} beyond tolerance (exponential fixture)"
+        ),
+    )
+
+
+def test_auglag_exponential_support_satisfied(exponential_reference: dict) -> None:
+    """theta_b[0] + X_i @ beta must be >= 0 for every training observation."""
+    from pymlt.basis import BernsteinBasis
+    from pymlt.optimizer import OptimizerConfig, optimize
+
+    y, X, support = _exp_inputs(exponential_reference)
+    order = int(exponential_reference["order"])
+
+    basis = BernsteinBasis(order=order, support=support)
+    config = OptimizerConfig(solver="auglag")
+    result = optimize(basis, y, X=X, config=config, base_distribution="exponential")
+
+    p = order + 1
+    theta_b = result.theta[:p]
+    beta = result.theta[p:]
+    # h(y_min | x_i) = theta_b[0] + X_i @ beta — the binding row of the
+    # per-observation support inequality.  Equality at the optimum is allowed.
+    h_min = theta_b[0] + X @ beta
+    assert np.all(h_min >= -1e-6), (
+        f"Support inequality violated at auglag optimum: min h_min = {h_min.min():.3e}"
+    )

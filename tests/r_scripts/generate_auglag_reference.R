@@ -6,13 +6,19 @@
 #   1. Lm-equivalent (order=1 Bernstein, normal base, no covariates)
 #      n=50 standard normal observations, seed=42, no boundary constraints.
 #      Tests the monotonicity-only path.
-#   2. Bounded Bernstein (order=5 Bernstein, normal base, no covariates)
-#      same data, theta[0] pinned to 0.0 and theta[6] pinned to 5.0.
+#   2. Bounded Bernstein (order=1 Bernstein, normal base, no covariates)
+#      same data, theta[0] pinned to -2.5.
 #      Tests the boundary-equality path (slice 2).
+#   3. Exponential with one covariate (order=1 Bernstein, exponential base)
+#      n=50 Exp(1) observations + one rnorm covariate.  Adds per-row
+#      support inequalities theta_b[0] + X_i * beta >= 0 alongside the
+#      monotonicity inequality.  Tests the support-inequality plumbing
+#      added in slice 3.
 #
 # Run with:  Rscript tests/r_scripts/generate_auglag_reference.R
 # Output:    tests/reference_data/auglag/lm_n50_seed42.json
 #            tests/reference_data/auglag/bernstein_bounded_n50_seed42.json
+#            tests/reference_data/auglag/exponential_n50_seed43.json
 #
 # The negative log-likelihood is implemented directly (consistent with pymlt)
 # to avoid dependence on mlt internal APIs.
@@ -247,3 +253,148 @@ outfile2 <- file.path(
 )
 write_json(out2, outfile2, digits = 15, auto_unbox = TRUE)
 cat(sprintf("Written: %s\n", outfile2))
+
+
+# ===========================================================================
+# Fixture 3: exponential with one covariate
+# ===========================================================================
+#
+# Exercises the per-observation support-inequality path added in slice 3.
+# Exponential base distribution requires h(y_i|x_i) >= 0 for every training
+# observation; under monotone theta_b the minimum of h over y is attained
+# at y_min where B_k(y_min) = [1, 0, ..., 0], so the per-row constraints
+# reduce to
+#   theta_b[1] + X_i * beta >= 0    for i = 1..n
+# (R 1-indexed; this is pymlt's theta_b[0] + X_i.beta).
+#
+# Design notes:
+#   * Order = 1 keeps the analytical NLL in a closed form (h'(y) constant
+#     across observations: (theta_b[2] - theta_b[1]) / span).
+#   * One rnorm covariate.  Both positive and negative values appear in X,
+#     so the binding-constraint set is non-trivial — the n=50 support
+#     inequalities are *not* all simultaneously slack at the optimum.
+#   * Independent seed (43) keeps the fixture deterministic without
+#     depending on which earlier fixture last consumed the RNG.
+# ---------------------------------------------------------------------------
+
+cat("\n--- Fixture 3: exponential, order=1, one covariate ---\n")
+
+set.seed(43)
+n3       <- 50L
+x3       <- rnorm(n3)             # single covariate
+y3       <- rexp(n3, rate = 1.0)  # Exp(1); guaranteed positive
+y3_min   <- min(y3)
+y3_max   <- max(y3)
+span3    <- y3_max - y3_min
+order3   <- 1L
+p3       <- order3 + 1L           # 2 Bernstein coefficients
+n_beta3  <- 1L
+total3   <- p3 + n_beta3
+
+# Order-1 Bernstein basis: B[i, 1] = 1 - t_i, B[i, 2] = t_i.
+t3 <- (y3 - y3_min) / span3
+B3 <- cbind(1 - t3, t3)
+
+# h_i = B[i, ] %*% theta_b + x_i * beta
+# log f_exp(h) = -h  (standard exponential density e^{-h} on [0, inf))
+# log h'(y)   = log((theta_b[2] - theta_b[1]) / span)   (constant in i)
+# NLL = sum(h_i) - n * log((theta_b[2] - theta_b[1]) / span)
+nll3 <- function(theta) {
+  tb     <- theta[1:p3]
+  beta   <- theta[(p3 + 1):total3]
+  h      <- as.numeric(B3 %*% tb + x3 * beta)
+  h_clip <- pmax(pmin(h, H_CLIP), -H_CLIP)
+  hprime <- (tb[2] - tb[1]) / span3
+  if (hprime <= 0) return(1e10)
+  sum(h_clip) - n3 * log(hprime)
+}
+
+# Gradient of NLL.  Within the clipping range,
+#   d/d(theta_b[j]) sum(h) = colSums(B)[j]
+#   d/d(beta)        sum(h) = sum(x)
+#   d/d(theta_b)    -n log h' = n * c(-1, 1) / (tb[2] - tb[1])
+#   d/d(beta)       -n log h' = 0
+grad_nll3 <- function(theta) {
+  tb         <- theta[1:p3]
+  beta       <- theta[(p3 + 1):total3]
+  # gradient of sum(h_i) -- ignores clipping (data range stays well within +/-30)
+  grad_tb_h  <- colSums(B3)
+  grad_b_h   <- sum(x3)
+  grad_tb_hp <- n3 * c(-1, 1) / (tb[2] - tb[1])
+  c(grad_tb_h - grad_tb_hp, grad_b_h)
+}
+
+# Constraints
+# - Monotonicity:  theta_b[2] - theta_b[1] >= 0     (1 row)
+# - Support:       theta_b[1] + x_i * beta >= 0     (n rows)
+hin3 <- function(theta) {
+  tb   <- theta[1:p3]
+  beta <- theta[(p3 + 1):total3]
+  c(tb[2] - tb[1], tb[1] + x3 * beta)
+}
+
+hin_jac3 <- function(theta) {
+  # Row 1 (monotonicity): d/d(theta_b[1]) = -1, d/d(theta_b[2]) = 1, d/d(beta) = 0
+  J_mono <- matrix(c(-1, 1, 0), nrow = 1L)
+  # Rows 2..n+1 (support):  d/d(theta_b[1]) = 1, d/d(theta_b[2]) = 0, d/d(beta) = x_i
+  J_supp <- cbind(rep(1.0, n3), rep(0.0, n3), x3)
+  rbind(J_mono, J_supp)
+}
+
+# Starting point: pymlt _initial_theta with no boundary pins:
+#   theta_b = linspace(0, 1, p) = c(0, 1);  beta = 0.
+# Monotonicity: 1 - 0 = 1 >= 0 (OK).
+# Support: 0 + x_i * 0 = 0 >= 0 for every i (feasible at the boundary).
+theta_init3 <- c(seq(0, 1, length.out = p3), rep(0.0, n_beta3))
+
+## Tolerances mirror fixture 2: with 50 active per-row support constraints
+## bound at zero, the default alabama settings (eps=1e-7, L-BFGS-B) terminate
+## with stationarity residual ~1e-2 on the free coordinate theta_b[2].  BFGS
+## + reltol=1e-15 + eps=1e-10 reaches the analytical KKT optimum
+##   theta_b[2] = n / sum(t)   with theta_b[1] = beta = 0
+## so the pymlt parity assertion at rtol=1e-6 holds.
+result3 <- auglag(
+  par           = theta_init3,
+  fn            = nll3,
+  gr            = grad_nll3,
+  hin           = hin3,
+  hin.jac       = hin_jac3,
+  control.outer = list(
+    mu0       = 10,
+    eps       = 1e-10,
+    itmax     = 200L,
+    method    = "BFGS",
+    ilack.max = 20L
+  ),
+  control.optim = list(maxit = 2000L, reltol = 1e-15)
+)
+
+theta_hat3 <- result3$par
+ll_hat3    <- -nll3(theta_hat3)
+
+cat(sprintf("theta:          [%s]\n",
+            paste(sprintf("%.10f", theta_hat3), collapse = ", ")))
+cat(sprintf("log_likelihood: %.10f\n", ll_hat3))
+cat(sprintf("convergence:    %d  (0 = success)\n", result3$convergence))
+cat(sprintf("kkt1:           %.3e\n", result3$kkt1))
+
+out3 <- list(
+  y               = as.numeric(y3),
+  X               = matrix(x3, ncol = 1L),
+  theta           = as.numeric(theta_hat3),
+  log_likelihood  = as.numeric(ll_hat3),
+  support         = as.numeric(c(y3_min, y3_max)),
+  order           = order3,
+  n               = n3,
+  seed            = 43L,
+  starting_point  = as.numeric(theta_init3),
+  base_distribution = "exponential",
+  r_version       = as.character(getRversion()),
+  alabama_version = as.character(packageVersion("alabama"))
+)
+
+outfile3 <- file.path(
+  "tests", "reference_data", "auglag", "exponential_n50_seed43.json"
+)
+write_json(out3, outfile3, digits = 15, auto_unbox = TRUE)
+cat(sprintf("Written: %s\n", outfile3))

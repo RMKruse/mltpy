@@ -598,6 +598,8 @@ def _optimize_auglag(
         lower=config.lower,
         upper=config.upper,
         total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        X=X if nonneg_lower else None,
     )
     # auglag always needs gradients for the L-BFGS-B inner solver
     obj = _make_objective(
