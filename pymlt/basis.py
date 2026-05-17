@@ -1112,3 +1112,230 @@ class InterceptBasis:
         _normalize_and_validate_support(y, self.support)
         y_arr = np.atleast_1d(np.asarray(y, dtype=float))
         return (y_arr - a)[:, None]
+
+
+# ---------------------------------------------------------------------------
+# Tensor-product interaction basis (stub — implementation in slice 2)
+# ---------------------------------------------------------------------------
+
+# Supported x-basis types for closed-form column-wise monotonicity constraints.
+# See ADR 0001, Decision 3.
+_SUPPORTED_X_BASIS_TYPES: tuple[type, ...] = (
+    BernsteinBasis,
+    OrdinalBasis,
+    InterceptBasis,
+)
+
+
+@dataclass
+class InteractionBasis:
+    """Tensor-product basis a(y) ⊗ b(x) for fully-interacting CTMs.
+
+    Models the transformation
+
+        h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)
+
+    where ``a`` is the *y-basis* (response) and ``b`` is the *x-basis*
+    (covariate), and ``Θ`` is a ``(p, q)`` coefficient matrix with
+    ``p = y_basis.order + 1`` and ``q = x_basis.order + 1``.
+
+    The parameter vector ``theta_`` stores ``vec_C(Θ)`` (row-major /
+    C-order flattening) of length ``p * q``.  See ADR 0001 for the full
+    design rationale.
+
+    **Supported x-basis types (initial release):**
+    :class:`BernsteinBasis`, :class:`OrdinalBasis`, :class:`InterceptBasis`.
+    Other x-basis types raise ``ValueError`` at constraint-building time
+    because the closed-form column-wise monotonicity guarantee requires the
+    x-basis to be non-negative and a partition of unity.
+
+    Parameters
+    ----------
+    y_basis:
+        Basis for the response variable ``y``.
+    x_basis:
+        Basis for the covariate(s) ``x``.  Must be one of the supported
+        types listed above.
+
+    Notes
+    -----
+    The ``evaluate`` and ``derivative`` signatures differ from the scalar
+    basis interface: they accept both ``y`` and ``X`` because the Kronecker
+    product requires both.  The model layer owns this two-argument call
+    convention.
+
+    References
+    ----------
+    See ``docs/adr/0001-tensor-product-interaction-basis.md``.
+    """
+
+    y_basis: (
+        BernsteinBasis
+        | LogBernsteinBasis
+        | PolynomialBasis
+        | LegendreBasis
+        | LogBasis
+        | InterceptBasis
+        | OrdinalBasis
+    )
+    x_basis: (
+        BernsteinBasis
+        | OrdinalBasis
+        | InterceptBasis
+    )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.x_basis, _SUPPORTED_X_BASIS_TYPES):
+            raise ValueError(
+                f"InteractionBasis requires an x-basis that is non-negative and "
+                f"a partition of unity (BernsteinBasis, OrdinalBasis, or "
+                f"InterceptBasis). Got {type(self.x_basis).__name__}. "
+                f"See docs/adr/0001-tensor-product-interaction-basis.md, "
+                f"Decision 3."
+            )
+
+    @property
+    def order(self) -> int:
+        """``y_basis.order`` — used by model layer for param-count bookkeeping."""
+        return self.y_basis.order
+
+    @property
+    def support(self) -> tuple[float, float]:
+        """Support of the y-basis."""
+        return self.y_basis.support
+
+    @property
+    def n_y_params(self) -> int:
+        """Number of y-basis functions: ``y_basis.order + 1``."""
+        return self.y_basis.order + 1
+
+    @property
+    def n_x_params(self) -> int:
+        """Number of x-basis functions: ``x_basis.order + 1``."""
+        return self.x_basis.order + 1
+
+    @property
+    def n_params(self) -> int:
+        """Total number of free parameters: ``n_y_params * n_x_params``."""
+        return self.n_y_params * self.n_x_params
+
+    def evaluate(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Row-wise Kronecker product a(y_i) ⊗ b(x_i), shape (n, p*q).
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate matrix, shape (n, d) where d is the dimension of the
+            x-basis input.
+
+        Returns
+        -------
+        NDArray of shape (n, p*q).
+
+        Raises
+        ------
+        NotImplementedError
+            Until slice 2 is implemented.
+        """
+        raise NotImplementedError(
+            "InteractionBasis.evaluate is not yet implemented. "
+            "This stub exists for import compatibility. "
+            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        )
+
+    def derivative(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+        order: int = 1,
+    ) -> NDArray[np.float64]:
+        """Row-wise Kronecker product da(y_i)/dy ⊗ b(x_i), shape (n, p*q).
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate matrix, shape (n, d).
+        order:
+            Derivative order.  Only order=1 is supported.
+
+        Returns
+        -------
+        NDArray of shape (n, p*q).
+
+        Raises
+        ------
+        NotImplementedError
+            Until slice 2 is implemented.
+        """
+        raise NotImplementedError(
+            "InteractionBasis.derivative is not yet implemented. "
+            "This stub exists for import compatibility. "
+            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        )
+
+    def evaluate_with_derivative(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return evaluate(y, X) and derivative(y, X) in one pass.
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate matrix, shape (n, d).
+
+        Returns
+        -------
+        B  : NDArray of shape (n, p*q)
+        dB : NDArray of shape (n, p*q)
+
+        Raises
+        ------
+        NotImplementedError
+            Until slice 2 is implemented.
+        """
+        raise NotImplementedError(
+            "InteractionBasis.evaluate_with_derivative is not yet implemented. "
+            "This stub exists for import compatibility. "
+            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        )
+
+    def integrate(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Running integral of a(y) ⊗ b(x) w.r.t. y.
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate matrix, shape (n, d).
+
+        Returns
+        -------
+        NDArray of shape (n, p*q).
+
+        Raises
+        ------
+        NotImplementedError
+            Until slice 2 is implemented.
+        """
+        raise NotImplementedError(
+            "InteractionBasis.integrate is not yet implemented. "
+            "This stub exists for import compatibility. "
+            "See docs/adr/0001-tensor-product-interaction-basis.md."
+        )

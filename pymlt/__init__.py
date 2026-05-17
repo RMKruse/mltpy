@@ -2,6 +2,7 @@
 
 from pymlt._auglag import AugLagOptions, AugLagResult
 from pymlt.basis import (
+    InteractionBasis,
     InterceptBasis,
     LegendreBasis,
     LogBasis,
@@ -64,6 +65,7 @@ __all__ = [
     "LegendreBasis",
     "LogBasis",
     "InterceptBasis",
+    "InteractionBasis",
     # Config
     "OptimizerConfig",
     "AugLagOptions",
