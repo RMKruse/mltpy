@@ -259,6 +259,150 @@ class BernsteinBasis:
 
 
 # ---------------------------------------------------------------------------
+# Log-scale Bernstein basis (for parametric survival on positive outcomes)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LogBernsteinBasis:
+    """Bernstein polynomial basis evaluated at log(y) for log-scale survival models.
+
+    Models the transformation h(y) = B_k(log(y)) · θ, where B_k is a standard
+    Bernstein basis on (log a, log b).  This parameterises Survreg models:
+    Weibull (min_extreme_value), log-normal (normal), and log-logistic (logistic).
+
+    The derivative on the original scale follows the chain rule:
+
+        dh/dy = (1/y) · dB_k(log y)/d(log y) · θ
+
+    Parameters
+    ----------
+    order:
+        Polynomial degree k.  The basis has k+1 functions.
+    support:
+        Closed interval (a, b) with 0 < a < b on the *original* positive scale.
+        Internally maps y → t = (log y − log a) / (log b − log a).
+    """
+
+    order: int
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if self.order < 0:
+            raise ValueError(f"order must be >= 0, got {self.order}")
+        a, b = self.support
+        if not (np.isfinite(a) and np.isfinite(b)):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if a <= 0.0:
+            raise ValueError(
+                f"support lower bound must be strictly positive for "
+                f"LogBernsteinBasis, got a={a}"
+            )
+        if a >= b:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+        self._log_basis = BernsteinBasis(
+            order=self.order, support=(float(np.log(a)), float(np.log(b)))
+        )
+
+    # ------------------------------------------------------------------
+    # Core methods (duck-type BernsteinBasis)
+    # ------------------------------------------------------------------
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Evaluate B_k(log y) at each observation.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in (support[0], support[1]).
+
+        Returns
+        -------
+        NDArray of shape (n, order+1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        if y_arr.ndim != 1:
+            raise ValueError(f"y must be 1-D, got shape {y_arr.shape}")
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        return self._log_basis.evaluate(np.log(y_arr))
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Analytical derivative d/dy [B_k(log y)] = (1/y) · dB_k/d(log y).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``support``.
+        order:
+            Derivative order: 1 (default).  Order 2 is not supported.
+
+        Returns
+        -------
+        NDArray of shape (n, self.order+1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1, or any observation lies outside ``support``.
+        """
+        if order != 1:
+            raise ValueError(
+                f"LogBernsteinBasis.derivative only supports order=1, got {order}"
+            )
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        dB_log = self._log_basis.derivative(np.log(y_arr), order=1)
+        return cast(NDArray[np.float64], dB_log / y_arr[:, None])
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return B_k(log y) and d/dy B_k(log y) in one pass.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``support``.
+
+        Returns
+        -------
+        B : NDArray of shape (n, order+1)
+        dB : NDArray of shape (n, order+1) — derivative w.r.t. y (includes 1/y)
+        """
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        B, dB_log = self._log_basis.evaluate_with_derivative(np.log(y_arr))
+        return B, cast(NDArray[np.float64], dB_log / y_arr[:, None])
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Not implemented for LogBernsteinBasis."""
+        raise NotImplementedError(
+            "LogBernsteinBasis.integrate() is not implemented. "
+            "Numerical integration should be performed on the log scale."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Ordinal cutpoint basis
 # ---------------------------------------------------------------------------
 
