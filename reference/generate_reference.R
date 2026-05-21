@@ -992,3 +992,50 @@ writeLines(format(probs_int, digits = 15),
 
 .write_interaction("Normal",   "normal")
 .write_interaction("Logistic", "logistic")
+
+# ---------------------------------------------------------------------------
+# Scaling-terms tracer (issue #70) — BoxCox + normal base, scale=~x_s.
+#
+# Heteroskedastic Box-Cox:  h(y | x_d, x_s) = h_0(y) * exp(x_s * gamma) - x_d * beta_R
+# (R / tram convention: shift enters with a minus; pymlt parameterises h + x_d * beta,
+# so pymlt.coef_ == -coef(fit)["x_d"].  Gamma is sign-aligned across R and pymlt; see
+# docs/adr/0002-scaling-terms.md, Decision 5.)
+#
+# Fixtures emitted:
+#   reference/scaling_boxcox_normal_y.txt        — response  (n values)
+#   reference/scaling_boxcox_normal_x_d.txt      — shift design column (n values)
+#   reference/scaling_boxcox_normal_x_s.txt      — scaling design column (n values)
+#   reference/scaling_boxcox_normal_support.txt  — "a b" (basis support)
+#   reference/scaling_boxcox_normal_theta.txt    — [theta_b | beta_tram | gamma]
+#                                                  flat vector from coef(as.mlt(fit))
+#   reference/scaling_boxcox_normal_loglik.txt   — logLik(fit)
+# ---------------------------------------------------------------------------
+set.seed(70)
+n_sc <- 100
+x_s_sc <- rnorm(n_sc)
+x_d_sc <- rnorm(n_sc)
+y_sc <- 1.0 + 0.5 * x_d_sc + rnorm(n_sc, sd = exp(0.3 * x_s_sc))
+a_sc <- min(y_sc) - 0.1
+b_sc <- max(y_sc) + 0.1
+df_sc <- data.frame(y = y_sc, x_d = x_d_sc, x_s = x_s_sc)
+fit_sc <- tram::BoxCox(y ~ x_d | x_s, data = df_sc,
+                       support = c(a_sc, b_sc), order = 5)
+theta_full_sc <- coef(as.mlt(fit_sc))
+ll_sc <- as.numeric(logLik(fit_sc))
+
+writeLines(format(y_sc,   digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_y.txt"))
+writeLines(format(x_d_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_x_d.txt"))
+writeLines(format(x_s_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_x_s.txt"))
+writeLines(paste(format(a_sc, digits = 15),
+                 format(b_sc, digits = 15)),
+           con = file.path(out_dir, "scaling_boxcox_normal_support.txt"))
+writeLines(format(theta_full_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_theta.txt"))
+writeLines(format(ll_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_loglik.txt"))
+
+cat(sprintf("scaling BoxCox normal ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_sc, length(theta_full_sc), ll_sc))

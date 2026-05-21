@@ -174,6 +174,7 @@ def _make_objective(
     dist: DistOps | None = None,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -240,6 +241,7 @@ def _make_objective(
                     dist=resolved_dist,
                     weights=weights,
                     offset=offset,
+                    scaling=scaling,
                 )
             except InfeasibleParameterError:
                 # Subgradient of the quadratic monotonicity-violation penalty
@@ -269,6 +271,7 @@ def _make_objective(
                     dist=resolved_dist,
                     weights=weights,
                     offset=offset,
+                    scaling=scaling,
                 )
             except InfeasibleParameterError:
                 return _BIG
@@ -300,6 +303,7 @@ def _initial_theta(
     X: NDArray[np.float64] | None,
     lower: float | None = None,
     upper: float | None = None,
+    q_s: int = 0,
 ) -> NDArray[np.float64]:
     """Default starting point: linearly spaced basis coefficients and zero
     beta components.
@@ -338,10 +342,17 @@ def _initial_theta(
         theta_b = np.linspace(0.0, 1.0, n_params) + (float(upper) - 1.0)
     else:
         theta_b = np.linspace(0.0, 1.0, n_params)
+    parts: list[NDArray[np.float64]] = [theta_b]
     if X is not None:
-        beta = np.zeros(X.shape[1])
-        return cast(NDArray[np.float64], np.concatenate([theta_b, beta]))
-    return theta_b
+        parts.append(np.zeros(X.shape[1]))
+    if q_s > 0:
+        # γ = 0 ⇒ exp(X_s · γ) = 1, so the scaled likelihood collapses to the
+        # shift likelihood at the start — the optimiser walks γ away from zero
+        # only if the data carry heteroskedastic signal (ADR 0002, Decision 3).
+        parts.append(np.zeros(q_s))
+    if len(parts) == 1:
+        return theta_b
+    return cast(NDArray[np.float64], np.concatenate(parts))
 
 
 def _perturb_and_project(
@@ -400,6 +411,7 @@ def optimize(
     base_distribution: BaseDistribution = "normal",
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """Fit Bernstein transformation model parameters by maximising log-likelihood.
 
@@ -440,6 +452,11 @@ def optimize(
         config = OptimizerConfig()
 
     if isinstance(basis, InteractionBasis):
+        if scaling is not None:
+            raise NotImplementedError(
+                "scaling= is not supported with InteractionBasis in v0.4 "
+                "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+            )
         return _optimize_interaction(
             basis=basis,
             y=y,
@@ -451,8 +468,17 @@ def optimize(
             offset=offset,
         )
 
+    q_s = scaling.shape[1] if scaling is not None else 0
+    if scaling is not None and base_distribution == "exponential":
+        # ADR 0002, Decision 3 — combining scaling with the exponential link
+        # would turn the support-feasibility row into a non-linear constraint
+        # that the current constraint scaffolding does not support.
+        raise NotImplementedError(
+            "scaling= is not supported with base_distribution='exponential' "
+            "(see docs/adr/0002-scaling-terms.md, Decision 3)."
+        )
     n_params = basis.order + 1
-    total_params = n_params + (X.shape[1] if X is not None else 0)
+    total_params = n_params + (X.shape[1] if X is not None else 0) + q_s
     nonneg_lower = base_distribution == "exponential"
 
     if isinstance(config.random_state, np.random.Generator):
@@ -460,7 +486,9 @@ def optimize(
     else:
         rng = np.random.default_rng(config.random_state)
 
-    theta_init = _initial_theta(n_params, X, lower=config.lower, upper=config.upper)
+    theta_init = _initial_theta(
+        n_params, X, lower=config.lower, upper=config.upper, q_s=q_s
+    )
 
     if config.solver == "auglag":
         return _optimize_auglag(
@@ -478,6 +506,7 @@ def optimize(
             nonneg_lower=nonneg_lower,
             rng=rng,
             theta_init=theta_init,
+            scaling=scaling,
         )
 
     # ------------------------------------------------------------------
@@ -505,6 +534,7 @@ def optimize(
         dist=dist,
         weights=weights,
         offset=offset,
+        scaling=scaling,
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
@@ -574,6 +604,7 @@ def optimize(
                 dist=dist,
                 weights=weights,
                 offset=offset,
+                scaling=scaling,
             ),
         )
         return OptimizationResult(
@@ -901,6 +932,7 @@ def _optimize_auglag(
     nonneg_lower: bool,
     rng: np.random.Generator,
     theta_init: NDArray[np.float64],
+    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """Augmented Lagrangian optimisation path (PHR).
 
@@ -928,6 +960,7 @@ def _optimize_auglag(
         dist=dist,
         weights=weights,
         offset=offset,
+        scaling=scaling,
     )
     auglag_opts = (
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
@@ -996,6 +1029,7 @@ def _optimize_auglag(
                 dist=dist,
                 weights=weights,
                 offset=offset,
+                scaling=scaling,
             ),
         )
         return OptimizationResult(

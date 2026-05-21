@@ -237,9 +237,17 @@ shift, interaction, and scaled paths.
 
 **Notation.** Let
 
-    f_i  := exp(x_s_i · γ)            (n,)     positive scaling factor
+    f_i  := exp(0.5 · x_s_i · γ)      (n,)     positive scaling factor
     b_i  := B_basis(y_i)              (n, p)   y-basis row
     db_i := dB_basis(y_i) / dy        (n, p)   y-basis derivative row.
+
+The factor of **0.5 in the exponent** matches mlt's internal convention
+(`mlt:::tmlt` evaluates `sterm <- exp(0.5 * <scaling_predict>)`), so γ is
+sign- *and* magnitude-aligned with R `tram`'s scaling coefficient.  This
+was discovered while implementing the tracer-bullet slice (#70) — without
+the 0.5 factor, pymlt's γ converges to half R's γ even though the fitted
+likelihood matches.  See `pymlt/likelihood.py::_ll_none` for the
+implementation.
 
 Then
 
@@ -290,13 +298,14 @@ R's `β`.
 
 For the scaling block, R `tram::Lm(..., scale = ~ z)` parameterises
 
-    h_R(y | x_d, x_s) = h_0(y) · exp(x_s · γ_R) − x_d · β_R,
+    h_R(y | x_d, x_s) = h_0(y) · exp(0.5 · x_s · γ_R) − x_d · β_R,
 
 i.e. the sign on `β` flips but the scaling block enters with the
-**same** sign as ours: `exp(+ x_s · γ_R)`.  So pymlt's `γ` is sign-aligned
+**same sign *and* magnitude** as ours.  So pymlt's `γ` is sign-aligned
 with R `tram`'s `γ` — *no flip required* when checking parity.
-(Confirmed against `tram::Lm`'s vignette §2 and against the R source
-in `tram/R/Lm.R`.)
+(Confirmed against `tram::Lm`'s vignette §2 and against `mlt:::tmlt`
+in `mlt/R/methods.R`, which evaluates `sterm <- exp(0.5 * predict(
+model, terms = "bscaling"))`.)
 
 **Documentation requirement for parity fixtures (#70, #77):** the
 fixture-generating R script (`reference/generate_reference.R`) writes

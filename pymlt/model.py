@@ -176,21 +176,47 @@ class ConditionalTransformationModel:
         scaling: NDArray[np.float64] | None = None,
     ) -> None:
         _get_dist(base_distribution)  # raises ValueError for unsupported values
+        scaling_arr: NDArray[np.float64] | None = None
+        scaling_feature_names: list[str] | None = None
         if scaling is not None:
-            # ADR 0002: scaling-terms public surface is reserved; the
-            # tracer-bullet implementation lands in #70.  This stub raises
-            # so downstream slices can import the kwarg name without a
-            # follow-up rename, while test fixtures fail loudly rather
-            # than silently returning a shift-only fit.
-            raise NotImplementedError(
-                "scaling= is reserved (see docs/adr/0002-scaling-terms.md); "
-                "the scaled-likelihood path lands in issue #70."
-            )
+            # ADR 0002 — only the exact + non-interaction path is implemented
+            # for the v0.4 tracer slice (#70).  Other censoring types,
+            # exponential base, and interaction-basis combinations are
+            # rejected up-front so failures are loud and local.
+            if isinstance(basis, InteractionBasis):
+                raise ValueError(
+                    "scaling= is not supported with InteractionBasis "
+                    "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+                )
+            if base_distribution == "exponential":
+                raise ValueError(
+                    "scaling= is not supported with base_distribution="
+                    "'exponential' (see docs/adr/0002-scaling-terms.md, "
+                    "Decision 3)."
+                )
+            cens = CensoringType.NONE if censoring is None else censoring
+            if cens is not CensoringType.NONE:
+                raise NotImplementedError(
+                    "scaling= is only implemented for CensoringType.NONE in "
+                    "v0.4 (issue #70 tracer slice; other censoring lands in #71)."
+                )
+            scaling_feature_names = _extract_feature_names(scaling)
+            scaling_arr = np.asarray(scaling, dtype=float)
+            if scaling_arr.ndim == 1:
+                scaling_arr = scaling_arr[:, None]
+            if scaling_arr.ndim != 2:
+                raise ValueError(
+                    "scaling must be a 2-D array of shape (n, q_s); got shape "
+                    f"{scaling_arr.shape}."
+                )
+            if not np.all(np.isfinite(scaling_arr)):
+                raise ValueError("scaling must be finite (no NaN or inf).")
         self.basis = basis
         self.censoring = censoring
         self.optimizer_config = optimizer_config
         self.base_distribution = base_distribution
-        self.scaling = scaling
+        self.scaling = scaling_arr
+        self.scaling_feature_names_in_: list[str] | None = scaling_feature_names
 
         # State — set by fit()
         self.theta_: NDArray[np.float64] | None = None
@@ -262,6 +288,23 @@ class ConditionalTransformationModel:
         p = self.basis.n_y_params
         q = self.basis.n_x_params
         return self.theta_.reshape(p, q)
+
+    @property
+    def gamma_coef_(self) -> NDArray[np.float64] | None:
+        """Scaling-block coefficients ``γ`` (length ``q_s``).
+
+        ``None`` before :meth:`fit` or when the model was constructed without
+        ``scaling=``.  Sign-aligned with R ``tram::*(scale=...)``'s scaling
+        block (no flip needed for parity comparisons; see
+        ``docs/adr/0002-scaling-terms.md``, Decision 5).
+        """
+        if self.theta_ is None or self.scaling is None:
+            return None
+        if isinstance(self.basis, InteractionBasis):
+            return None
+        p = self.basis.order + 1
+        q_d = 0 if self._X_train_ is None else self._X_train_.shape[1]
+        return self.theta_[p + q_d :]
 
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
@@ -385,6 +428,11 @@ class ConditionalTransformationModel:
         y_clean, X_clean = self._validate_input(y, X)
         n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
+        if self.scaling is not None and self.scaling.shape[0] != n:
+            raise ValueError(
+                f"scaling has {self.scaling.shape[0]} rows but y has {n} "
+                "observations; both must match."
+            )
 
         censoring_arg = CensoringType.NONE if self.censoring is None else self.censoring
         result = optimize(
@@ -396,6 +444,7 @@ class ConditionalTransformationModel:
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
+            scaling=self.scaling,
         )
 
         if not result.converged:
@@ -432,26 +481,35 @@ class ConditionalTransformationModel:
         self.weights_ = weights_clean
         self.offset_ = offset_clean
 
-        self.hessian_ = _hessian(
-            self.theta_,
-            self.basis,
-            y_clean,
-            X_clean,
-            censoring_arg,
-            base_distribution=self.base_distribution,
-            weights=weights_clean,
-            offset=offset_clean,
-        )
-        self._estfun_cache_ = _score_matrix(
-            self.theta_,
-            self.basis,
-            y_clean,
-            X_clean,
-            censoring_arg,
-            base_distribution=self.base_distribution,
-            weights=weights_clean,
-            offset=offset_clean,
-        )
+        if self.scaling is None:
+            self.hessian_ = _hessian(
+                self.theta_,
+                self.basis,
+                y_clean,
+                X_clean,
+                censoring_arg,
+                base_distribution=self.base_distribution,
+                weights=weights_clean,
+                offset=offset_clean,
+            )
+            self._estfun_cache_ = _score_matrix(
+                self.theta_,
+                self.basis,
+                y_clean,
+                X_clean,
+                censoring_arg,
+                base_distribution=self.base_distribution,
+                weights=weights_clean,
+                offset=offset_clean,
+            )
+        else:
+            # ADR 0002 — analytical Hessian / per-observation scores for the
+            # scaled path land in slice #77 (vcov / sandwich SE / Wald).
+            # The tracer-bullet slice (#70) leaves them as ``None``; vcov(),
+            # estfun(), and the diagnostics that depend on them raise via
+            # the existing "unexpectedly missing" checks.
+            self.hessian_ = None
+            self._estfun_cache_ = None
 
         # Snapshot the training response and covariates for diagnostics
         # (residuals()).  Defensive copies so caller mutations of the

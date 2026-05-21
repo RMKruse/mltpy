@@ -1660,7 +1660,11 @@ class TestResidualsIntervalCensoring:
 
 
 class TestScalingStub:
-    """ADR 0002 stub: scaling= kwarg is reserved until issue #70 lands."""
+    """ADR 0002 surface: scaling= kwarg behaviour on supported / unsupported
+    paths.  The tracer-bullet slice (#70) implements exact + normal scaled
+    likelihood; other censoring types, exponential base, and InteractionBasis
+    raise at construction so failures are loud rather than silent.
+    """
 
     def test_scaling_none_is_default_and_byte_identical(self):
         m1 = MLT(order=3, support=(0.0, 1.0))
@@ -1668,13 +1672,28 @@ class TestScalingStub:
         assert m1.scaling is None
         assert m2.scaling is None
 
-    def test_scaling_ndarray_raises_not_implemented_on_mlt(self):
+    def test_scaling_ndarray_accepted_on_supported_path(self):
         X_s = np.ones((20, 1), dtype=float)
-        with pytest.raises(NotImplementedError, match="0002-scaling-terms"):
-            MLT(order=3, support=(0.0, 1.0), scaling=X_s)
+        model = MLT(order=3, support=(0.0, 1.0), scaling=X_s)
+        assert model.scaling is not None
+        assert model.scaling.shape == (20, 1)
 
-    def test_scaling_ndarray_raises_not_implemented_on_base_class(self):
+    def test_scaling_rejected_for_exponential_base(self):
         X_s = np.ones((20, 1), dtype=float)
-        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
-        with pytest.raises(NotImplementedError, match="0002-scaling-terms"):
-            ConditionalTransformationModel(basis, scaling=X_s)
+        with pytest.raises(ValueError, match="0002-scaling-terms"):
+            MLT(
+                order=3,
+                support=(0.0, 1.0),
+                scaling=X_s,
+                base_distribution="exponential",
+            )
+
+    def test_scaling_rejected_for_censored_data(self):
+        X_s = np.ones((20, 1), dtype=float)
+        with pytest.raises(NotImplementedError, match="CensoringType.NONE"):
+            MLT(
+                order=3,
+                support=(0.0, 1.0),
+                scaling=X_s,
+                censoring=CensoringType.RIGHT,
+            )

@@ -387,6 +387,40 @@ def _split_theta(
     return theta_b, beta
 
 
+def _split_theta_scaled(
+    theta: NDArray[np.float64],
+    p: int,
+    q_d: int,
+    q_s: int,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+]:
+    """Split ``theta = [theta_b | beta | gamma]`` (ADR 0002, Decision 2).
+
+    Generalised three-way split used by the scaled-likelihood path.  Reduces
+    to the existing shift split when ``q_s = 0`` (``gamma is None``), so the
+    new branch is dead code for every non-scaling call site.
+
+    Parameters
+    ----------
+    theta:
+        Parameter vector of length ``p + q_d + q_s``.
+    p:
+        Number of Bernstein basis coefficients (``basis.order + 1``).
+    q_d:
+        Number of shift-design columns (``X.shape[1]``; ``0`` if no ``X``).
+    q_s:
+        Number of scaling-design columns (``scaling.shape[1]``; ``0`` if
+        ``scaling is None``).
+    """
+    theta_b = theta[:p]
+    beta = theta[p : p + q_d] if q_d > 0 else None
+    gamma = theta[p + q_d : p + q_d + q_s] if q_s > 0 else None
+    return theta_b, beta, gamma
+
+
 def _shift(
     h: NDArray[np.float64],
     X: NDArray[np.float64] | None,
@@ -1042,19 +1076,38 @@ def _ll_none(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for exactly observed (uncensored) data.
 
     Formula
     -------
-    ℓ = Σ w_i [log f(h_i) + log h'_i]
+    Shift-only path (``scaling is None``)::
+
+        h_i  = B_i · θ_b + X_i · β    (+ offset)
+        h'_i = B'_i · θ_b
+        ℓ    = Σ w_i [log f(h_i) + log h'_i]
+
+    Scaled path (``scaling is not None``; ADR 0002)::
+
+        f_i  = exp(0.5 · X_s_i · γ)        positive scaling factor
+        h_i  = (B_i · θ_b) · f_i + X_i · β (+ offset)
+        h'_i = (B'_i · θ_b) · f_i
+
+    The factor of ``0.5`` in the exponent matches mlt's internal convention
+    (``mlt:::tmlt`` evaluates ``sterm <- exp(0.5 * <scaling_predict>)``), so
+    pymlt's γ is sign- *and* magnitude-aligned with R ``tram``'s scaling
+    coefficient.  Without the 0.5, pymlt's γ would be half R's.
+
+    The parameter vector is ``theta = [theta_b | beta | gamma]`` of length
+    ``p + q_d + q_s``.
 
     Parameters
     ----------
     y : NDArray[np.float64]
         Exact observations.
     theta : NDArray[np.float64]
-        Concatenated parameter vector `[theta_b | beta]`.
+        Concatenated parameter vector ``[theta_b | beta | gamma]``.
     basis : BernsteinBasis
         Polynomial basis object.
     X : NDArray[np.float64] | None
@@ -1065,6 +1118,9 @@ def _ll_none(
         Per-observation weights of shape ``(len(y),)``. ``None`` = unit weights.
     offset : NDArray[np.float64] | None
         Per-observation offset of shape ``(len(y),)``. ``None`` = zero offset.
+    scaling : NDArray[np.float64] | None
+        Scaling-design matrix of shape ``(len(y), q_s)``.  ``None`` selects
+        the shift-only path.
 
     Returns
     -------
@@ -1072,14 +1128,28 @@ def _ll_none(
         Computed log-likelihood.
     """
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
 
     B, D = basis.evaluate_with_derivative(y)  # (n, p)
-    h_raw = _shift(B @ theta_b, X, beta)
+    h0 = B @ theta_b
+    hp0 = D @ theta_b
+    if scaling is not None and gamma is not None:
+        # f_i = exp(0.5 · X_s_i · γ); positive, scales both h_0 and h_0'
+        # uniformly.  The 0.5 matches mlt's internal convention
+        # (mlt:::tmlt uses exp(0.5 * <scaling_predict>)), so γ is
+        # sign- and magnitude-aligned with R `tram`'s scaling coefficient.
+        f = np.exp(0.5 * (scaling @ gamma))
+        h_raw = h0 * f
+        hp = hp0 * f
+    else:
+        h_raw = h0
+        hp = hp0
+    h_raw = _shift(h_raw, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = D @ theta_b  # h-prime; must be > 0
 
     with np.errstate(invalid="ignore", divide="ignore"):
         # For exponential, use the analytical formula log f_exp(h) = -h for
@@ -1307,27 +1377,72 @@ def _grad_none(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """∂(-ℓ)/∂θ for exact observations."""
+    """∂(-ℓ)/∂θ for exact observations.
+
+    For ``theta = [theta_b | beta | gamma]`` and ``f_i = exp(X_s_i · γ)``::
+
+        ∂h_i/∂θ_b  = B_i · f_i       ∂h'_i/∂θ_b  = B'_i · f_i
+        ∂h_i/∂β   = X_i             ∂h'_i/∂β   = 0
+        ∂h_i/∂γ   = h_0(y_i)·f_i·X_s_i   ∂h'_i/∂γ = h_0'(y_i)·f_i·X_s_i
+
+    Since ``ns_i = -∂log f(h_i)/∂h_i``, the gradient of ``-ℓ`` is
+
+        ∂(-ℓ)/∂θ = Σ_i w_i · [ns_i · ∂h_i/∂θ − (1/h'_i) · ∂h'_i/∂θ].
+
+    For γ, the ``(1/h'_i) · ∂h'_i/∂γ`` term simplifies to ``X_s_i`` because
+    ``h'_i = h_0'(y_i)·f_i``, leaving
+
+        ∂(-ℓ)/∂γ = X_s.T @ (w · ns · h_0 · f − w).
+    """
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
 
     B, D = basis.evaluate_with_derivative(y)  # (n, p)
-    h_raw = _shift(B @ theta_b, X, beta)
+    h0 = B @ theta_b
+    hp0 = D @ theta_b
+    if scaling is not None and gamma is not None:
+        # f = exp(0.5 · X_s · γ) — see _ll_none for the 0.5 rationale.
+        f = np.exp(0.5 * (scaling @ gamma))
+        h_raw = h0 * f
+        hp = hp0 * f
+    else:
+        f = None
+        h_raw = h0
+        hp = hp0
+    h_raw = _shift(h_raw, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = D @ theta_b
 
     ns = _neg_score(h, dist)  # -(∂ log f(h)/∂h)
-    # weighted: wns = w * ns; ihp = w / hp
     wns = ns if weights is None else weights * ns
-    ihp = _inverse_hp(hp, weights)
-    grad_b = B.T @ wns - D.T @ ihp
+    if f is not None:
+        # ∂h_i/∂θ_b = B_i · f_i;   ∂h'_i/∂θ_b = B'_i · f_i, but
+        # (1/h'_i) · ∂h'_i/∂θ_b = B'_i / h_0'(y_i) — the f cancels.
+        ihp0 = _inverse_hp(hp0, weights)
+        grad_b = (B * f[:, None]).T @ wns - D.T @ ihp0
+    else:
+        ihp = _inverse_hp(hp, weights)
+        grad_b = B.T @ wns - D.T @ ihp
 
+    parts: list[NDArray[np.float64]] = [grad_b]
     if X is not None and beta is not None:
-        return cast(NDArray[np.float64], np.concatenate([grad_b, X.T @ wns]))
-    return grad_b
+        parts.append(X.T @ wns)
+    if scaling is not None and gamma is not None and f is not None:
+        # f = exp(0.5 · X_s · γ) ⇒ ∂f/∂γ = 0.5 · X_s · f.
+        # ∂(-ℓ)/∂γ = 0.5 · X_s.T @ (w · (ns · h_0 · f − 1)).
+        if weights is None:
+            term = ns * h0 * f - 1.0
+        else:
+            term = weights * (ns * h0 * f - 1.0)
+        parts.append(0.5 * (scaling.T @ term))
+    if len(parts) == 1:
+        return grad_b
+    return cast(NDArray[np.float64], np.concatenate(parts))
 
 
 def _grad_right(
@@ -1562,21 +1677,34 @@ def _ll_and_grad_none(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for exact observations."""
+    """Combined ℓ and ∂(-ℓ)/∂θ for exact observations.  See :func:`_grad_none`
+    for the scaled-path formulae."""
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
 
     B, D = basis.evaluate_with_derivative(y)
-    h_raw = _shift(B @ theta_b, X, beta)
+    h0 = B @ theta_b
+    hp0 = D @ theta_b
+    if scaling is not None and gamma is not None:
+        # f = exp(0.5 · X_s · γ) — see _ll_none for the 0.5 rationale.
+        f = np.exp(0.5 * (scaling @ gamma))
+        h_raw = h0 * f
+        hp = hp0 * f
+    else:
+        f = None
+        h_raw = h0
+        hp = hp0
+    h_raw = _shift(h_raw, X, beta)
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = D @ theta_b
 
     ns = _neg_score(h, dist)
     wns = ns if weights is None else weights * ns
-    ihp = _inverse_hp(hp, weights)
     with np.errstate(invalid="ignore", divide="ignore"):
         # Smooth analytical extension for exponential at h<0 — see _ll_none.
         log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
@@ -1584,12 +1712,24 @@ def _ll_and_grad_none(
             ll = np.dot(weights, log_pdf_h + np.log(hp))
         else:
             ll = np.sum(log_pdf_h) + np.sum(np.log(hp))
-        grad_b = B.T @ wns - D.T @ ihp
+        if f is not None:
+            ihp0 = _inverse_hp(hp0, weights)
+            grad_b = (B * f[:, None]).T @ wns - D.T @ ihp0
+        else:
+            ihp = _inverse_hp(hp, weights)
+            grad_b = B.T @ wns - D.T @ ihp
+    parts: list[NDArray[np.float64]] = [grad_b]
     if X is not None and beta is not None:
-        grad = np.concatenate([grad_b, X.T @ wns])
-    else:
-        grad = grad_b
-    return ll, cast(NDArray[np.float64], grad)
+        parts.append(X.T @ wns)
+    if scaling is not None and gamma is not None and f is not None:
+        # f = exp(0.5 · X_s · γ) — factor 0.5 (see _ll_none / _grad_none).
+        if weights is None:
+            term = ns * h0 * f - 1.0
+        else:
+            term = weights * (ns * h0 * f - 1.0)
+        parts.append(0.5 * (scaling.T @ term))
+    grad: NDArray[np.float64] = grad_b if len(parts) == 1 else np.concatenate(parts)
+    return ll, grad
 
 
 def _ll_and_grad_right(
@@ -2446,8 +2586,20 @@ def _log_likelihood_from_dist(
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> float:
-    """Internal log-likelihood evaluator for a pre-resolved base distribution."""
+    """Internal log-likelihood evaluator for a pre-resolved base distribution.
+
+    ``scaling`` is only honoured on the exact / ``CensoringType.NONE`` branch
+    in v0.4 (issue #70 tracer slice).  Other censoring types and the
+    interaction-basis path raise :class:`NotImplementedError` when a
+    non-``None`` scaling is supplied.
+    """
+    if scaling is not None and isinstance(basis, InteractionBasis):
+        raise NotImplementedError(
+            "scaling= is not supported with InteractionBasis in v0.4 "
+            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+        )
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError(
@@ -2467,15 +2619,35 @@ def _log_likelihood_from_dist(
             )
         return float(result)
 
+    if scaling is not None and censoring is not CensoringType.NONE:
+        raise NotImplementedError(
+            "scaling= is only implemented for CensoringType.NONE in v0.4 "
+            "(issue #70 tracer slice; other censoring lands in #71)."
+        )
+
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
         result = _ll_none(
-            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y_arr,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
     else:
         if censoring is CensoringType.NONE:
             result = _ll_none(
-                y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+                y.exact,
+                theta,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
         elif censoring is CensoringType.RIGHT:
             result = _ll_right(
@@ -2513,8 +2685,23 @@ def _negative_log_likelihood_from_dist(
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> float | tuple[float, NDArray[np.float64]]:
-    """Internal NLL evaluator for a pre-resolved base distribution."""
+    """Internal NLL evaluator for a pre-resolved base distribution.
+
+    ``scaling`` is only honoured on the exact / ``CensoringType.NONE`` branch
+    in v0.4 (issue #70 tracer slice).
+    """
+    if scaling is not None and isinstance(basis, InteractionBasis):
+        raise NotImplementedError(
+            "scaling= is not supported with InteractionBasis in v0.4 "
+            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+        )
+    if scaling is not None and censoring is not CensoringType.NONE:
+        raise NotImplementedError(
+            "scaling= is only implemented for CensoringType.NONE in v0.4 "
+            "(issue #70 tracer slice; other censoring lands in #71)."
+        )
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError(
@@ -2547,7 +2734,15 @@ def _negative_log_likelihood_from_dist(
 
     if not gradient:
         return -_log_likelihood_from_dist(
-            theta, basis, y, X, censoring, dist, weights=weights, offset=offset
+            theta,
+            basis,
+            y,
+            X,
+            censoring,
+            dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
 
     # Single pass: share basis.evaluate / basis.derivative and mask slicing
@@ -2555,11 +2750,25 @@ def _negative_log_likelihood_from_dist(
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
         ll, grad = _ll_and_grad_none(
-            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y_arr,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
     elif censoring is CensoringType.NONE:
         ll, grad = _ll_and_grad_none(
-            y.exact, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y.exact,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
     elif censoring is CensoringType.RIGHT:
         ll, grad = _ll_and_grad_right(
@@ -2600,6 +2809,7 @@ def log_likelihood(
     base_distribution: BaseDistribution = "normal",
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> float:
     """Log-likelihood of a conditional transformation model.
 
@@ -2648,7 +2858,15 @@ def log_likelihood(
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
     return _log_likelihood_from_dist(
-        theta, basis, y, X, censoring, dist, weights=weights, offset=offset
+        theta,
+        basis,
+        y,
+        X,
+        censoring,
+        dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
     )
 
 
@@ -2662,6 +2880,7 @@ def negative_log_likelihood(
     base_distribution: BaseDistribution = "normal",
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> float | tuple[float, NDArray[np.float64]]:
     """Negative log-likelihood (objective for minimisation) with optional gradient.
 
@@ -2690,7 +2909,16 @@ def negative_log_likelihood(
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
     return _negative_log_likelihood_from_dist(
-        theta, basis, y, X, censoring, gradient, dist, weights=weights, offset=offset
+        theta,
+        basis,
+        y,
+        X,
+        censoring,
+        gradient,
+        dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
     )
 
 
