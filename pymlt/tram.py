@@ -151,20 +151,24 @@ class _TramModel(MLT):
         return "\n".join(lines)
 
     def _coef_table(self) -> str | None:
-        """Format a Wald coefficient table for the ``beta`` block.
+        """Format Wald coefficient tables for the ``β`` (and ``γ``) blocks.
 
         Returns ``None`` when the fitted model has no covariates, when the
         model uses an :class:`~pymlt.basis.InteractionBasis` (the tensor
         product has no flat ``beta`` block to tabulate), or if the Hessian
-        is singular so that standard errors cannot be computed.
+        is singular so that standard errors cannot be computed.  When the
+        model was fitted with ``scaling=`` (γ block present), the scaling
+        coefficients are tabulated below the shift coefficients under a
+        ``Scaling coefficients`` heading.
         """
         if self.theta_ is None:
             return None
         if isinstance(self.basis, InteractionBasis):
             return None
         p = self.basis.order + 1
-        q = self.theta_.size - p
-        if q <= 0:
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        if q_d <= 0 and q_s <= 0:
             return None
 
         try:
@@ -172,8 +176,21 @@ class _TramModel(MLT):
         except RuntimeError:
             return "  [Standard errors not available: Hessian matrix is singular.]"
 
-        names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q)]
-        return _format_wald_table(names, self.theta_[p:], se[p:])
+        sections: list[str] = []
+        if q_d > 0:
+            names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q_d)]
+            sections.append(
+                _format_wald_table(names, self.theta_[p : p + q_d], se[p : p + q_d])
+            )
+        if q_s > 0:
+            s_names = self.scaling_feature_names_in_ or [
+                f"X{j + 1}" for j in range(q_s)
+            ]
+            sections.append("Scaling coefficients:")
+            sections.append(
+                _format_wald_table(s_names, self.theta_[p + q_d :], se[p + q_d :])
+            )
+        return "\n".join(sections)
 
     def plot(
         self,
@@ -283,6 +300,23 @@ class BoxCox(_TramModel):
         Polynomial degree of the Bernstein basis.  Defaults to 6.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
+    censoring:
+        Censoring type of the response data.  Defaults to
+        :attr:`~pymlt.variables.CensoringType.NONE`.  Pass
+        :attr:`~pymlt.variables.CensoringType.RIGHT`,
+        :attr:`~pymlt.variables.CensoringType.LEFT`, or
+        :attr:`~pymlt.variables.CensoringType.INTERVAL` together with a
+        :class:`~pymlt.variables.CensoredData` ``y`` to fit the censored
+        Box-Cox likelihood.
+    scaling:
+        Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
+        R ``tram::BoxCox(..., scale=~x_s)``.  Threads through to the
+        scaled-baseline likelihood (issue #71) and the scaled-predict
+        path (issue #72).  When supplied, the fitted parameter vector
+        gains a γ block (length ``q_s``) exposed as :attr:`gamma_`, and
+        :meth:`predict` requires ``X_scale_new``.  Sign-aligned with the
+        R ``scale=`` block (ADR 0002, Decision 5); see
+        ``docs/adr/0002-scaling-terms.md``.
 
     Examples
     --------
@@ -301,14 +335,65 @@ class BoxCox(_TramModel):
         support: tuple[float, float],
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
+        censoring: CensoringType = CensoringType.NONE,
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
         super().__init__(
             order=order,
             support=support,
-            censoring=CensoringType.NONE,
+            censoring=censoring,
             optimizer_config=optimizer_config,
             base_distribution="normal",
+            scaling=scaling,
         )
+
+    @property
+    def gamma_(self) -> NDArray[np.float64]:
+        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
+
+        Sign-aligned with R ``tram::BoxCox(..., scale=~x_s)``'s scaling
+        block (ADR 0002, Decision 5).
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
+        gamma = self.gamma_coef_
+        if gamma is None:
+            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
+        return gamma
+
+    @property
+    def feature_names_scaling_(self) -> list[str]:
+        """Column names of the scaling-design matrix supplied at fit time.
+
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError(
+                "Model was not fitted with scaling=; "
+                "feature_names_scaling_ is undefined."
+            )
+        names = self.scaling_feature_names_in_
+        if names is None:
+            q_s = self.scaling.shape[1]
+            return [f"X{j + 1}" for j in range(q_s)]
+        return names
 
     def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Evaluate the raw fitted transformation h(y) = B_k(y) @ theta_b.
