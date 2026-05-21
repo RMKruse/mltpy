@@ -173,12 +173,24 @@ class ConditionalTransformationModel:
         censoring: CensoringType | None = CensoringType.NONE,
         optimizer_config: OptimizerConfig | None = None,
         base_distribution: BaseDistribution = "normal",
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
         _get_dist(base_distribution)  # raises ValueError for unsupported values
+        if scaling is not None:
+            # ADR 0002: scaling-terms public surface is reserved; the
+            # tracer-bullet implementation lands in #70.  This stub raises
+            # so downstream slices can import the kwarg name without a
+            # follow-up rename, while test fixtures fail loudly rather
+            # than silently returning a shift-only fit.
+            raise NotImplementedError(
+                "scaling= is reserved (see docs/adr/0002-scaling-terms.md); "
+                "the scaled-likelihood path lands in issue #70."
+            )
         self.basis = basis
         self.censoring = censoring
         self.optimizer_config = optimizer_config
         self.base_distribution = base_distribution
+        self.scaling = scaling
 
         # State — set by fit()
         self.theta_: NDArray[np.float64] | None = None
@@ -2097,6 +2109,7 @@ class MLT(ConditionalTransformationModel):
         censoring: CensoringType = CensoringType.NONE,
         optimizer_config: OptimizerConfig | None = None,
         base_distribution: BaseDistribution = "normal",
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
         basis = BernsteinBasis(order=order, support=support)
         super().__init__(
@@ -2104,6 +2117,7 @@ class MLT(ConditionalTransformationModel):
             censoring=censoring,
             optimizer_config=optimizer_config,
             base_distribution=base_distribution,
+            scaling=scaling,
         )
         # Store for repr
         self._order = order

@@ -1657,3 +1657,24 @@ class TestResidualsIntervalCensoring:
         assert r_score.shape == (n,)
         assert np.all(np.isfinite(r_score))
         assert np.all(np.isfinite(r_cs))
+
+
+class TestScalingStub:
+    """ADR 0002 stub: scaling= kwarg is reserved until issue #70 lands."""
+
+    def test_scaling_none_is_default_and_byte_identical(self):
+        m1 = MLT(order=3, support=(0.0, 1.0))
+        m2 = MLT(order=3, support=(0.0, 1.0), scaling=None)
+        assert m1.scaling is None
+        assert m2.scaling is None
+
+    def test_scaling_ndarray_raises_not_implemented_on_mlt(self):
+        X_s = np.ones((20, 1), dtype=float)
+        with pytest.raises(NotImplementedError, match="0002-scaling-terms"):
+            MLT(order=3, support=(0.0, 1.0), scaling=X_s)
+
+    def test_scaling_ndarray_raises_not_implemented_on_base_class(self):
+        X_s = np.ones((20, 1), dtype=float)
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(NotImplementedError, match="0002-scaling-terms"):
+            ConditionalTransformationModel(basis, scaling=X_s)
