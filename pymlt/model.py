@@ -574,6 +574,16 @@ class ConditionalTransformationModel:
                 raise ValueError(
                     "InteractionBasis model requires X_new for prediction."
                 )
+            if X_arr.shape[0] != y_arr.shape[0]:
+                raise ValueError(
+                    f"X_new has {X_arr.shape[0]} rows but y_new has "
+                    f"{y_arr.shape[0]} elements; they must match for "
+                    "InteractionBasis prediction."
+                )
+            if what == "quantile":
+                return self._predict_quantile_interaction(
+                    y_arr, X_arr, offset=offset_arr
+                )
             x_1d = self.basis._coerce_x(X_arr)
             design = self.basis.evaluate(y_arr, x_1d)  # (m, p*q)
             d_design = self.basis.derivative(y_arr, x_1d)  # (m, p*q)
@@ -627,8 +637,7 @@ class ConditionalTransformationModel:
             if what == "logodds":
                 return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
             raise ValueError(
-                f"what={what!r} is not supported for InteractionBasis predict. "
-                "Quantile prediction is not yet implemented for interaction models."
+                f"what={what!r} is not supported for InteractionBasis predict."
             )
 
         # ------------------------------------------------------------------
@@ -925,6 +934,93 @@ class ConditionalTransformationModel:
             if np.max(hi - lo) < _BRENTQ_EPS:
                 break
             below = _h_vec(mid) < z
+            lo = np.where(below, mid, lo)
+            hi = np.where(below, hi, mid)
+            mid = 0.5 * (lo + hi)
+        return cast(NDArray[np.float64], mid)
+
+    def _predict_quantile_interaction(
+        self,
+        probs: NDArray[np.float64],
+        X: NDArray[np.float64],
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Row-wise quantile inversion for ``InteractionBasis`` models.
+
+        For each row ``i``, solve ``h(q_i | x_i) = F⁻¹(probs_i) − offset_i``
+        where ``h(y|x) = a(y)ᵀ Θ b(x)`` and ``F⁻¹`` is the base-distribution
+        quantile.  Per-row bracket: ``[h(a, x_i) + ε, h(b, x_i) − ε]``.
+
+        Parameters
+        ----------
+        probs:
+            Probabilities in ``(0, 1)``, shape ``(m,)``.
+        X:
+            Covariate matrix, shape ``(m, ?)`` — already validated to match
+            the y-length and to be 2-D by the caller.
+        offset:
+            Optional per-row offset added to ``h`` before inversion,
+            shape ``(m,)`` or ``None``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with values in ``basis.support``.
+        """
+        assert isinstance(self.basis, InteractionBasis)
+        assert self.theta_ is not None
+        a, b = self.basis.support
+        probs_arr = np.asarray(probs, dtype=np.float64)
+        m = probs_arr.shape[0]
+        if m == 0:
+            return np.empty(0, dtype=float)
+
+        p = self.basis.n_y_params
+        q = self.basis.n_x_params
+        Theta = self.theta_.reshape(p, q)  # (p, q)
+
+        x_1d = self.basis._coerce_x(X)
+        B_x = self.basis.x_basis.evaluate(x_1d)  # (m, q)
+        # Per-row baseline-θ vector along the y-axis: theta_rows[i] = Θ · b(x_i).
+        theta_rows = B_x @ Theta.T  # (m, p)
+
+        # Endpoint values h(a, x_i) and h(b, x_i) define the per-row bracket.
+        A_a = self.basis.y_basis.evaluate(np.full(1, a, dtype=float))[0]  # (p,)
+        A_b = self.basis.y_basis.evaluate(np.full(1, b, dtype=float))[0]  # (p,)
+        h_a = theta_rows @ A_a  # (m,)
+        h_b = theta_rows @ A_b  # (m,)
+        z_min = h_a + _BRENTQ_EPS
+        z_max = h_b - _BRENTQ_EPS
+
+        dist = _get_dist(self.base_distribution)
+        shift: NDArray[np.float64] = (
+            np.zeros(m, dtype=np.float64)
+            if offset is None
+            else np.asarray(offset, dtype=np.float64)
+        )
+        z_raw = dist.ppf(probs_arr) - shift
+        if np.any((z_raw < z_min) | (z_raw > z_max)):
+            warnings.warn(
+                "predict(what='quantile'): F⁻¹(p) − offset exceeds the per-row "
+                "bracket [h(a, x_i)+ε, h(b, x_i)−ε] at one or more points; "
+                "clipping for numerical stability.  Quantiles at these points "
+                "are saturated at the basis endpoints, not the true asymptotic "
+                "limit. Consider widening the y-basis support or restricting "
+                "probs away from 0/1.",
+                stacklevel=3,
+            )
+        z = np.clip(z_raw, z_min, z_max)
+
+        # Vectorised bisection: at each midpoint evaluate the y-basis once and
+        # take the row-wise inner product with the per-row baseline-θ.
+        lo = np.full(m, a, dtype=float)
+        hi = np.full(m, b, dtype=float)
+        mid = 0.5 * (lo + hi)
+        for _ in range(60):
+            if np.max(hi - lo) < _BRENTQ_EPS:
+                break
+            A_mid = self.basis.y_basis.evaluate(mid)  # (m, p)
+            h_mid = np.einsum("ij,ij->i", A_mid, theta_rows)
+            below = h_mid < z
             lo = np.where(below, mid, lo)
             hi = np.where(below, hi, mid)
             mid = 0.5 * (lo + hi)
@@ -1821,6 +1917,131 @@ class ConditionalTransformationModel:
         # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf.
         u = np.clip(rng.uniform(size=n), _SIMULATE_U_EPS, 1.0 - _SIMULATE_U_EPS)
         return self.predict(u, X_new=X_arr, what="quantile")
+
+    def plot(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        ax: object = None,
+    ) -> object:
+        """Plot the estimated CDF and density.
+
+        For non-interacting models, draws a single CDF/density curve over
+        ``y`` (covariates are ignored — the unconditional baseline is shown).
+        For :class:`InteractionBasis` models, draws one CDF curve and one
+        density curve per row of ``X`` on a shared y-axis.
+
+        Parameters
+        ----------
+        y:
+            Response values at which to evaluate the model.  Must lie within
+            ``basis.support``.
+        X:
+            Required for :class:`InteractionBasis` models: a 2-D matrix whose
+            rows are the representative covariate values at which to draw the
+            conditional curves.  Ignored for non-interacting models.
+        ax:
+            Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``,
+            or a single ``matplotlib.axes.Axes`` instance.  If a single axes
+            is given, only the CDF is plotted.  If ``None``, a new figure
+            with two subplots is created automatically.
+
+        Returns
+        -------
+        list of matplotlib.axes.Axes, or matplotlib.axes.Axes
+            ``[ax_cdf, ax_pdf]`` if two panels are plotted, otherwise the
+            single ``ax_cdf``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        ImportError
+            If matplotlib is not installed.
+        ValueError
+            If ``X`` is not provided for an interacting model, or if it
+            cannot be interpreted as a 2-D array.
+        TypeError
+            If ``ax`` is provided but cannot be unpacked into two axes nor
+            used as a single axes.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as exc:
+            raise ImportError(
+                "matplotlib is required for plot(). "
+                "Install with: pip install 'pymlt[plots]'"
+            ) from exc
+
+        self._check_is_fitted()
+        y_arr = np.asarray(y, dtype=float).ravel()
+        y_sorted = np.sort(y_arr)
+
+        is_interaction = isinstance(self.basis, InteractionBasis)
+        X_rows: NDArray[np.float64] | None = None
+        if is_interaction:
+            if X is None:
+                raise ValueError(
+                    "plot() on an InteractionBasis model requires X — a 2-D "
+                    "matrix whose rows are the representative covariate "
+                    "values at which to draw conditional curves."
+                )
+            X_rows = np.asarray(X, dtype=float)
+            if X_rows.ndim == 1:
+                X_rows = X_rows[:, None]
+            if X_rows.ndim != 2:
+                raise ValueError(
+                    f"plot(): X must be 1-D or 2-D; got {X_rows.ndim}-D array."
+                )
+
+        if ax is not None:
+            if isinstance(ax, tuple) and len(ax) == 2:
+                ax_cdf, ax_pdf = ax
+            elif hasattr(ax, "plot"):
+                ax_cdf = ax
+                ax_pdf = None
+            else:
+                raise TypeError(
+                    "ax must be a 2-tuple (ax_cdf, ax_pdf) or a single Axes"
+                )
+            fig = None
+        else:
+            fig, (ax_cdf, ax_pdf) = plt.subplots(1, 2, figsize=(10, 4))
+
+        if is_interaction:
+            assert X_rows is not None
+            m = y_sorted.shape[0]
+            for x_row in X_rows:
+                X_rep = np.broadcast_to(x_row, (m, x_row.shape[0])).astype(float)
+                cdf = self.predict(y_sorted, X_new=X_rep, what="distribution")
+                ax_cdf.plot(y_sorted, cdf, label=f"x={np.round(x_row, 3).tolist()}")
+                if ax_pdf is not None:
+                    pdf = self.predict(y_sorted, X_new=X_rep, what="density")
+                    ax_pdf.plot(y_sorted, pdf, label=f"x={np.round(x_row, 3).tolist()}")
+            ax_cdf.legend(fontsize="small")
+            if ax_pdf is not None:
+                ax_pdf.legend(fontsize="small")
+        else:
+            cdf = self.predict(y_sorted, what="distribution")
+            ax_cdf.plot(y_sorted, cdf)
+            if ax_pdf is not None:
+                pdf = self.predict(y_sorted, what="density")
+                ax_pdf.plot(y_sorted, pdf)
+
+        ax_cdf.set_xlabel("y")
+        ax_cdf.set_ylabel("F(y|x)" if is_interaction else "F(y)")
+        ax_cdf.set_title(f"{type(self).__name__} — CDF")
+        if ax_pdf is not None:
+            ax_pdf.set_xlabel("y")
+            ax_pdf.set_ylabel("f(y|x)" if is_interaction else "f(y)")
+            ax_pdf.set_title(f"{type(self).__name__} — Density")
+
+        if fig is not None:
+            fig.tight_layout()
+
+        if ax_pdf is None:
+            return ax_cdf
+        return [ax_cdf, ax_pdf]
 
     def __repr__(self) -> str:
         name = type(self).__name__

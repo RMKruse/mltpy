@@ -939,6 +939,11 @@ writeLines(format(y_grid_int, digits = 15),
 writeLines(format(x_grid_int, digits = 15),
            con = file.path(out_dir, "interaction_bs_bs_x_grid.txt"))
 
+# Probability grid for quantile predictions on interaction fixtures (issue #67).
+probs_int <- c(0.10, 0.25, 0.50, 0.75, 0.90)
+writeLines(format(probs_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_probs.txt"))
+
 .write_interaction <- function(todistr, label) {
   ctm_int <- ctm(response = b_y_int,
                  interacting = b_x_int,
@@ -950,6 +955,16 @@ writeLines(format(x_grid_int, digits = 15),
                                    type = "distribution"))
   pdf_int    <- as.numeric(predict(fit_int, newdata = grid_int,
                                    type = "density"))
+  surv_int   <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "survivor"))
+  haz_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "hazard"))
+  # Quantile predictions: q[k, j] = inverse h(.|x_grid_int[j]) at probs_int[k]
+  q_mat      <- predict(fit_int,
+                        newdata = data.frame(x = x_grid_int),
+                        type = "quantile",
+                        prob = probs_int)
+  q_flat     <- as.numeric(q_mat)  # column-major: x varies slowest
   writeLines(format(theta_int, digits = 15),
              con = file.path(out_dir,
                              sprintf("interaction_bs_bs_%s_theta.txt", label)))
@@ -962,6 +977,15 @@ writeLines(format(x_grid_int, digits = 15),
   writeLines(format(pdf_int, digits = 15),
              con = file.path(out_dir,
                              sprintf("interaction_bs_bs_%s_pdf.txt", label)))
+  writeLines(format(surv_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_survivor.txt", label)))
+  writeLines(format(haz_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_hazard.txt", label)))
+  writeLines(format(q_flat, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_quantile.txt", label)))
   cat(sprintf("interaction_bs_bs %-8s ref: n=%d, p=%d, q=%d, ll=%.6f\n",
               label, n_int, p_int, q_int, ll_int))
 }

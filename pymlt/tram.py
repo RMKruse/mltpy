@@ -175,7 +175,12 @@ class _TramModel(MLT):
         names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q)]
         return _format_wald_table(names, self.theta_[p:], se[p:])
 
-    def plot(self, y: NDArray[np.float64], ax: Any = None) -> Any | list[Any]:
+    def plot(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        ax: Any = None,
+    ) -> Any | list[Any]:
         """Plot the estimated CDF and density side by side.
 
         Parameters
@@ -183,6 +188,10 @@ class _TramModel(MLT):
         y:
             Response values at which to evaluate the model.  Must lie within
             ``basis.support``.
+        X:
+            Ignored — TRAM models are not interacting, so the plotted
+            baseline does not depend on covariates.  Accepted for signature
+            compatibility with the base class.
         ax:
             Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``,
             or a single ``matplotlib.axes.Axes`` instance. If a single axes is
