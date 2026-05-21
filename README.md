@@ -63,6 +63,7 @@ print(f"Estimated median: {median:.1f}")
 - Fourteen prediction types from one fitted model: transformation, CDF, PDF, survivor, hazard, cumulative hazard, odds, quantile, and log-scale variants of each
 - Full censoring support: exact, right-, left-, and interval-censored observations
 - Conditional distributions via optional covariate matrix `X`
+- Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](docs/examples/04_interacting_terms.ipynb)
 - Analytical gradients for fast, stable MLE with automatic restarts on non-convergence
 - scikit-learn-compatible API: `fit` / `predict` / `score` / `simulate`
 - Lightweight: only numpy and scipy required
