@@ -179,10 +179,10 @@ class ConditionalTransformationModel:
         scaling_arr: NDArray[np.float64] | None = None
         scaling_feature_names: list[str] | None = None
         if scaling is not None:
-            # ADR 0002 — only the exact + non-interaction path is implemented
-            # for the v0.4 tracer slice (#70).  Other censoring types,
-            # exponential base, and interaction-basis combinations are
-            # rejected up-front so failures are loud and local.
+            # ADR 0002 — non-interaction shift + scaled path supports all four
+            # censoring types (#71) and every base distribution except
+            # ``"exponential"`` (which is rejected because its support
+            # feasibility row becomes non-linear in γ; see Decision 3).
             if isinstance(basis, InteractionBasis):
                 raise ValueError(
                     "scaling= is not supported with InteractionBasis "
@@ -193,12 +193,6 @@ class ConditionalTransformationModel:
                     "scaling= is not supported with base_distribution="
                     "'exponential' (see docs/adr/0002-scaling-terms.md, "
                     "Decision 3)."
-                )
-            cens = CensoringType.NONE if censoring is None else censoring
-            if cens is not CensoringType.NONE:
-                raise NotImplementedError(
-                    "scaling= is only implemented for CensoringType.NONE in "
-                    "v0.4 (issue #70 tracer slice; other censoring lands in #71)."
                 )
             scaling_feature_names = _extract_feature_names(scaling)
             scaling_arr = np.asarray(scaling, dtype=float)

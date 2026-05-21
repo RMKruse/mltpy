@@ -1661,9 +1661,10 @@ class TestResidualsIntervalCensoring:
 
 class TestScalingStub:
     """ADR 0002 surface: scaling= kwarg behaviour on supported / unsupported
-    paths.  The tracer-bullet slice (#70) implements exact + normal scaled
-    likelihood; other censoring types, exponential base, and InteractionBasis
-    raise at construction so failures are loud rather than silent.
+    paths.  After #71 closes the censoring + base-distribution coverage,
+    every censoring type and every link except ``"exponential"`` accepts
+    ``scaling=`` (InteractionBasis combinations remain out of scope and
+    raise at construction).
     """
 
     def test_scaling_none_is_default_and_byte_identical(self):
@@ -1688,12 +1689,19 @@ class TestScalingStub:
                 base_distribution="exponential",
             )
 
-    def test_scaling_rejected_for_censored_data(self):
+    def test_scaling_accepted_for_each_censoring_type(self):
+        """Issue #71: every censoring type now accepts scaling= at __init__.
+
+        Construction succeeds for RIGHT / LEFT / INTERVAL just as it does
+        for NONE; fitting parity is exercised in tests/test_scaling_censoring.py.
+        """
         X_s = np.ones((20, 1), dtype=float)
-        with pytest.raises(NotImplementedError, match="CensoringType.NONE"):
-            MLT(
-                order=3,
-                support=(0.0, 1.0),
-                scaling=X_s,
-                censoring=CensoringType.RIGHT,
-            )
+        for cens in (
+            CensoringType.NONE,
+            CensoringType.RIGHT,
+            CensoringType.LEFT,
+            CensoringType.INTERVAL,
+        ):
+            model = MLT(order=3, support=(0.0, 1.0), scaling=X_s, censoring=cens)
+            assert model.scaling is not None
+            assert model.censoring is cens

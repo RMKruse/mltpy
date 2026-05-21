@@ -421,6 +421,84 @@ def _split_theta_scaled(
     return theta_b, beta, gamma
 
 
+def _eval_h_censored(
+    y_c: NDArray[np.float64],
+    basis: BernsteinBasis,
+    theta_b: NDArray[np.float64],
+    X_c: NDArray[np.float64] | None,
+    beta: NDArray[np.float64] | None,
+    scaling_c: NDArray[np.float64] | None,
+    gamma: NDArray[np.float64] | None,
+    offset_c: NDArray[np.float64] | None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+]:
+    """Evaluate ``h`` at censored rows, supporting the scaled-baseline form.
+
+    For each row ``i``::
+
+        h_0(y_i)  := B_basis(y_i) · θ_b
+        f_i       := exp(0.5 · x_s,i · γ)             if scaling_c is given
+        h_i       := h_0(y_i) · f_i + X_d,i · β       (+ offset_i)
+
+    Returns ``(h, B_c, h0, f)`` where ``h`` is clipped to ``[-_H_CLIP, _H_CLIP]``,
+    ``B_c`` is the Bernstein evaluation matrix, ``h0`` is the unscaled / unshifted
+    baseline transformation (``B_c · θ_b``), and ``f`` is the scaling factor
+    vector (``None`` on the shift-only path).
+    """
+    B_c = basis.evaluate(y_c)
+    h0 = B_c @ theta_b
+    if scaling_c is not None and gamma is not None:
+        f: NDArray[np.float64] | None = np.exp(0.5 * (scaling_c @ gamma))
+        h_raw = h0 * cast(NDArray[np.float64], f)
+    else:
+        f = None
+        h_raw = h0
+    if X_c is not None and beta is not None:
+        h_raw = h_raw + X_c @ beta
+    if offset_c is not None:
+        h_raw = h_raw + offset_c
+    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
+    return h, B_c, h0, f
+
+
+def _add_grad_censored(
+    grad: NDArray[np.float64],
+    B_c: NDArray[np.float64],
+    X_c: NDArray[np.float64] | None,
+    scaling_c: NDArray[np.float64] | None,
+    f_c: NDArray[np.float64] | None,
+    h0_c: NDArray[np.float64],
+    weight: NDArray[np.float64],
+    p: int,
+    q_d: int,
+) -> None:
+    """Accumulate ``weight · ∂h/∂θ`` into ``grad`` for one censored sub-group.
+
+    The signed ``weight`` (already multiplied by any row weights) is the
+    per-row coefficient that multiplies ``∂h/∂θ`` in the gradient of the
+    NLL contribution.  With the scaled-baseline form
+    ``h_i = h_0(y_i)·f_i + X_d,i·β`` and ``f_i = exp(0.5 · x_s,i · γ)``::
+
+        ∂h_i/∂θ_b = B_c,i · f_i           (or B_c,i when f_c is None)
+        ∂h_i/∂β   = x_d,i
+        ∂h_i/∂γ   = 0.5 · h_0(y_i) · f_i · x_s,i
+
+    Modifies ``grad`` in place.
+    """
+    if f_c is not None:
+        grad[:p] += B_c.T @ (weight * f_c)
+    else:
+        grad[:p] += B_c.T @ weight
+    if X_c is not None and q_d > 0:
+        grad[p : p + q_d] += X_c.T @ weight
+    if scaling_c is not None and f_c is not None:
+        grad[p + q_d :] += 0.5 * (scaling_c.T @ (weight * h0_c * f_c))
+
+
 def _shift(
     h: NDArray[np.float64],
     X: NDArray[np.float64] | None,
@@ -1172,6 +1250,7 @@ def _ll_right(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for right-censored data.
 
@@ -1179,9 +1258,15 @@ def _ll_right(
     -------
     ℓ = Σ_exact w_i [log f(h) + log h'] + Σ_censored w_i log S(h)
     where S(h) = 1 - F(h) is the survival function.
+
+    When ``scaling`` is provided, ``h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β``
+    (ADR 0002).  Exact-row contributions delegate to :func:`_ll_none`, whose
+    scaled-baseline branch is used unchanged.
     """
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
@@ -1190,17 +1275,17 @@ def _ll_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
-        if w_e is not None:
-            ll += np.dot(w_e, per_obs_e)
-        else:
-            ll += np.sum(per_obs_e)
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll += _ll_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
@@ -1208,11 +1293,8 @@ def _ll_right(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, _, _, _ = _eval_h_censored(y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c)
         logsf_c = dist.logsf(h_c)
         if w_c is not None:
             ll += np.dot(w_c, logsf_c)
@@ -1230,15 +1312,21 @@ def _ll_left(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> np.float64:
     """Computes the log-likelihood for left-censored data.
 
     Formula
     -------
     ℓ = Σ_exact w_i [log f(h) + log h'] + Σ_censored w_i log F(h)
+
+    When ``scaling`` is provided, the scaled-baseline form of ADR 0002
+    applies to both blocks; exact rows delegate to :func:`_ll_none`.
     """
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
@@ -1247,17 +1335,17 @@ def _ll_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
-        if w_e is not None:
-            ll += np.dot(w_e, per_obs_e)
-        else:
-            ll += np.sum(per_obs_e)
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll += _ll_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
@@ -1265,11 +1353,8 @@ def _ll_left(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, _, _, _ = _eval_h_censored(y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c)
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         logcdf_c = _logcdf(h_c)
         if w_c is not None:
@@ -1288,10 +1373,19 @@ def _ll_interval(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> np.float64:
-    """ℓ = Σ w_i log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present]."""
+    """ℓ = Σ w_i log(F(h(upper_i)) − F(h(lower_i)))  [+ exact terms if present].
+
+    Scaled-baseline form (``scaling`` not ``None``): ``f_i = exp(0.5·x_s,i·γ)``
+    is shared between the lower and upper endpoints of each interval (it does
+    not depend on ``y``), so the same row-wise factor multiplies both
+    ``h_0(lower)`` and ``h_0(upper)``.
+    """
     p = basis.order + 1
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
 
     mask_e = cd.is_exact_mask
@@ -1300,17 +1394,17 @@ def _ll_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        per_obs_e = dist.logpdf(h_e) + np.log(hp_e)
-        if w_e is not None:
-            ll += np.dot(w_e, per_obs_e)
-        else:
-            ll += np.sum(per_obs_e)
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll += _ll_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = ~cd.is_exact_mask
     if mask_c.any():
@@ -1319,6 +1413,7 @@ def _ll_interval(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
+        S_c = scaling[mask_c] if scaling is not None else None
         # Sub-masks within mask_c (relative to its compacted index space):
         # both finite → true interval; only-hi finite → left-open
         # (lower=-∞); only-lo finite → right-open (upper=+∞).
@@ -1334,14 +1429,13 @@ def _ll_interval(
             sub_mask: NDArray[np.bool_],
             y_vals: NDArray[np.float64],
         ) -> NDArray[np.float64]:
-            B_sub = basis.evaluate(y_vals)
             X_sub = X_c[sub_mask] if X_c is not None else None
-            shift_sub = (
-                (X_sub @ beta) if (X_sub is not None and beta is not None) else 0.0
+            S_sub = S_c[sub_mask] if S_c is not None else None
+            o_sub = o_c[sub_mask] if o_c is not None else None
+            h_sub, _, _, _ = _eval_h_censored(
+                y_vals, basis, theta_b, X_sub, beta, S_sub, gamma, o_sub
             )
-            if o_c is not None:
-                shift_sub = shift_sub + o_c[sub_mask]
-            return np.clip(B_sub @ theta_b + shift_sub, -_H_CLIP, _H_CLIP)
+            return h_sub
 
         if both.any():
             h_lo_b = _h_at(both, lo[both])
@@ -1453,12 +1547,19 @@ def _grad_right(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Gradient of -ℓ for right-censored data."""
+    """Gradient of -ℓ for right-censored data.
+
+    Censored-row contribution to ``∂(-ℓ)/∂θ`` is the hazard
+    ``λ(h)=f(h)/S(h)`` chained through ``∂h/∂θ`` (the scaled-baseline
+    Jacobian rebuilt per call; see :func:`_add_grad_censored`).
+    """
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
-    grad = np.zeros(p + q)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1466,18 +1567,17 @@ def _grad_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        grad += _grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
@@ -1485,20 +1585,17 @@ def _grad_right(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
-        # ∂(-ℓ)/∂θ_b from censored = +B_c.T @ [f(h)/F̄(h)]
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, B_c, h0_c, f_c = _eval_h_censored(
+            y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
+        )
+        # ∂(-ℓ)/∂h_c from censored = +hazard
         log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         whazard = hazard if w_c is None else w_c * hazard
-        grad[:p] += B_c.T @ whazard
-        if X_c is not None:
-            grad[p:] += X_c.T @ whazard
+        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, whazard, p, q_d)
 
-    return cast(NDArray[np.float64], grad)
+    return grad
 
 
 def _grad_left(
@@ -1509,12 +1606,18 @@ def _grad_left(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Gradient of -ℓ for left-censored data."""
+    """Gradient of -ℓ for left-censored data.
+
+    Censored-row contribution to ``∂(-ℓ)/∂θ`` is ``-µ(h) = -f(h)/F(h)``
+    chained through ``∂h/∂θ``.
+    """
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
-    grad = np.zeros(p + q)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1522,18 +1625,17 @@ def _grad_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        grad += _grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
@@ -1541,20 +1643,17 @@ def _grad_left(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
-        # ∂(-ℓ)/∂θ_b from censored = -B_c.T @ [f(h)/F(h)]
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, B_c, h0_c, f_c = _eval_h_censored(
+            y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
+        )
+        # ∂(-ℓ)/∂h_c from censored = -inv_mills
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         winv = inv_mills if w_c is None else w_c * inv_mills
-        grad[:p] -= B_c.T @ winv
-        if X_c is not None:
-            grad[p:] -= X_c.T @ winv
+        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
 
-    return cast(NDArray[np.float64], grad)
+    return grad
 
 
 def _grad_interval(
@@ -1565,12 +1664,20 @@ def _grad_interval(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Gradient of -ℓ for interval-censored data."""
+    """Gradient of -ℓ for interval-censored data.
+
+    Both endpoints of an interval share the same scaling factor
+    ``f_i = exp(0.5·x_s,i·γ)`` (depends only on ``x_s``, not on ``y``), so
+    ``f_i`` is computed once per row from the row's scaling design and reused
+    for both ``h_lo`` and ``h_hi`` via :func:`_eval_h_censored`.
+    """
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
-    grad = np.zeros(p + q)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1578,18 +1685,17 @@ def _grad_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        grad += _grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
 
     mask_c = ~cd.is_exact_mask
     if mask_c.any():
@@ -1598,6 +1704,7 @@ def _grad_interval(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
+        S_c = scaling[mask_c] if scaling is not None else None
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
@@ -1605,14 +1712,15 @@ def _grad_interval(
         only_lo = fin_lo & ~fin_hi
 
         if both.any():
-            B_lo_b = basis.evaluate(lo[both])
-            B_hi_b = basis.evaluate(hi[both])
             X_b = X_c[both] if X_c is not None else None
-            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_b = shift_b + o_c[both]
-            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
-            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            S_b = S_c[both] if S_c is not None else None
+            o_b = o_c[both] if o_c is not None else None
+            h_lo_b, B_lo_b, h0_lo_b, f_b = _eval_h_censored(
+                lo[both], basis, theta_b, X_b, beta, S_b, gamma, o_b
+            )
+            h_hi_b, B_hi_b, h0_hi_b, _ = _eval_h_censored(
+                hi[both], basis, theta_b, X_b, beta, S_b, gamma, o_b
+            )
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
             w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
             if w_c is not None:
@@ -1620,45 +1728,43 @@ def _grad_interval(
                 w_hi_b = ww * w_hi_b
                 w_lo_b = ww * w_lo_b
             with np.errstate(invalid="ignore"):
-                grad[:p] -= B_hi_b.T @ w_hi_b - B_lo_b.T @ w_lo_b
-                if X_b is not None:
-                    grad[p:] -= X_b.T @ (w_hi_b - w_lo_b)
+                # ∂(-ℓ)/∂h_hi = -w_hi; ∂(-ℓ)/∂h_lo = +w_lo
+                _add_grad_censored(
+                    grad, B_hi_b, X_b, S_b, f_b, h0_hi_b, -w_hi_b, p, q_d
+                )
+                _add_grad_censored(grad, B_lo_b, X_b, S_b, f_b, h0_lo_b, w_lo_b, p, q_d)
 
         if only_hi.any():
             # Left-open row: lower=-∞, upper=h_hi.  Same form as _grad_left.
-            B_hi_o = basis.evaluate(hi[only_hi])
             X_o = X_c[only_hi] if X_c is not None else None
-            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_o = shift_o + o_c[only_hi]
-            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            S_o = S_c[only_hi] if S_c is not None else None
+            o_o = o_c[only_hi] if o_c is not None else None
+            h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
+                hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
+            )
             _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
             inv_mills = np.exp(
                 np.minimum(dist.logpdf(h_hi_o) - _logcdf(h_hi_o), _LOG_FLOAT_MAX)
             )
             if w_c is not None:
                 inv_mills = w_c[only_hi] * inv_mills
-            grad[:p] -= B_hi_o.T @ inv_mills
-            if X_o is not None:
-                grad[p:] -= X_o.T @ inv_mills
+            _add_grad_censored(grad, B_hi_o, X_o, S_o, f_o, h0_hi_o, -inv_mills, p, q_d)
 
         if only_lo.any():
             # Right-open row: lower=h_lo, upper=+∞.  Same form as _grad_right.
-            B_lo_o = basis.evaluate(lo[only_lo])
             X_o = X_c[only_lo] if X_c is not None else None
-            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_o = shift_o + o_c[only_lo]
-            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            S_o = S_c[only_lo] if S_c is not None else None
+            o_o = o_c[only_lo] if o_c is not None else None
+            h_lo_o, B_lo_o, h0_lo_o, f_o = _eval_h_censored(
+                lo[only_lo], basis, theta_b, X_o, beta, S_o, gamma, o_o
+            )
             log_hazard = dist.logpdf(h_lo_o) - dist.logsf(h_lo_o)
             hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
             if w_c is not None:
                 hazard = w_c[only_lo] * hazard
-            grad[:p] += B_lo_o.T @ hazard
-            if X_o is not None:
-                grad[p:] += X_o.T @ hazard
+            _add_grad_censored(grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d)
 
-    return cast(NDArray[np.float64], grad)
+    return grad
 
 
 # ---------------------------------------------------------------------------
@@ -1740,13 +1846,15 @@ def _ll_and_grad_right(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1754,23 +1862,19 @@ def _ll_and_grad_right(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            if w_e is not None:
-                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
-            else:
-                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll_e, grad_e = _ll_and_grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
+        ll += ll_e
+        grad += grad_e
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
@@ -1778,24 +1882,21 @@ def _ll_and_grad_right(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, B_c, h0_c, f_c = _eval_h_censored(
+            y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
+        )
         logsf_c = dist.logsf(h_c)
         if w_c is not None:
             ll += np.dot(w_c, logsf_c)
         else:
             ll += np.sum(logsf_c)
-        log_hazard = dist.logpdf(h_c) - dist.logsf(h_c)
+        log_hazard = dist.logpdf(h_c) - logsf_c
         hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
         whazard = hazard if w_c is None else w_c * hazard
-        grad[:p] += B_c.T @ whazard
-        if X_c is not None:
-            grad[p:] += X_c.T @ whazard
+        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, whazard, p, q_d)
 
-    return ll, cast(NDArray[np.float64], grad)
+    return ll, grad
 
 
 def _ll_and_grad_left(
@@ -1806,13 +1907,15 @@ def _ll_and_grad_left(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1820,23 +1923,19 @@ def _ll_and_grad_left(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            if w_e is not None:
-                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
-            else:
-                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll_e, grad_e = _ll_and_grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
+        ll += ll_e
+        grad += grad_e
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
@@ -1844,11 +1943,10 @@ def _ll_and_grad_left(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
-        B_c = basis.evaluate(y_c)
-        h_raw_c = _shift(B_c @ theta_b, X_c, beta)
-        if o_c is not None:
-            h_raw_c = h_raw_c + o_c
-        h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
+        S_c = scaling[mask_c] if scaling is not None else None
+        h_c, B_c, h0_c, f_c = _eval_h_censored(
+            y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
+        )
         _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
         log_Fc = _logcdf(h_c)
         if w_c is not None:
@@ -1857,11 +1955,9 @@ def _ll_and_grad_left(
             ll += np.sum(log_Fc)
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
         winv = inv_mills if w_c is None else w_c * inv_mills
-        grad[:p] -= B_c.T @ winv
-        if X_c is not None:
-            grad[p:] -= X_c.T @ winv
+        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
 
-    return ll, cast(NDArray[np.float64], grad)
+    return ll, grad
 
 
 def _ll_and_grad_interval(
@@ -1872,13 +1968,15 @@ def _ll_and_grad_interval(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
     """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
     p = basis.order + 1
-    q = X.shape[1] if X is not None else 0
-    theta_b, beta = _split_theta(theta, p, X)
+    q_d = X.shape[1] if X is not None else 0
+    q_s = scaling.shape[1] if scaling is not None else 0
+    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1886,23 +1984,19 @@ def _ll_and_grad_interval(
         X_e = X[mask_e] if X is not None else None
         w_e = weights[mask_e] if weights is not None else None
         o_e = offset[mask_e] if offset is not None else None
-        B_e, D_e = basis.evaluate_with_derivative(y_e)
-        h_raw_e = _shift(B_e @ theta_b, X_e, beta)
-        if o_e is not None:
-            h_raw_e = h_raw_e + o_e
-        h_e = np.clip(h_raw_e, -_H_CLIP, _H_CLIP)
-        hp_e = D_e @ theta_b
-        ns = _neg_score(h_e, dist)
-        wns = ns if w_e is None else w_e * ns
-        ihp = _inverse_hp(hp_e, w_e)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            if w_e is not None:
-                ll += np.dot(w_e, dist.logpdf(h_e) + np.log(hp_e))
-            else:
-                ll += np.sum(dist.logpdf(h_e)) + np.sum(np.log(hp_e))
-            grad[:p] += B_e.T @ wns - D_e.T @ ihp
-        if X_e is not None:
-            grad[p:] += X_e.T @ wns
+        S_e = scaling[mask_e] if scaling is not None else None
+        ll_e, grad_e = _ll_and_grad_none(
+            y_e,
+            theta,
+            basis,
+            X_e,
+            dist=dist,
+            weights=w_e,
+            offset=o_e,
+            scaling=S_e,
+        )
+        ll += ll_e
+        grad += grad_e
 
     mask_c = ~cd.is_exact_mask
     if mask_c.any():
@@ -1911,6 +2005,7 @@ def _ll_and_grad_interval(
         X_c = X[mask_c] if X is not None else None
         w_c = weights[mask_c] if weights is not None else None
         o_c = offset[mask_c] if offset is not None else None
+        S_c = scaling[mask_c] if scaling is not None else None
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
@@ -1918,14 +2013,15 @@ def _ll_and_grad_interval(
         only_lo = fin_lo & ~fin_hi
 
         if both.any():
-            B_lo_b = basis.evaluate(lo[both])
-            B_hi_b = basis.evaluate(hi[both])
             X_b = X_c[both] if X_c is not None else None
-            shift_b = (X_b @ beta) if (X_b is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_b = shift_b + o_c[both]
-            h_lo_b = np.clip(B_lo_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
-            h_hi_b = np.clip(B_hi_b @ theta_b + shift_b, -_H_CLIP, _H_CLIP)
+            S_b = S_c[both] if S_c is not None else None
+            o_b = o_c[both] if o_c is not None else None
+            h_lo_b, B_lo_b, h0_lo_b, f_b = _eval_h_censored(
+                lo[both], basis, theta_b, X_b, beta, S_b, gamma, o_b
+            )
+            h_hi_b, B_hi_b, h0_hi_b, _ = _eval_h_censored(
+                hi[both], basis, theta_b, X_b, beta, S_b, gamma, o_b
+            )
             log_p_b = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
             ww_b = w_c[both] if w_c is not None else None
             if ww_b is not None:
@@ -1937,17 +2033,18 @@ def _ll_and_grad_interval(
                 w_hi_b = ww_b * w_hi_b
                 w_lo_b = ww_b * w_lo_b
             with np.errstate(invalid="ignore"):
-                grad[:p] -= B_hi_b.T @ w_hi_b - B_lo_b.T @ w_lo_b
-                if X_b is not None:
-                    grad[p:] -= X_b.T @ (w_hi_b - w_lo_b)
+                _add_grad_censored(
+                    grad, B_hi_b, X_b, S_b, f_b, h0_hi_b, -w_hi_b, p, q_d
+                )
+                _add_grad_censored(grad, B_lo_b, X_b, S_b, f_b, h0_lo_b, w_lo_b, p, q_d)
 
         if only_hi.any():
-            B_hi_o = basis.evaluate(hi[only_hi])
             X_o = X_c[only_hi] if X_c is not None else None
-            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_o = shift_o + o_c[only_hi]
-            h_hi_o = np.clip(B_hi_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            S_o = S_c[only_hi] if S_c is not None else None
+            o_o = o_c[only_hi] if o_c is not None else None
+            h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
+                hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
+            )
             _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
             log_Fc = _logcdf(h_hi_o)
             ww_o = w_c[only_hi] if w_c is not None else None
@@ -1958,17 +2055,15 @@ def _ll_and_grad_interval(
             inv_mills = np.exp(np.minimum(dist.logpdf(h_hi_o) - log_Fc, _LOG_FLOAT_MAX))
             if ww_o is not None:
                 inv_mills = ww_o * inv_mills
-            grad[:p] -= B_hi_o.T @ inv_mills
-            if X_o is not None:
-                grad[p:] -= X_o.T @ inv_mills
+            _add_grad_censored(grad, B_hi_o, X_o, S_o, f_o, h0_hi_o, -inv_mills, p, q_d)
 
         if only_lo.any():
-            B_lo_o = basis.evaluate(lo[only_lo])
             X_o = X_c[only_lo] if X_c is not None else None
-            shift_o = (X_o @ beta) if (X_o is not None and beta is not None) else 0.0
-            if o_c is not None:
-                shift_o = shift_o + o_c[only_lo]
-            h_lo_o = np.clip(B_lo_o @ theta_b + shift_o, -_H_CLIP, _H_CLIP)
+            S_o = S_c[only_lo] if S_c is not None else None
+            o_o = o_c[only_lo] if o_c is not None else None
+            h_lo_o, B_lo_o, h0_lo_o, f_o = _eval_h_censored(
+                lo[only_lo], basis, theta_b, X_o, beta, S_o, gamma, o_o
+            )
             logsf_o = dist.logsf(h_lo_o)
             ww_o = w_c[only_lo] if w_c is not None else None
             if ww_o is not None:
@@ -1979,11 +2074,9 @@ def _ll_and_grad_interval(
             hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
             if ww_o is not None:
                 hazard = ww_o * hazard
-            grad[:p] += B_lo_o.T @ hazard
-            if X_o is not None:
-                grad[p:] += X_o.T @ hazard
+            _add_grad_censored(grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d)
 
-    return ll, cast(NDArray[np.float64], grad)
+    return ll, grad
 
 
 # ---------------------------------------------------------------------------
@@ -2619,12 +2712,6 @@ def _log_likelihood_from_dist(
             )
         return float(result)
 
-    if scaling is not None and censoring is not CensoringType.NONE:
-        raise NotImplementedError(
-            "scaling= is only implemented for CensoringType.NONE in v0.4 "
-            "(issue #70 tracer slice; other censoring lands in #71)."
-        )
-
     if isinstance(y, np.ndarray):
         y_arr = np.asarray(y, dtype=float).ravel()
         result = _ll_none(
@@ -2651,15 +2738,36 @@ def _log_likelihood_from_dist(
             )
         elif censoring is CensoringType.RIGHT:
             result = _ll_right(
-                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+                y,
+                theta,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
         elif censoring is CensoringType.LEFT:
             result = _ll_left(
-                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+                y,
+                theta,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
         else:  # INTERVAL
             result = _ll_interval(
-                y, theta, basis, X, dist=dist, weights=weights, offset=offset
+                y,
+                theta,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
 
         if _has_truncation(y):
@@ -2696,11 +2804,6 @@ def _negative_log_likelihood_from_dist(
         raise NotImplementedError(
             "scaling= is not supported with InteractionBasis in v0.4 "
             "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-        )
-    if scaling is not None and censoring is not CensoringType.NONE:
-        raise NotImplementedError(
-            "scaling= is only implemented for CensoringType.NONE in v0.4 "
-            "(issue #70 tracer slice; other censoring lands in #71)."
         )
     if isinstance(basis, InteractionBasis):
         if X is None:
@@ -2772,15 +2875,36 @@ def _negative_log_likelihood_from_dist(
         )
     elif censoring is CensoringType.RIGHT:
         ll, grad = _ll_and_grad_right(
-            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
     elif censoring is CensoringType.LEFT:
         ll, grad = _ll_and_grad_left(
-            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
     else:
         ll, grad = _ll_and_grad_interval(
-            y, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
 
     if isinstance(y, CensoredData) and _has_truncation(y):

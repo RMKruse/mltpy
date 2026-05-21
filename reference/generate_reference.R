@@ -1039,3 +1039,134 @@ writeLines(format(ll_sc, digits = 15),
 
 cat(sprintf("scaling BoxCox normal ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
             n_sc, length(theta_full_sc), ll_sc))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms censoring + base-distribution coverage (issue #71).
+#
+# Three new fixtures exercise the scaled-baseline likelihood under each
+# remaining censoring branch:
+#
+#   * Coxph(scale=~x_s)  — RIGHT-censored, min_extreme_value base
+#   * Colr(scale=~x_s)   — exact, logistic base (the shift-only Colr ships
+#                          a separate vcov fixture; this one adds γ)
+#   * BoxCox(scale=~x_s) — INTERVAL-censored, normal base
+#
+# In each case the parameter file ``scaling_*_theta.txt`` stores the *full*
+# parameter vector ``coef(as.mlt(fit))`` flattened as
+# ``[theta_b | beta_tram | gamma]``.  pymlt parametrises ``h + X_d·β`` (R
+# ``tram`` parametrises ``h − X_d·β``), so the Python parity test flips the
+# β block before comparing.  γ is sign-aligned across the two
+# parameterisations (ADR 0002, Decision 5).
+# ---------------------------------------------------------------------------
+library(survival)
+
+# ---- scaling_coxph_right (Coxph + scale=~x_s, RIGHT-censored) ------------
+set.seed(710)
+n_cxs <- 200
+x_s_cxs <- rnorm(n_cxs)
+x_d_cxs <- rnorm(n_cxs)
+# Heteroskedastic Weibull-flavoured event times: shape varies with x_s,
+# scale shifts with x_d.  Rate-1 exponential under exp(.) link.
+t_cxs <- rexp(n_cxs, rate = exp(0.4 * x_d_cxs - 0.3 * x_s_cxs))
+cens_cxs <- rexp(n_cxs, rate = 0.3)
+y_cxs <- pmin(t_cxs, cens_cxs)
+event_cxs <- as.integer(t_cxs <= cens_cxs)
+a_cxs <- 1e-3
+b_cxs <- max(y_cxs) + 0.1
+df_cxs <- data.frame(y = y_cxs, event = event_cxs,
+                     x_d = x_d_cxs, x_s = x_s_cxs)
+fit_cxs <- tram::Coxph(Surv(y, event) ~ x_d | x_s, data = df_cxs,
+                       support = c(a_cxs, b_cxs), order = 5)
+theta_cxs <- coef(as.mlt(fit_cxs))
+ll_cxs <- as.numeric(logLik(fit_cxs))
+
+writeLines(format(y_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_y.txt"))
+writeLines(as.character(event_cxs),
+           con = file.path(out_dir, "scaling_coxph_event.txt"))
+writeLines(format(x_d_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_x_d.txt"))
+writeLines(format(x_s_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_x_s.txt"))
+writeLines(paste(format(a_cxs, digits = 15),
+                 format(b_cxs, digits = 15)),
+           con = file.path(out_dir, "scaling_coxph_support.txt"))
+writeLines(format(theta_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_theta.txt"))
+writeLines(format(ll_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_loglik.txt"))
+
+cat(sprintf("scaling Coxph right-censored ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_cxs, length(theta_cxs), ll_cxs))
+
+# ---- scaling_colr (Colr + scale=~x_s, exact, logistic) -------------------
+set.seed(711)
+n_co <- 150
+x_s_co <- rnorm(n_co)
+x_d_co <- rnorm(n_co)
+y_co <- rlogis(n_co, location = 0.5 * x_d_co,
+               scale = exp(0.25 * x_s_co))
+a_co <- min(y_co) - 0.1
+b_co <- max(y_co) + 0.1
+df_co <- data.frame(y = y_co, x_d = x_d_co, x_s = x_s_co)
+fit_co <- tram::Colr(y ~ x_d | x_s, data = df_co,
+                     support = c(a_co, b_co), order = 5)
+theta_co <- coef(as.mlt(fit_co))
+ll_co <- as.numeric(logLik(fit_co))
+
+writeLines(format(y_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_y.txt"))
+writeLines(format(x_d_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_x_d.txt"))
+writeLines(format(x_s_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_x_s.txt"))
+writeLines(paste(format(a_co, digits = 15),
+                 format(b_co, digits = 15)),
+           con = file.path(out_dir, "scaling_colr_support.txt"))
+writeLines(format(theta_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_theta.txt"))
+writeLines(format(ll_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_loglik.txt"))
+
+cat(sprintf("scaling Colr exact ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_co, length(theta_co), ll_co))
+
+# ---- scaling_boxcox_interval (BoxCox + scale=~x_s, interval-censored) ----
+set.seed(712)
+n_iv <- 150
+x_s_iv <- rnorm(n_iv)
+x_d_iv <- rnorm(n_iv)
+y_true_iv <- 1.0 + 0.5 * x_d_iv + rnorm(n_iv, sd = exp(0.3 * x_s_iv))
+# Symmetric ±0.25 window around the latent value → interval-censored
+# rows of width 0.5 covering the truth.
+lo_iv <- y_true_iv - 0.25
+hi_iv <- y_true_iv + 0.25
+a_iv <- min(lo_iv) - 1.0
+b_iv <- max(hi_iv) + 1.0
+df_iv <- data.frame(y_lo = lo_iv, y_hi = hi_iv,
+                    x_d = x_d_iv, x_s = x_s_iv)
+fit_iv <- tram::BoxCox(Surv(y_lo, y_hi, type = "interval2") ~ x_d | x_s,
+                       data = df_iv,
+                       support = c(a_iv, b_iv), order = 5,
+                       bounds = c(a_iv, b_iv))
+theta_iv <- coef(as.mlt(fit_iv))
+ll_iv <- as.numeric(logLik(fit_iv))
+
+writeLines(format(lo_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_lo.txt"))
+writeLines(format(hi_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_hi.txt"))
+writeLines(format(x_d_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_x_d.txt"))
+writeLines(format(x_s_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_x_s.txt"))
+writeLines(paste(format(a_iv, digits = 15),
+                 format(b_iv, digits = 15)),
+           con = file.path(out_dir, "scaling_boxcox_interval_support.txt"))
+writeLines(format(theta_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_theta.txt"))
+writeLines(format(ll_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_loglik.txt"))
+
+cat(sprintf("scaling BoxCox interval ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_iv, length(theta_iv), ll_iv))
