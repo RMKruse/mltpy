@@ -467,6 +467,20 @@ class Coxph(_TramModel):
         instead of the standard shift model.  Only exact (non-censored)
         time data is currently supported on this path; censoring with an
         interacting basis is not yet implemented in the likelihood path.
+    scaling:
+        Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
+        R ``tram::Coxph(Surv(y, event) ~ x_d | x_s)``.  Routes through to
+        the scaled-baseline likelihood (#71) and the scaled-predict path
+        (#72).  When supplied, the fit becomes a heteroskedastic /
+        non-proportional-hazards Cox model
+        ``log[-log S(t | x)] = h_0(t) · exp(x_s · γ) + x_d · β``: the
+        hazard ratio between two ``x_s`` values varies with ``t`` (the
+        proportional-hazards assumption is relaxed).  The fitted parameter
+        vector gains a γ block exposed as :attr:`gamma_`, and the
+        :meth:`survival`, :meth:`hazard`, and :meth:`predict` methods
+        require ``X_scale`` / ``X_scale_new``.  Sign-aligned with R
+        (ADR 0002, Decision 5).  Not supported together with
+        ``interacting=`` (ADR 0002, Decision 2).
 
     Examples
     --------
@@ -488,7 +502,14 @@ class Coxph(_TramModel):
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
         interacting: BernsteinBasis | OrdinalBasis | None = None,
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
+        if scaling is not None and interacting is not None:
+            raise ValueError(
+                "scaling= and interacting= cannot be combined "
+                "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+            )
+
         if interacting is None:
             super().__init__(
                 order=order,
@@ -496,6 +517,7 @@ class Coxph(_TramModel):
                 censoring=CensoringType.RIGHT,
                 optimizer_config=optimizer_config,
                 base_distribution="min_extreme_value",
+                scaling=scaling,
             )
             return
 
@@ -511,11 +533,60 @@ class Coxph(_TramModel):
         self._order = order
         self._support = support
 
+    @property
+    def gamma_(self) -> NDArray[np.float64]:
+        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
+
+        Sign-aligned with R ``tram::Coxph(..., scale=~x_s)``'s scaling
+        block (ADR 0002, Decision 5).
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
+        gamma = self.gamma_coef_
+        if gamma is None:
+            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
+        return gamma
+
+    @property
+    def feature_names_scaling_(self) -> list[str]:
+        """Column names of the scaling-design matrix supplied at fit time.
+
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError(
+                "Model was not fitted with scaling=; "
+                "feature_names_scaling_ is undefined."
+            )
+        names = self.scaling_feature_names_in_
+        if names is None:
+            q_s = self.scaling.shape[1]
+            return [f"X{j + 1}" for j in range(q_s)]
+        return names
+
     def survival(
         self,
         y: NDArray[np.float64],
         X: NDArray[np.float64] | None = None,
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the survival function S(y) = 1 − F(y|x).
 
@@ -524,9 +595,13 @@ class Coxph(_TramModel):
         y:
             Time points within ``basis.support``.
         X:
-            Optional covariate matrix of shape ``(m, q)``.
+            Optional covariate matrix of shape ``(m, q_d)``.
         offset:
             Optional per-observation offset added to ``h``.
+        X_scale:
+            New-data scaling-design matrix of shape ``(m, q_s)``, required
+            when the model was fitted with ``scaling=``.  Threaded through
+            to :meth:`predict` as ``X_scale_new``.
 
         Returns
         -------
@@ -537,13 +612,20 @@ class Coxph(_TramModel):
         NotFittedError
             If called before :meth:`fit`.
         """
-        return 1.0 - self.predict(y, X_new=X, what="distribution", offset_new=offset)
+        return 1.0 - self.predict(
+            y,
+            X_new=X,
+            what="distribution",
+            offset_new=offset,
+            X_scale_new=X_scale,
+        )
 
     def hazard(
         self,
         y: NDArray[np.float64],
         X: NDArray[np.float64] | None = None,
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
 
@@ -552,9 +634,13 @@ class Coxph(_TramModel):
         y:
             Time points within ``basis.support``.
         X:
-            Optional covariate matrix of shape ``(m, q)``.
+            Optional covariate matrix of shape ``(m, q_d)``.
         offset:
             Optional per-observation offset added to ``h``.
+        X_scale:
+            New-data scaling-design matrix of shape ``(m, q_s)``, required
+            when the model was fitted with ``scaling=``.  Threaded through
+            to :meth:`predict` as ``X_scale_new``.
 
         Returns
         -------
@@ -565,7 +651,13 @@ class Coxph(_TramModel):
         NotFittedError
             If called before :meth:`fit`.
         """
-        return self.predict(y, X_new=X, what="hazard", offset_new=offset)
+        return self.predict(
+            y,
+            X_new=X,
+            what="hazard",
+            offset_new=offset,
+            X_scale_new=X_scale,
+        )
 
 
 # ---------------------------------------------------------------------------
