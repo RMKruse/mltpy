@@ -153,10 +153,14 @@ class _TramModel(MLT):
     def _coef_table(self) -> str | None:
         """Format a Wald coefficient table for the ``beta`` block.
 
-        Returns ``None`` when the fitted model has no covariates or if the
-        Hessian is singular so that standard errors cannot be computed.
+        Returns ``None`` when the fitted model has no covariates, when the
+        model uses an :class:`~pymlt.basis.InteractionBasis` (the tensor
+        product has no flat ``beta`` block to tabulate), or if the Hessian
+        is singular so that standard errors cannot be computed.
         """
         if self.theta_ is None:
+            return None
+        if isinstance(self.basis, InteractionBasis):
             return None
         p = self.basis.order + 1
         q = self.theta_.size - p
@@ -344,15 +348,31 @@ class Coxph(_TramModel):
     hazards model. The baseline distribution is estimated
     non-parametrically via a Bernstein polynomial.
 
+    Pass ``interacting`` to fit a *non-proportional* (stratified or
+    fully-interacting) Cox model where the transformation itself depends
+    on the covariate via the tensor product
+    ``h(t | x) = (a(t) ⊗ b(x))ᵀ vec(Θ)``.  See ADR 0001 and
+    :class:`~pymlt.basis.InteractionBasis` for the parameter-vector layout
+    and the column-wise monotonicity strategy.
+
     Parameters
     ----------
     support:
         Closed interval ``(a, b)`` with ``a > 0`` and ``b`` at least as
         large as the longest observed follow-up time.
     order:
-        Polynomial degree of the Bernstein basis.  Defaults to 6.
+        Polynomial degree of the Bernstein basis on the response.  Defaults
+        to 6.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
+    interacting:
+        Optional x-basis (:class:`~pymlt.basis.BernsteinBasis`,
+        :class:`~pymlt.basis.OrdinalBasis`, or
+        :class:`~pymlt.basis.InterceptBasis`).  When provided, the model
+        is fit as ``MLT(InteractionBasis(BernsteinBasis(...), interacting))``
+        instead of the standard shift model.  Only exact (non-censored)
+        time data is currently supported on this path; censoring with an
+        interacting basis is not yet implemented in the likelihood path.
 
     Examples
     --------
@@ -373,14 +393,29 @@ class Coxph(_TramModel):
         support: tuple[float, float],
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
+        interacting: BernsteinBasis | OrdinalBasis | None = None,
     ) -> None:
-        super().__init__(
-            order=order,
-            support=support,
+        if interacting is None:
+            super().__init__(
+                order=order,
+                support=support,
+                censoring=CensoringType.RIGHT,
+                optimizer_config=optimizer_config,
+                base_distribution="min_extreme_value",
+            )
+            return
+
+        y_basis = BernsteinBasis(order=order, support=support)
+        ib = InteractionBasis(y_basis=y_basis, x_basis=interacting)
+        ConditionalTransformationModel.__init__(
+            self,
+            basis=ib,
             censoring=CensoringType.RIGHT,
             optimizer_config=optimizer_config,
             base_distribution="min_extreme_value",
         )
+        self._order = order
+        self._support = support
 
     def survival(
         self,
