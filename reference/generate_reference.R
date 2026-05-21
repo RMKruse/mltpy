@@ -1170,3 +1170,68 @@ writeLines(format(ll_iv, digits = 15),
 
 cat(sprintf("scaling BoxCox interval ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
             n_iv, length(theta_iv), ll_iv))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms predict path (issue #72) — distribution / density / hazard /
+# survivor / quantile under scaling, evaluated on a small (x_d, x_s) × (q|p)
+# grid against the BoxCox + scale=~x_s normal fit from #70.
+#
+# For each ``what`` value the saved expected matrix is shape ``(k, m)`` with
+# ``k`` y-values (or probabilities) along the rows and ``m`` newdata rows
+# along the columns, flattened row-major.  The Python test reshapes back to
+# ``(k, m)`` and asserts element-wise parity at rtol=1e-6.
+#
+# Fixtures emitted (re-using fit_sc):
+#   scaling_predict_x_d_new.txt   — m newdata shift covariates (length m)
+#   scaling_predict_x_s_new.txt   — m newdata scaling covariates (length m)
+#   scaling_predict_q_grid.txt    — k response evaluation points (length k)
+#   scaling_predict_prob_grid.txt — k_q probability targets (length k_q)
+#   scaling_predict_<what>.txt    — flatten_row_major of (k, m) matrix
+#                                   for what in {distribution, density,
+#                                   hazard, survivor, quantile (size k_q × m)}
+# ---------------------------------------------------------------------------
+x_d_new_sp <- c(-1.0, 0.0, 0.5, 1.5)
+x_s_new_sp <- c(-0.5, 0.0, 1.0, 2.0)
+stopifnot(length(x_d_new_sp) == length(x_s_new_sp))
+m_sp <- length(x_d_new_sp)
+
+# Five interior evaluation points strictly inside the basis support.
+span_sp <- b_sc - a_sc
+q_grid_sp <- seq(a_sc + 0.1 * span_sp, b_sc - 0.1 * span_sp, length.out = 5)
+prob_grid_sp <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+
+newdata_sp <- data.frame(x_d = x_d_new_sp, x_s = x_s_new_sp)
+
+.write_sp_what <- function(what_name) {
+  mat <- predict(fit_sc, newdata = newdata_sp,
+                 q = q_grid_sp, type = what_name)
+  stopifnot(is.matrix(mat) && nrow(mat) == length(q_grid_sp) &&
+            ncol(mat) == m_sp)
+  writeLines(format(flatten_row_major(mat), digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_predict_%s.txt", what_name)))
+}
+
+writeLines(format(x_d_new_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_x_d_new.txt"))
+writeLines(format(x_s_new_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_x_s_new.txt"))
+writeLines(format(q_grid_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_q_grid.txt"))
+writeLines(format(prob_grid_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_prob_grid.txt"))
+
+for (wname in c("distribution", "density", "hazard", "survivor")) {
+  .write_sp_what(wname)
+}
+
+# Quantile fixture: rows = prob_grid_sp, cols = newdata rows.
+q_mat_sp <- predict(fit_sc, newdata = newdata_sp,
+                    prob = prob_grid_sp, type = "quantile")
+stopifnot(is.matrix(q_mat_sp) && nrow(q_mat_sp) == length(prob_grid_sp) &&
+          ncol(q_mat_sp) == m_sp)
+writeLines(format(flatten_row_major(q_mat_sp), digits = 15),
+           con = file.path(out_dir, "scaling_predict_quantile.txt"))
+
+cat(sprintf("scaling predict ref: m=%d × k=%d (k_q=%d)\n",
+            m_sp, length(q_grid_sp), length(prob_grid_sp)))

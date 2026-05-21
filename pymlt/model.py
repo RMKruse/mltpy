@@ -554,6 +554,7 @@ class ConditionalTransformationModel:
             "quantile",
         ] = "distribution",
         offset_new: NDArray[np.float64] | None = None,
+        X_scale_new: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Compute model predictions at new observations.
 
@@ -567,6 +568,12 @@ class ConditionalTransformationModel:
         offset_new:
             Optional per-observation offset of shape ``(m,)``.  Added to
             ``h(y|x)`` before distribution calls.
+        X_scale_new:
+            New-data scaling-design matrix of shape ``(m, q_s)``, required
+            when the model was fitted with ``scaling=``.  Enters via
+            ``h(y|x_d, x_s) = h_0(y) · exp(0.5 · x_s · γ) + x_d · β`` —
+            same parameterisation as :meth:`fit`.  Pass ``None`` for
+            non-scaling fits.
         what:
             Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
             ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
@@ -629,6 +636,42 @@ class ConditionalTransformationModel:
             X_arr = np.asarray(X_new, dtype=float)
             if X_arr.ndim == 1:
                 X_arr = X_arr[:, None]
+
+        # ------------------------------------------------------------------
+        # Scaling-design validation (ADR 0002; required when the model was
+        # fit with ``scaling=``).  Validated here so the same check fires
+        # before either the interaction or shift dispatch.
+        # ------------------------------------------------------------------
+        X_scale_arr: NDArray[np.float64] | None = None
+        if self.scaling is not None:
+            if X_scale_new is None:
+                raise ValueError(
+                    "Model was fitted with scaling=; X_scale_new must be "
+                    f"provided (shape (m, {self.scaling.shape[1]}))."
+                )
+            X_scale_arr = np.asarray(X_scale_new, dtype=float)
+            if X_scale_arr.ndim == 1:
+                X_scale_arr = X_scale_arr[:, None]
+            if X_scale_arr.ndim != 2:
+                raise ValueError(
+                    "X_scale_new must be a 2-D array of shape (m, q_s); "
+                    f"got shape {X_scale_arr.shape}."
+                )
+            if X_scale_arr.shape[0] != m:
+                raise ValueError(
+                    f"X_scale_new has {X_scale_arr.shape[0]} rows but y_new "
+                    f"has {m} elements; both must match."
+                )
+            if X_scale_arr.shape[1] != self.scaling.shape[1]:
+                raise ValueError(
+                    f"X_scale_new has {X_scale_arr.shape[1]} columns but the "
+                    f"fitted model has q_s={self.scaling.shape[1]} scaling "
+                    "coefficients."
+                )
+        elif X_scale_new is not None:
+            raise ValueError(
+                "Model was not fitted with scaling=; X_scale_new must be None."
+            )
 
         # ------------------------------------------------------------------
         # Interaction basis path
@@ -709,10 +752,18 @@ class ConditionalTransformationModel:
         # ------------------------------------------------------------------
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        beta_fit: NDArray[np.float64] | None = (
+            self.theta_[p : p + q_d] if q_d > 0 else None
+        )
+        gamma_fit: NDArray[np.float64] | None = (
+            self.theta_[p + q_d :] if q_s > 0 else None
+        )
 
         if what == "quantile":
             xbeta: NDArray[np.float64] | None = None
-            if len(self.theta_) > p:
+            if q_d > 0:
                 if X_arr is None:
                     raise ValueError(
                         "Model was fitted with covariates; X_new must be "
@@ -724,13 +775,22 @@ class ConditionalTransformationModel:
                         f"{y_arr.shape[0]} elements; they must match for "
                         "quantile prediction."
                     )
-                beta = self.theta_[p:]
-                if X_arr.shape[1] != beta.shape[0]:
+                assert beta_fit is not None
+                if X_arr.shape[1] != beta_fit.shape[0]:
                     raise ValueError(
                         f"X_new has {X_arr.shape[1]} columns but the fitted "
-                        f"model has {beta.shape[0]} covariate coefficients."
+                        f"model has {beta_fit.shape[0]} covariate coefficients."
                     )
-                xbeta = X_arr @ beta
+                xbeta = X_arr @ beta_fit
+            if gamma_fit is not None and X_scale_arr is not None:
+                return self._predict_quantile_scaling(
+                    y_arr,
+                    theta_b,
+                    gamma_fit,
+                    X_scale_arr,
+                    xbeta=xbeta,
+                    offset=offset_arr,
+                )
             return self._predict_quantile(
                 y_arr, theta_b, xbeta=xbeta, offset=offset_arr
             )
@@ -738,12 +798,21 @@ class ConditionalTransformationModel:
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
         D = self.basis.derivative(y_arr, order=1)  # (m, p)
-        h = B @ theta_b  # (m,)
-        hp = D @ theta_b  # (m,)
+        h0 = B @ theta_b  # (m,)
+        hp0 = D @ theta_b  # (m,)
+        # Scaling factor f_i = exp(0.5 · x_s,i · γ).  Same convention as
+        # likelihood._ll_none (and R `mlt:::tmlt`), so γ is sign- and
+        # magnitude-aligned with R `tram`'s scaling block.
+        if gamma_fit is not None and X_scale_arr is not None:
+            f_scale = np.exp(0.5 * (X_scale_arr @ gamma_fit))
+            h = h0 * f_scale
+            hp = hp0 * f_scale
+        else:
+            h = h0
+            hp = hp0
 
-        if X_arr is not None and len(self.theta_) > p:
-            beta = self.theta_[p:]
-            h = h + X_arr @ beta
+        if X_arr is not None and beta_fit is not None:
+            h = h + X_arr @ beta_fit
 
         if offset_arr is not None:
             h = h + offset_arr
@@ -993,6 +1062,109 @@ class ConditionalTransformationModel:
         # iters; for width-1 after ~33.
         lo = np.full(n_probs, a, dtype=float)
         hi = np.full(n_probs, b, dtype=float)
+        mid = 0.5 * (lo + hi)
+        for _ in range(60):
+            if np.max(hi - lo) < _BRENTQ_EPS:
+                break
+            below = _h_vec(mid) < z
+            lo = np.where(below, mid, lo)
+            hi = np.where(below, hi, mid)
+            mid = 0.5 * (lo + hi)
+        return cast(NDArray[np.float64], mid)
+
+    def _predict_quantile_scaling(
+        self,
+        probs: NDArray[np.float64],
+        theta_b: NDArray[np.float64],
+        gamma: NDArray[np.float64],
+        X_scale: NDArray[np.float64],
+        xbeta: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Row-wise quantile inversion for scaled-baseline models (ADR 0002).
+
+        For each row ``i``, solve
+
+            h_0(q_i) · exp(0.5 · x_s,i · γ) + x_d,i · β + offset_i = F⁻¹(p_i)
+
+        for ``q_i`` via vectorised bisection.  Equivalently,
+
+            h_0(q_i) = (F⁻¹(p_i) − x_d,i·β − offset_i) / exp(0.5 · x_s,i · γ)
+                     =: z_i,
+
+        and ``z_i`` is bracketed by ``[θ_b[0]+ε, θ_b[-1]−ε]`` — *the same*
+        bracket as the shift-only path, because the scaling factor is folded
+        into ``z`` rather than into the bracket itself.  Saturation outside
+        that bracket triggers the same warning text used by the shift path.
+
+        Parameters
+        ----------
+        probs:
+            Probabilities in ``(0, 1)``, shape ``(m,)``.
+        theta_b:
+            Bernstein coefficient vector, length ``order + 1``.
+        gamma:
+            Scaling coefficients ``γ`` of length ``q_s``.
+        X_scale:
+            Scaling-design matrix of shape ``(m, q_s)``.
+        xbeta:
+            Optional per-row linear predictor ``X · β``, shape ``(m,)``.
+        offset:
+            Optional per-row offset, shape ``(m,)``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with values in ``basis.support``.
+        """
+        a, b = self.basis.support
+        k = self.basis.order
+        probs_arr = np.asarray(probs, dtype=np.float64)
+        m = probs_arr.shape[0]
+        if m == 0:
+            return np.empty(0, dtype=float)
+
+        dist = _get_dist(self.base_distribution)
+        shift: NDArray[np.float64] = (
+            np.zeros(m, dtype=np.float64)
+            if xbeta is None
+            else np.asarray(xbeta, dtype=np.float64)
+        )
+        if offset is not None:
+            shift = shift + np.asarray(offset, dtype=np.float64)
+
+        # f_i = exp(0.5 · x_s,i · γ); strictly positive.  Re-scale the
+        # F⁻¹(p)−xβ target into the baseline-h scale so the existing bracket
+        # [θ_b[0]+ε, θ_b[-1]−ε] applies row-wise without change.
+        f_scale = np.exp(0.5 * (X_scale @ gamma))
+        z_min = float(theta_b[0]) + _BRENTQ_EPS
+        z_max = float(theta_b[-1]) - _BRENTQ_EPS
+        z_raw = (dist.ppf(probs_arr) - shift) / f_scale
+        if np.any((z_raw < z_min) | (z_raw > z_max)):
+            warnings.warn(
+                "predict(what='quantile'): (F⁻¹(p) − xβ − offset) / "
+                "exp(0.5·x_s·γ) exceeds the basis bracket "
+                f"[θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] at "
+                "one or more points; clipping for numerical stability. "
+                "Quantiles at these points are saturated at the basis "
+                "endpoints, not the true asymptotic limit. Consider widening "
+                "the basis support or restricting probs away from 0/1.",
+                stacklevel=2,
+            )
+        z = np.clip(z_raw, z_min, z_max)
+
+        # Reuse the same Bernstein bisection scaffolding as ``_predict_quantile``.
+        i_arr = np.arange(k + 1, dtype=float)
+        j_arr = k - i_arr
+        binom_theta = comb(k, i_arr, exact=False) * theta_b
+        inv_width = 1.0 / (b - a)
+
+        def _h_vec(q: NDArray[np.float64]) -> NDArray[np.float64]:
+            t = (q - a) * inv_width
+            T = (t[:, None] ** i_arr) * ((1.0 - t)[:, None] ** j_arr)
+            return cast(NDArray[np.float64], T @ binom_theta)
+
+        lo = np.full(m, a, dtype=float)
+        hi = np.full(m, b, dtype=float)
         mid = 0.5 * (lo + hi)
         for _ in range(60):
             if np.max(hi - lo) < _BRENTQ_EPS:
@@ -1930,11 +2102,12 @@ class ConditionalTransformationModel:
         n: int,
         X: NDArray[np.float64] | None = None,
         random_state: int | np.random.Generator | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Draw samples from the fitted model via the quantile transformation.
 
         Samples ``u ~ Uniform(0, 1)`` and returns
-        ``predict(u, X, what="quantile")``.
+        ``predict(u, X, X_scale_new=X_scale, what="quantile")``.
 
         Parameters
         ----------
@@ -1946,6 +2119,11 @@ class ConditionalTransformationModel:
             with covariates.  Pass ``None`` only for covariate-free fits.
         random_state:
             Seed or :class:`numpy.random.Generator` for reproducibility.
+        X_scale:
+            Scaling-design matrix of shape ``(n, q_s)``.  Required when the
+            model was fitted with ``scaling=``; ignored otherwise.  Each
+            row yields one heteroskedastic conditional draw via
+            ``q_i = h_0⁻¹((Φ⁻¹(u_i) − x_d,i·β) / exp(0.5·x_s,i·γ))``.
 
         Returns
         -------
@@ -1956,7 +2134,8 @@ class ConditionalTransformationModel:
         NotFittedError
             If called before :meth:`fit`.
         ValueError
-            If ``X`` is provided but its number of rows does not equal ``n``.
+            If ``X`` is provided but its number of rows does not equal ``n``,
+            or if ``X_scale`` shape is inconsistent with the fit.
         """
         self._check_is_fitted()
 
@@ -1973,6 +2152,18 @@ class ConditionalTransformationModel:
         else:
             X_arr = None
 
+        X_scale_arr: NDArray[np.float64] | None = None
+        if X_scale is not None:
+            X_scale_arr = np.asarray(X_scale, dtype=float)
+            if X_scale_arr.ndim == 1:
+                X_scale_arr = X_scale_arr[:, None]
+            if X_scale_arr.shape[0] != n:
+                raise ValueError(
+                    f"X_scale has {X_scale_arr.shape[0]} rows but n={n}; "
+                    "simulate() draws one observation per row, so the "
+                    "counts must match."
+                )
+
         if isinstance(random_state, np.random.Generator):
             rng = random_state
         else:
@@ -1980,7 +2171,7 @@ class ConditionalTransformationModel:
 
         # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf.
         u = np.clip(rng.uniform(size=n), _SIMULATE_U_EPS, 1.0 - _SIMULATE_U_EPS)
-        return self.predict(u, X_new=X_arr, what="quantile")
+        return self.predict(u, X_new=X_arr, X_scale_new=X_scale_arr, what="quantile")
 
     def plot(
         self,
