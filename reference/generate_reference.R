@@ -1128,6 +1128,33 @@ writeLines(format(theta_co, digits = 15),
 writeLines(format(ll_co, digits = 15),
            con = file.path(out_dir, "scaling_colr_loglik.txt"))
 
+# --- predict(..., type="logodds") on a small (k × m) grid -----------------
+# Heteroskedastic logistic regression: with `scale=~x_s`, log F/S is no
+# longer linear in x_s across the q-axis, so a grid that varies both x_d
+# (shift) and x_s (scale) at several response points exercises the
+# scaled-predict path (#72) end-to-end.  Fixture layout mirrors
+# scaling_predict_* — k response points along rows, m newdata rows along
+# columns, flattened row-major.
+x_d_new_co <- c(-1.0, 0.0, 0.5, 1.5)
+x_s_new_co <- c(-0.5, 0.0, 1.0, 2.0)
+stopifnot(length(x_d_new_co) == length(x_s_new_co))
+m_co <- length(x_d_new_co)
+span_co <- b_co - a_co
+q_grid_co <- seq(a_co + 0.1 * span_co, b_co - 0.1 * span_co, length.out = 5)
+newdata_co <- data.frame(x_d = x_d_new_co, x_s = x_s_new_co)
+logodds_co <- predict(fit_co, newdata = newdata_co,
+                      q = q_grid_co, type = "logodds")
+stopifnot(is.matrix(logodds_co) && nrow(logodds_co) == length(q_grid_co) &&
+          ncol(logodds_co) == m_co)
+writeLines(format(x_d_new_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_x_d_new.txt"))
+writeLines(format(x_s_new_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_x_s_new.txt"))
+writeLines(format(q_grid_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_q_grid.txt"))
+writeLines(format(flatten_row_major(logodds_co), digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds.txt"))
+
 cat(sprintf("scaling Colr exact ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
             n_co, length(theta_co), ll_co))
 

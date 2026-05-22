@@ -791,6 +791,18 @@ class Colr(_TramModel):
         Polynomial degree of the Bernstein basis.  Defaults to 6.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
+    scaling:
+        Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
+        R ``tram::Colr(y ~ x_d | x_s)``.  Threads through to the
+        scaled-baseline likelihood (#71) and the scaled-predict path
+        (#72).  When supplied, the fit becomes a *heteroskedastic*
+        continuous-outcome logistic regression with non-proportional
+        log-odds — the log-odds gap between two ``x_s`` values varies
+        with ``y`` (the proportional-odds assumption is relaxed).  The
+        fitted parameter vector gains a γ block exposed as
+        :attr:`gamma_`, and :meth:`predict` requires ``X_scale_new``.
+        Sign-aligned with R (ADR 0002, Decision 5); see
+        ``docs/adr/0002-scaling-terms.md``.
 
     Examples
     --------
@@ -808,6 +820,7 @@ class Colr(_TramModel):
         support: tuple[float, float],
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
         super().__init__(
             order=order,
@@ -815,7 +828,56 @@ class Colr(_TramModel):
             censoring=CensoringType.NONE,
             optimizer_config=optimizer_config,
             base_distribution="logistic",
+            scaling=scaling,
         )
+
+    @property
+    def gamma_(self) -> NDArray[np.float64]:
+        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
+
+        Sign-aligned with R ``tram::Colr(..., scale=~x_s)``'s scaling
+        block (ADR 0002, Decision 5).
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
+        gamma = self.gamma_coef_
+        if gamma is None:
+            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
+        return gamma
+
+    @property
+    def feature_names_scaling_(self) -> list[str]:
+        """Column names of the scaling-design matrix supplied at fit time.
+
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError(
+                "Model was not fitted with scaling=; "
+                "feature_names_scaling_ is undefined."
+            )
+        names = self.scaling_feature_names_in_
+        if names is None:
+            q_s = self.scaling.shape[1]
+            return [f"X{j + 1}" for j in range(q_s)]
+        return names
 
 
 # ---------------------------------------------------------------------------
