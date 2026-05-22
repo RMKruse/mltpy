@@ -1262,3 +1262,108 @@ writeLines(format(flatten_row_major(q_mat_sp), digits = 15),
 
 cat(sprintf("scaling predict ref: m=%d × k=%d (k_q=%d)\n",
             m_sp, length(q_grid_sp), length(prob_grid_sp)))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms tracer for tram::Lm and tram::Survreg (issue #76).
+#
+# Both subclasses share the underlying scaled-baseline + scaled-predict
+# machinery wired up in #71/#72 — these fixtures pin per-class R parity for
+# θ_b, β, γ and the log-likelihood under the convenience surface.
+#
+# tram::Lm uses ``order = 1`` Bernstein on a normal base; ``negative = TRUE``
+# (so ``h − X_d·β``), so the pymlt β block is sign-flipped at compare time.
+# tram::Survreg fits a transformation on log-time (LogBernsteinBasis in
+# pymlt); we cover all three distributions (``weibull``, ``lognormal``,
+# ``loglogistic``) at right-censored time scales.  γ is sign-aligned with R
+# (ADR 0002, Decision 5) for both.
+#
+# Fixtures written:
+#   scaling_lm_*           — y, x_d, x_s, support, theta_full, loglik
+#   scaling_survreg_<d>_*  — y, event, x_d, x_s, support, theta_full, loglik
+#                            for d ∈ {weibull, lognormal, loglogistic}
+# ---------------------------------------------------------------------------
+
+# ---- scaling_lm (Lm + scale=~x_s, exact, normal, order=1) ----------------
+set.seed(760)
+n_lm_sc <- 200
+x_s_lm <- rnorm(n_lm_sc)
+x_d_lm <- rnorm(n_lm_sc)
+y_lm_sc <- 1.0 + 0.5 * x_d_lm + rnorm(n_lm_sc, sd = exp(0.25 * x_s_lm))
+a_lm_sc <- min(y_lm_sc) - 0.1
+b_lm_sc <- max(y_lm_sc) + 0.1
+df_lm_sc <- data.frame(y = y_lm_sc, x_d = x_d_lm, x_s = x_s_lm)
+fit_lm_sc <- tram::Lm(y ~ x_d | x_s, data = df_lm_sc,
+                      support = c(a_lm_sc, b_lm_sc))
+theta_lm_sc <- coef(as.mlt(fit_lm_sc))
+ll_lm_sc <- as.numeric(logLik(fit_lm_sc))
+
+writeLines(format(y_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_y.txt"))
+writeLines(format(x_d_lm, digits = 15),
+           con = file.path(out_dir, "scaling_lm_x_d.txt"))
+writeLines(format(x_s_lm, digits = 15),
+           con = file.path(out_dir, "scaling_lm_x_s.txt"))
+writeLines(paste(format(a_lm_sc, digits = 15),
+                 format(b_lm_sc, digits = 15)),
+           con = file.path(out_dir, "scaling_lm_support.txt"))
+writeLines(format(theta_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_theta.txt"))
+writeLines(format(ll_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_loglik.txt"))
+
+cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_lm_sc, length(theta_lm_sc), ll_lm_sc))
+
+# ---- scaling_survreg_<dist> (Survreg + scale=~x_s, right-censored) -------
+# tram::Survreg uses log-time with order=6 Bernstein on the log scale and
+# the chosen parametric link (Weibull / log-normal / log-logistic).  We
+# cover all three to match the convenience surface in pymlt.tram.Survreg.
+.write_survreg_scaling <- function(dist_name, seed) {
+  set.seed(seed)
+  n <- 200
+  x_s <- rnorm(n)
+  x_d <- rnorm(n)
+  # Heteroskedastic log-time: mean shifts with x_d, sd shifts with x_s.
+  log_t <- 0.5 + 0.4 * x_d + rnorm(n, sd = exp(0.25 * x_s))
+  t_obs <- exp(log_t)
+  cens  <- rexp(n, rate = 0.25)
+  y     <- pmin(t_obs, cens)
+  event <- as.integer(t_obs <= cens)
+  a <- max(min(y) * 0.9, 1e-3)
+  b <- max(y) * 1.1
+  df <- data.frame(y = y, event = event, x_d = x_d, x_s = x_s)
+  # tram::Survreg uses a 2-parameter parametric baseline on log(t)
+  # (h(log t) = (log t − α) / σ) regardless of ``order``.  A
+  # ``LogBernsteinBasis(order=1)`` on the pymlt side is affine in
+  # log(t) and yields an equivalent two-parameter reparameterisation
+  # (matching θ exactly after the basis transformation).  We therefore
+  # request ``order = 1`` on the R side as a matching cue, knowing the
+  # baseline is two-parameter in either parameterisation.
+  fit <- tram::Survreg(Surv(y, event) ~ x_d | x_s, data = df,
+                       support = c(a, b), order = 1,
+                       dist = dist_name)
+  theta <- coef(as.mlt(fit))
+  ll <- as.numeric(logLik(fit))
+  tag <- sprintf("scaling_survreg_%s", dist_name)
+  writeLines(format(y, digits = 15),
+             con = file.path(out_dir, sprintf("%s_y.txt", tag)))
+  writeLines(as.character(event),
+             con = file.path(out_dir, sprintf("%s_event.txt", tag)))
+  writeLines(format(x_d, digits = 15),
+             con = file.path(out_dir, sprintf("%s_x_d.txt", tag)))
+  writeLines(format(x_s, digits = 15),
+             con = file.path(out_dir, sprintf("%s_x_s.txt", tag)))
+  writeLines(paste(format(a, digits = 15),
+                   format(b, digits = 15)),
+             con = file.path(out_dir, sprintf("%s_support.txt", tag)))
+  writeLines(format(theta, digits = 15),
+             con = file.path(out_dir, sprintf("%s_theta.txt", tag)))
+  writeLines(format(ll, digits = 15),
+             con = file.path(out_dir, sprintf("%s_loglik.txt", tag)))
+  cat(sprintf("scaling Survreg %s ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+              dist_name, n, length(theta), ll))
+}
+
+.write_survreg_scaling("weibull",     761)
+.write_survreg_scaling("lognormal",   762)
+.write_survreg_scaling("loglogistic", 763)
