@@ -354,6 +354,96 @@ def test_confband_intercept_only_no_X():
     assert band.shape == (10, 3)
 
 
+# ---------------------------------------------------------------------------
+# Profile-likelihood confidence intervals (issue #87)
+#
+# Inverts the χ²_1 likelihood-ratio test for each requested parameter to get
+# a CI that respects the curvature of the log-likelihood (unlike the Wald
+# interval, which assumes quadratic behaviour at the MLE).
+# ---------------------------------------------------------------------------
+
+
+def _load_profile_ci_baseline():
+    required = [
+        REF_DIR / "profile_ci_baseline.txt",
+        REF_DIR / "mlt_normal_y.txt",
+    ]
+    if not all(p.exists() for p in required):
+        pytest.skip(
+            "profile_ci_baseline.txt or mlt_normal_y.txt not yet generated — "
+            "run Rscript reference/generate_reference.R"
+        )
+    y_fit = np.loadtxt(required[1])
+    ci_ref = np.loadtxt(required[0]).reshape(-1, 2)
+    return {"y": y_fit, "ci": ci_ref}
+
+
+def test_confint_type_wald_matches_default():
+    """type='wald' must reproduce today's default Wald CI bit-for-bit."""
+    ref = _load_profile_ci_baseline()  # reuses mlt_normal_y for the baseline fit
+    model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
+    ci_default = model.confint(level=0.95)
+    ci_wald = model.confint(level=0.95, type="wald")
+    np.testing.assert_array_equal(ci_wald, ci_default)
+
+
+def test_confint_invalid_type_raises():
+    """Unknown type values raise ValueError listing the accepted set."""
+    ref = _load_profile_ci_baseline()
+    model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
+    with pytest.raises(ValueError, match=r"\{'wald', 'profile'\}"):
+        model.confint(type="garbage")  # type: ignore[arg-type]
+
+
+def test_confint_profile_baseline_matches_R():
+    """Profile-CI on the order-4 no-covariate baseline matches R mlt.
+
+    Reference is produced by inverting the χ²_1 LR test in R via
+    ``mlt(..., fixed = c(name = value))`` re-fits — see the
+    ``profile_ci_baseline`` block in ``reference/generate_reference.R``.
+    """
+    ref = _load_profile_ci_baseline()
+    model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
+    ci = model.confint(level=0.95, type="profile")
+    assert ci.shape == ref["ci"].shape
+    np.testing.assert_allclose(ci, ref["ci"], rtol=1e-3, atol=1e-6)
+
+
+def test_confint_profile_bracket_failure_raises():
+    """Bracket search that cannot widen far enough must raise actionably.
+
+    Shrinks the initial bracket multiplier to a tiny value and caps the
+    doubling budget at 1 so the search has no realistic chance of seeing
+    a sign change.  The error message must name the parameter index and
+    report the largest ``|f|`` value seen — both are needed for users to
+    diagnose whether the issue is a vanishingly small SE or a parameter
+    pinned against the monotonicity boundary.
+    """
+    ref = _load_profile_ci_baseline()
+    model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
+    # Squeeze the bracket so f never crosses zero within the budget.
+    model._PROFILE_BRACKET_INIT = 1e-12
+    model._PROFILE_BRACKET_MAX_DOUBLINGS = 1
+    with pytest.raises(RuntimeError, match=r"parameter 0.*\|f\|"):
+        model.confint(level=0.95, parm=[0], type="profile")
+
+
+def test_confint_profile_parm_subset():
+    """parm= restricts the (k, 2) output to the requested indices only.
+
+    Cuts the 5-parameter baseline down to indices [0, 2] — the resulting
+    rows must match the full profile-CI at those same indices, both in
+    shape and value.
+    """
+    ref = _load_profile_ci_baseline()
+    model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
+    subset = model.confint(level=0.95, parm=[0, 2], type="profile")
+    assert subset.shape == (2, 2)
+    # The R fixture covers all p=5 parameters; rows 0 and 2 are what we
+    # asked for.  Tolerance matches the full-parity test.
+    np.testing.assert_allclose(subset, ref["ci"][[0, 2], :], rtol=1e-3, atol=1e-6)
+
+
 @pytest.mark.parametrize("what", ["density", "hazard"])
 def test_confband_density_hazard_clip_extreme_h_warns(what):
     """Saturated |h| > _H_CLIP on density/hazard must warn and stay finite.

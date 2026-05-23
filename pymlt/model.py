@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.interpolate import CubicSpline
+from scipy.optimize import brentq
 from scipy.special import comb, log_ndtr
 from scipy.stats import chi2, norm
 
@@ -1828,18 +1829,35 @@ class ConditionalTransformationModel:
         self,
         level: float = 0.95,
         parm: Sequence[int] | None = None,
+        type: Literal["wald", "profile"] = "wald",
     ) -> NDArray[np.float64]:
-        """Wald confidence intervals for :attr:`theta_`.
+        """Confidence intervals for :attr:`theta_`.
 
-        Computes the symmetric normal-approximation interval
+        Two interval types are supported:
 
-        .. math::
-            \\hat\\theta_j \\pm z_{1-\\alpha/2}\\,\\sqrt{V_{jj}},
+        * ``type="wald"`` (default) — symmetric normal-approximation
+          interval
 
-        where :math:`V = \\mathrm{vcov}()` is the inverse observed information
-        matrix and :math:`z_{1-\\alpha/2}` is the standard normal quantile for
-        confidence ``level`` :math:`= 1-\\alpha`.  Matches R
-        ``confint.default(mlt_fit, level=level)``.
+          .. math::
+              \\hat\\theta_j \\pm z_{1-\\alpha/2}\\,\\sqrt{V_{jj}},
+
+          where :math:`V = \\mathrm{vcov}()` is the inverse observed
+          information matrix and :math:`z_{1-\\alpha/2}` is the standard
+          normal quantile for confidence ``level`` :math:`= 1-\\alpha`.
+          Matches R ``confint.default(mlt_fit, level=level)``.
+
+        * ``type="profile"`` — profile-likelihood interval obtained by
+          inverting the :math:`\\chi^2_1` likelihood-ratio test.  For each
+          requested parameter index :math:`j` we solve
+
+          .. math::
+              2\\,(\\hat\\ell - \\ell_p(v)) = \\chi^2_{1,1-\\alpha},
+
+          where :math:`\\ell_p(v)` is the maximised log-likelihood with
+          :math:`\\theta_j` pinned to :math:`v` and the remaining
+          parameters re-optimised under the model constraints.  Each
+          parameter costs roughly ten constrained refits, so always pass
+          ``parm=`` to restrict the work on larger models.
 
         Parameters
         ----------
@@ -1849,6 +1867,10 @@ class ConditionalTransformationModel:
             Optional sequence of integer indices selecting a subset of
             parameters.  ``None`` returns intervals for all entries of
             :attr:`theta_`.
+        type:
+            Interval type.  ``"wald"`` (default) preserves the existing
+            normal-approximation behaviour; ``"profile"`` returns the
+            likelihood-ratio interval.
 
         Returns
         -------
@@ -1862,15 +1884,19 @@ class ConditionalTransformationModel:
         NotFittedError
             If called before :meth:`fit`.
         ValueError
-            If ``level`` is outside ``(0, 1)`` or ``parm`` contains indices
-            outside ``[0, len(theta_))``.
+            If ``level`` is outside ``(0, 1)``, ``parm`` contains indices
+            outside ``[0, len(theta_))``, or ``type`` is not one of
+            ``{"wald", "profile"}``.
         RuntimeError
-            Propagated from :meth:`vcov` on singular Hessians.
+            Propagated from :meth:`vcov` on singular Hessians (Wald), or
+            from the profile-CI bracket search when no sign change is
+            found within the widest bracket multiplier (profile).
 
         Examples
         --------
         >>> model = MLT(order=4, support=(0, 1)).fit(y)
         >>> ci = model.confint(level=0.95)  # shape (p, 2)
+        >>> ci_prof = model.confint(level=0.95, parm=[0], type="profile")
         """
         self._check_is_fitted()
         if self.theta_ is None:
@@ -1879,8 +1905,11 @@ class ConditionalTransformationModel:
             )
         if not (0.0 < level < 1.0):
             raise ValueError(f"level={level!r} is invalid. Expected: 0 < level < 1.")
+        if type not in ("wald", "profile"):
+            raise ValueError(
+                f"type={type!r} is invalid. Expected one of {{'wald', 'profile'}}."
+            )
 
-        se = self.standard_errors()
         k = self.theta_.size
         if parm is None:
             idx = np.arange(k)
@@ -1892,10 +1921,184 @@ class ConditionalTransformationModel:
                     f"min={int(idx.min())}, max={int(idx.max())}."
                 )
 
+        if type == "profile":
+            return self._confint_profile(level=level, idx=idx)
+
+        se = self.standard_errors()
         z = float(norm.ppf(0.5 * (1.0 + level)))
         est = self.theta_[idx]
         half = z * se[idx]
         return np.column_stack((est - half, est + half))
+
+    # Adaptive-bracket parameters for the profile-CI root search.  See the
+    # docstring on :meth:`_confint_profile` for the algorithm; constants are
+    # exposed as class attributes so that downstream tests / advanced users
+    # can override them on a subclass without monkey-patching the method.
+    _PROFILE_BRACKET_INIT: float = 3.0
+    _PROFILE_BRACKET_MAX_DOUBLINGS: int = 24
+    _PROFILE_BRENTQ_XTOL: float = 1e-6
+
+    def _profile_loglik_at(self, j: int, v: float) -> float:
+        """Maximised log-likelihood with ``theta_[j]`` pinned to ``v``.
+
+        Refits the model on the cached training data (``_y_train_`` etc.)
+        using a fresh :class:`OptimizerConfig` that copies every field of
+        ``self.optimizer_config`` and replaces ``fixed_params`` with
+        ``{j: v}``.  ``ConvergenceWarning`` from the inner fit is
+        suppressed — failed-to-converge inner fits show up as a larger
+        residual on the outer bracket search and are surfaced from
+        :meth:`_confint_profile` if they prevent a sign change.
+
+        Parameters
+        ----------
+        j:
+            Index into :attr:`theta_` to pin.  Must lie in
+            ``[0, len(theta_))``; the underlying call validates this.
+        v:
+            Pinned value for ``theta_[j]``.
+
+        Returns
+        -------
+        float
+            ``ℓ_p(v)`` — the maximised log-likelihood subject to
+            ``theta_[j] = v`` and the model's existing monotonicity /
+            boundary / equality constraints.
+        """
+        # ``_y_train_`` is populated by ``fit()``; callers reach this helper
+        # only via ``confint(type="profile")``, which has already passed
+        # ``_check_is_fitted()``.  The guard is here purely to satisfy
+        # type-narrowing on the cached attributes.
+        if self._y_train_ is None:
+            raise RuntimeError(
+                "Training data cache is unavailable; profile-CI requires "
+                "the model to have been fit on this instance."
+            )
+
+        base_config = (
+            self.optimizer_config
+            if self.optimizer_config is not None
+            else OptimizerConfig()
+        )
+        pinned_config = replace(
+            base_config,
+            fixed_params={int(j): float(v)},
+        )
+        censoring_arg = CensoringType.NONE if self.censoring is None else self.censoring
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            result = optimize(
+                self.basis,
+                self._y_train_,
+                X=self._X_train_,
+                censoring=censoring_arg,
+                config=pinned_config,
+                base_distribution=self.base_distribution,
+                weights=self._weights_train_,
+                offset=self._offset_train_,
+                scaling=self.scaling,
+            )
+        return float(result.log_likelihood)
+
+    def _confint_profile(
+        self,
+        level: float,
+        idx: NDArray[np.intp],
+    ) -> NDArray[np.float64]:
+        """Profile-likelihood confidence intervals for ``self.theta_[idx]``.
+
+        For each requested index ``j``, finds the two roots of
+
+        .. math::
+            f(v) = 2\\,(\\hat\\ell - \\ell_p(v)) - \\chi^2_{1, 1-\\alpha}
+
+        by :func:`scipy.optimize.brentq`.  The bracket is grown adaptively:
+        starting at ``θ̂_j ± 3·se_j``, the multiplier doubles up to 24
+        times until ``f`` changes sign.  Failure to bracket within the
+        widest multiplier raises :class:`RuntimeError` naming the
+        parameter and the largest ``|f|`` value observed.
+
+        Parameters
+        ----------
+        level:
+            Confidence level, already validated by :meth:`confint`.
+        idx:
+            Indices into :attr:`theta_` to compute intervals for.
+
+        Returns
+        -------
+        NDArray[np.float64]
+            ``(len(idx), 2)`` array with columns ``[lower, upper]``.
+        """
+        if self.theta_ is None or self.result_ is None:
+            raise RuntimeError(
+                "Model parameters are unexpectedly missing after fitting."
+            )
+
+        se = self.standard_errors()
+        theta_hat = self.theta_
+        ll_hat = float(self.result_.log_likelihood)
+        crit = float(chi2.ppf(level, df=1))
+
+        out = np.empty((idx.size, 2), dtype=np.float64)
+        for row, raw_j in enumerate(idx):
+            j = int(raw_j)
+            th = float(theta_hat[j])
+            s = float(se[j])
+            if not np.isfinite(s) or s <= 0.0:
+                raise RuntimeError(
+                    f"Profile-CI requires a finite, positive Wald SE to "
+                    f"seed the bracket search; se[{j}] = {s!r}. The "
+                    f"Hessian may be singular at this parameter — try "
+                    f"confint(type='wald') with regularize='active' "
+                    f"first to diagnose."
+                )
+
+            def f(v: float, _j: int = j) -> float:
+                return 2.0 * (ll_hat - self._profile_loglik_at(_j, v)) - crit
+
+            out[row, 0] = self._profile_root(f, anchor=th, step=s, j=j, side="lower")
+            out[row, 1] = self._profile_root(f, anchor=th, step=s, j=j, side="upper")
+        return out
+
+    def _profile_root(
+        self,
+        f: Callable[[float], float],
+        *,
+        anchor: float,
+        step: float,
+        j: int,
+        side: Literal["lower", "upper"],
+    ) -> float:
+        """Adaptive bracket then ``brentq`` for one side of one parameter.
+
+        Returns the root ``v`` such that ``f(v) ≈ 0``.  Raises
+        :class:`RuntimeError` if no sign change is observed within the
+        widest bracket multiplier.
+        """
+        sign = -1.0 if side == "lower" else 1.0
+        best_abs_f = -np.inf
+        endpoint = anchor
+        for k in range(1, self._PROFILE_BRACKET_MAX_DOUBLINGS + 1):
+            mult = self._PROFILE_BRACKET_INIT * (2.0 ** (k - 1))
+            endpoint = anchor + sign * mult * step
+            f_end = f(endpoint)
+            if abs(f_end) > best_abs_f:
+                best_abs_f = abs(f_end)
+            if f_end > 0.0:
+                break
+        else:
+            raise RuntimeError(
+                f"Profile-CI bracket search for parameter {j} on the "
+                f"{side} side did not change sign after "
+                f"{self._PROFILE_BRACKET_MAX_DOUBLINGS} doublings; the "
+                f"largest |f| observed was {best_abs_f:.6g}. The Wald SE "
+                f"may be too small to span the LR critical value, or "
+                f"theta_[{j}] may lie on a constraint boundary — try "
+                f"checking model.standard_errors()[{j}] and "
+                f"model.confint(type='wald')."
+            )
+        lo, hi = (endpoint, anchor) if side == "lower" else (anchor, endpoint)
+        return float(brentq(f, lo, hi, xtol=self._PROFILE_BRENTQ_XTOL))
 
     def confband(
         self,

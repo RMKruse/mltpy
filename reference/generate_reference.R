@@ -1548,3 +1548,82 @@ writeLines(sprintf("%.15g %d %.15g",
            con = file.path(out_dir, "scaling_vignette_boxcox_lr.txt"))
 cat(sprintf("scaling vignette BoxCox LR: chi^2=%.4f df=%d p=%.4g\n",
             chisq_bc_vig, df_lr_vig, pval_lr_vig))
+
+# ---------------------------------------------------------------------------
+# Profile-likelihood confidence intervals (issue #87, parent #60).
+#
+# Reuses the top-of-file no-covariate fit (`fit`, order-4 Bernstein on
+# uniform(0.02, 0.98)) — same object that backs the `confband_baseline_*`
+# fixtures.  R `mlt` does not provide a public `confint(type="profile")`
+# entry point, so we invert the χ²_1 likelihood-ratio test by hand:
+#   for each parameter j, find the two roots v ∈ ℝ of
+#       f(v) = 2·(ℓ̂ − ℓ_p(v)) − χ²_{1, 1-α},
+#   where ℓ_p(v) is the profile log-likelihood with θ_j pinned to v and
+#   the remaining parameters re-optimised under the monotonicity
+#   constraints.  Refit is via `mlt(..., fixed = c("Bs(y)5" = v))`-style
+#   parameter pinning through `update(fit, fixed = ...)` — `mlt`'s public
+#   `fixed=` argument injects equality constraints into the auglag /
+#   alabama path used internally.
+#
+# Reference layout — `profile_ci_baseline.txt`: `(p, 2)` flattened
+# row-major with columns `[lower, upper]`, matching the existing
+# `confint_<model>.txt` files.
+# ---------------------------------------------------------------------------
+
+profile_ci <- function(fit, level = 0.95) {
+  theta_hat <- coef(as.mlt(fit), with_baseline = TRUE)
+  p         <- length(theta_hat)
+  V         <- vcov(as.mlt(fit))
+  se        <- sqrt(diag(V))
+  ll_hat    <- as.numeric(logLik(fit))
+  crit      <- qchisq(level, df = 1)
+
+  # `mlt::mlt` accepts a named `fixed = c(name = value)` argument that
+  # pins one coefficient to `value` and re-runs the constrained MLE.
+  # The names come from `names(theta_hat)`.
+  param_names <- names(theta_hat)
+
+  # Profile log-lik at θ_j = v: refit with that one coordinate pinned.
+  profile_ll <- function(j, v) {
+    pin           <- setNames(v, param_names[j])
+    fit_pin       <- mlt(ctm, data = data.frame(y = y), fixed = pin)
+    as.numeric(logLik(fit_pin))
+  }
+
+  # f(v) = 2·(ll_hat − ll_p(v)) − crit.  Root-find on each side of θ̂_j.
+  f_one <- function(j, v) 2 * (ll_hat - profile_ll(j, v)) - crit
+
+  ci <- matrix(NA_real_, nrow = p, ncol = 2,
+               dimnames = list(param_names, c("lower", "upper")))
+
+  for (j in seq_len(p)) {
+    # Adaptive bracket: start at θ̂_j ± 3·se_j, double on no sign change.
+    th <- theta_hat[j]
+    s  <- se[j]
+    # Lower root: bracket [lo, th].
+    for (k in 1:24) {
+      lo <- th - (3 * 2^(k - 1)) * s
+      if (f_one(j, lo) > 0) break
+    }
+    ci[j, 1] <- uniroot(function(v) f_one(j, v),
+                        interval = c(lo, th),
+                        tol = 1e-6)$root
+    # Upper root: bracket [th, hi].
+    for (k in 1:24) {
+      hi <- th + (3 * 2^(k - 1)) * s
+      if (f_one(j, hi) > 0) break
+    }
+    ci[j, 2] <- uniroot(function(v) f_one(j, v),
+                        interval = c(th, hi),
+                        tol = 1e-6)$root
+  }
+  ci
+}
+
+profile_ci_baseline <- profile_ci(fit, level = 0.95)
+
+writeLines(format(flatten_row_major(profile_ci_baseline), digits = 15),
+           con = file.path(out_dir, "profile_ci_baseline.txt"))
+
+cat(sprintf("profile_ci_baseline: p=%d rows written\n",
+            nrow(profile_ci_baseline)))
