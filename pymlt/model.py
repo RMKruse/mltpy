@@ -1318,7 +1318,9 @@ class ConditionalTransformationModel:
             offset=offset_clean,
         )
 
-    def vcov(self) -> NDArray[np.float64]:
+    _ACTIVE_CONSTRAINT_TOL: float = 1e-8
+
+    def vcov(self, regularize: str | None = "active") -> NDArray[np.float64]:
         """Asymptotic variance–covariance matrix of :attr:`theta_`.
 
         Returns the inverse of the observed information matrix
@@ -1327,6 +1329,23 @@ class ConditionalTransformationModel:
         estimator of the asymptotic covariance of the maximum-likelihood
         estimator.
 
+        Parameters
+        ----------
+        regularize : {'active', None}, default 'active'
+            Regularization strategy for near-singular Hessians.
+
+            * ``'active'`` — if direct inversion fails, augment the Hessian
+              with a penalty term along active monotonicity constraints before
+              re-attempting: ``H_reg = H + ρ · Aᵀ A`` where ``A`` is the
+              sub-matrix of rows of ``_A_ineq_`` for which the KKT multiplier
+              exceeds :attr:`_ACTIVE_CONSTRAINT_TOL`, and ``ρ`` is the final
+              auglag penalty parameter.  When auglag data are not available
+              (SLSQP / trust-constr fits) the pseudoinverse is used as a
+              fallback.  This is the default because the Hessian can be
+              singular at constrained MLEs.
+            * ``None`` — raise ``RuntimeError`` on singular Hessian (original
+              behaviour; useful when you need a diagnostic failure).
+
         Returns
         -------
         NDArray[np.float64]
@@ -1334,13 +1353,13 @@ class ConditionalTransformationModel:
 
         Raises
         ------
+        ValueError
+            If *regularize* is not ``'active'`` or ``None``.
         NotFittedError
             If called before :meth:`fit`.
         RuntimeError
-            If the Hessian is singular or not positive definite (e.g. a
-            constraint is active at the MLE, or the basis is degenerate for
-            the given data).  ``np.linalg.LinAlgError`` is wrapped so callers
-            do not have to special-case the linalg module.
+            If the Hessian is singular and ``regularize=None``, or if
+            ``hessian_`` is unexpectedly missing after fitting.
         """
         self._check_is_fitted()
         if self.hessian_ is None:
@@ -1348,15 +1367,38 @@ class ConditionalTransformationModel:
                 "hessian_ is unexpectedly missing after fitting. "
                 "Please call fit(y) again."
             )
+        if regularize not in ("active", None):
+            raise ValueError(
+                f"regularize must be 'active' or None, got {regularize!r}"
+            )
         try:
             return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
         except np.linalg.LinAlgError as exc:
-            raise RuntimeError(
-                "vcov() could not be computed: the Hessian matrix is singular "
-                "or ill-conditioned.  Possible causes: active monotonicity "
-                "constraint at the MLE, basis order too high relative to "
-                "sample size, or collinear covariates."
-            ) from exc
+            if regularize != "active":
+                raise RuntimeError(
+                    "vcov() could not be computed: the Hessian matrix is singular "
+                    "or ill-conditioned.  Possible causes: active monotonicity "
+                    "constraint at the MLE, basis order too high relative to "
+                    "sample size, or collinear covariates.  "
+                    "Pass regularize='active' to use the penalty-augmented Hessian."
+                ) from exc
+
+        # regularize='active' fallback: penalty-augmented Hessian.
+        H_reg = self.hessian_.copy()
+        if (
+            self._A_ineq_ is not None
+            and self.result_ is not None
+            and self.result_.mu_ineq is not None
+            and self.result_.rho_final is not None
+        ):
+            active_mask = self.result_.mu_ineq > self._ACTIVE_CONSTRAINT_TOL
+            if np.any(active_mask):
+                A_active = self._A_ineq_[active_mask, :]
+                H_reg = H_reg + self.result_.rho_final * A_active.T @ A_active
+        try:
+            return cast(NDArray[np.float64], np.linalg.inv(H_reg))
+        except np.linalg.LinAlgError:
+            return cast(NDArray[np.float64], np.linalg.pinv(H_reg))
 
     def estfun(self) -> NDArray[np.float64]:
         """Per-observation score contributions, ``(n, p+q)``.
@@ -1537,19 +1579,29 @@ class ConditionalTransformationModel:
         out[mask_i] = 0.5 * (y.lower[mask_i] + y.upper[mask_i])
         return out
 
-    def standard_errors(self) -> NDArray[np.float64]:
+    def standard_errors(
+        self, regularize: str | None = "active"
+    ) -> NDArray[np.float64]:
         """Vector of asymptotic standard errors for :attr:`theta_`.
 
-        Computed as ``sqrt(diag(vcov()))``.  Length equals ``len(theta_)``.
+        Computed as ``sqrt(diag(vcov(regularize=regularize)))``.  Length
+        equals ``len(theta_)``.
+
+        Parameters
+        ----------
+        regularize : {'active', None}, default 'active'
+            Passed directly to :meth:`vcov`.  See that method's documentation
+            for details.
 
         Raises
         ------
         NotFittedError
             If called before :meth:`fit`.
         RuntimeError
-            Propagated from :meth:`vcov` if the Hessian is singular.
+            Propagated from :meth:`vcov` if the Hessian is singular and
+            ``regularize=None``.
         """
-        diag = np.diag(self.vcov())
+        diag = np.diag(self.vcov(regularize=regularize))
         if np.any(diag < 0):
             raise RuntimeError(
                 "vcov() contains negative diagonal entries — the Hessian "

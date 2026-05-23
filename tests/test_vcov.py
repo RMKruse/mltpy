@@ -14,6 +14,7 @@ and the updated `_TramModel.summary`) against:
 
 from __future__ import annotations
 
+import copy
 import pathlib
 import re
 
@@ -32,6 +33,7 @@ from pymlt import (
     score_matrix,
 )
 from pymlt.basis import BernsteinBasis
+from pymlt.optimizer import OptimizationResult
 from pymlt.tram import BoxCox, Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
@@ -593,3 +595,121 @@ class TestWaldTest:
         s = repr(result)
         assert "Wald" in s
         assert "statistic" in s or "W" in s
+
+
+# ---------------------------------------------------------------------------
+# vcov(regularize=...) and standard_errors(regularize=...)
+# ---------------------------------------------------------------------------
+
+
+class TestVcovRegularize:
+    """Tests for vcov(regularize='active') and standard_errors(regularize=...).
+
+    Fixtures
+    --------
+    self.m  — a well-identified MLT fit with no active constraints.
+    """
+
+    def setup_method(self):
+        rng = np.random.default_rng(42)
+        n = 200
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.5 * self.X[:, 0] - 0.3 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+
+    def test_vcov_accepts_regularize_kwarg(self):
+        """vcov(regularize='active') and vcov(regularize=None) are callable."""
+        _ = self.m.vcov(regularize="active")
+        _ = self.m.vcov(regularize=None)
+
+    def test_vcov_active_matches_plain_on_invertible_hessian(self):
+        """No active constraints → regularize='active' gives the same matrix."""
+        v_active = self.m.vcov(regularize="active")
+        v_none = self.m.vcov(regularize=None)
+        np.testing.assert_allclose(v_active, v_none, rtol=1e-12, atol=0)
+
+    def test_standard_errors_accepts_regularize_kwarg(self):
+        se = self.m.standard_errors(regularize="active")
+        assert se.shape == (self.m.theta_.size,)
+        assert np.all(se > 0)
+
+    def test_standard_errors_default_uses_active(self):
+        """standard_errors() == standard_errors(regularize='active')."""
+        se_default = self.m.standard_errors()
+        se_active = self.m.standard_errors(regularize="active")
+        np.testing.assert_array_equal(se_default, se_active)
+
+    def test_vcov_none_raises_on_singular_hessian(self):
+        """regularize=None preserves old RuntimeError on singular Hessian."""
+        m = copy.copy(self.m)
+        # Inject a rank-deficient Hessian (last row/col zeroed out).
+        H = self.m.hessian_.copy()
+        H[-1, :] = 0.0
+        H[:, -1] = 0.0
+        m.hessian_ = H
+        with pytest.raises(RuntimeError, match="singular"):
+            m.vcov(regularize=None)
+
+    def _make_singular_constrained_model(self):
+        """Return a copy of self.m whose Hessian is singular and which has
+        active-constraint metadata injected (simulating an auglag fit where
+        the last Bernstein increment is exactly zero)."""
+        m = copy.copy(self.m)
+        p = m.theta_.size
+
+        # Make Hessian singular: zero out the first row/col (corresponds to
+        # the first Bernstein coefficient being on its monotonicity boundary).
+        H = self.m.hessian_.copy()
+        H[0, :] = 0.0
+        H[:, 0] = 0.0
+        m.hessian_ = H
+
+        # Constraint matrix: forward-difference operator on the first p-2
+        # Bernstein params (mimicking build_constraints output).
+        order = p - 2  # 2 covariate params in self.m
+        A = np.zeros((order, p))
+        for i in range(order):
+            A[i, i + 1] = 1.0
+            A[i, i] = -1.0
+        m._A_ineq_ = A
+
+        # Inject a realistic OptimizationResult with active multipliers.
+        # First constraint (i=0) is active → mu_ineq[0] > 0.
+        mu = np.zeros(order)
+        mu[0] = 5.0  # active
+        rho = 100.0
+        m.result_ = OptimizationResult(
+            theta=m.theta_,
+            log_likelihood=float(m.result_.log_likelihood),
+            converged=True,
+            n_iter=m.result_.n_iter,
+            n_restarts=m.result_.n_restarts,
+            solver_message=m.result_.solver_message,
+            rho_final=rho,
+            mu_ineq=mu,
+        )
+        return m
+
+    def test_vcov_active_returns_finite_on_singular_with_constraint_data(self):
+        """regularize='active' recovers from singular H via penalty augmentation."""
+        m = self._make_singular_constrained_model()
+        v = m.vcov(regularize="active")
+        assert np.all(np.isfinite(v))
+        assert v.shape == (m.theta_.size, m.theta_.size)
+        # Diagonal must be non-negative for a valid covariance matrix.
+        assert np.all(np.diag(v) >= 0)
+
+    def test_standard_errors_active_finite_on_constrained_model(self):
+        """standard_errors() (default) does not raise on singular-H model."""
+        m = self._make_singular_constrained_model()
+        se = m.standard_errors()
+        assert np.all(np.isfinite(se))
+        assert se.shape == (m.theta_.size,)
+        assert np.all(se >= 0)
+
+    def test_vcov_invalid_regularize_raises_valueerror(self):
+        with pytest.raises(ValueError, match="regularize"):
+            self.m.vcov(regularize="unknown")
