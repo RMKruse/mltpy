@@ -475,35 +475,28 @@ class ConditionalTransformationModel:
         self.weights_ = weights_clean
         self.offset_ = offset_clean
 
-        if self.scaling is None:
-            self.hessian_ = _hessian(
-                self.theta_,
-                self.basis,
-                y_clean,
-                X_clean,
-                censoring_arg,
-                base_distribution=self.base_distribution,
-                weights=weights_clean,
-                offset=offset_clean,
-            )
-            self._estfun_cache_ = _score_matrix(
-                self.theta_,
-                self.basis,
-                y_clean,
-                X_clean,
-                censoring_arg,
-                base_distribution=self.base_distribution,
-                weights=weights_clean,
-                offset=offset_clean,
-            )
-        else:
-            # ADR 0002 — analytical Hessian / per-observation scores for the
-            # scaled path land in slice #77 (vcov / sandwich SE / Wald).
-            # The tracer-bullet slice (#70) leaves them as ``None``; vcov(),
-            # estfun(), and the diagnostics that depend on them raise via
-            # the existing "unexpectedly missing" checks.
-            self.hessian_ = None
-            self._estfun_cache_ = None
+        self.hessian_ = _hessian(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            censoring_arg,
+            base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
+            scaling=self.scaling,
+        )
+        self._estfun_cache_ = _score_matrix(
+            self.theta_,
+            self.basis,
+            y_clean,
+            X_clean,
+            censoring_arg,
+            base_distribution=self.base_distribution,
+            weights=weights_clean,
+            offset=offset_clean,
+            scaling=self.scaling,
+        )
 
         # Snapshot the training response and covariates for diagnostics
         # (residuals()).  Defensive copies so caller mutations of the
@@ -1462,6 +1455,10 @@ class ConditionalTransformationModel:
             # R's ``mlt::residuals`` returns the negative of the
             # positive-log-likelihood intercept score (so the residual is
             # interpretable as ``∂(-ℓ_i)/∂α``).  Negate to match.
+            # Under scaling (ADR 0002) the hypothetical intercept α is
+            # added to the *final* h (post-scaling, post-shift), so the
+            # closed-form score formulas apply unchanged once h is
+            # evaluated at the scaled value h_0(y)·exp(0.5·X_s·γ)+Xβ.
             assert isinstance(self.basis, BernsteinBasis)
             cens_r = CensoringType.NONE if self.censoring is None else self.censoring
             return -_intercept_score(
@@ -1473,6 +1470,7 @@ class ConditionalTransformationModel:
                 base_distribution=self.base_distribution,
                 weights=self._weights_train_,
                 offset=self._offset_train_,
+                scaling=self.scaling,
             )
 
         # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per

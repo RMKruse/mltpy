@@ -97,6 +97,40 @@ class TestOptimizationResultFields:
         result = optimize(make_basis(), simple_data())
         assert isinstance(result.solver_message, str)
 
+    def test_auglag_multiplier_fields_present(self):
+        result = optimize(make_basis(), simple_data())
+        assert hasattr(result, "rho_final")
+        assert hasattr(result, "mu_ineq")
+        assert hasattr(result, "lambda_eq")
+
+    def test_auglag_multiplier_types(self):
+        result = optimize(make_basis(), simple_data())
+        assert isinstance(result.rho_final, float)
+        assert isinstance(result.mu_ineq, np.ndarray)
+        assert isinstance(result.lambda_eq, np.ndarray)
+
+    def test_auglag_mu_ineq_shape(self):
+        order = 4
+        result = optimize(make_basis(order=order), simple_data())
+        # one inequality per adjacent-pair difference → order constraints
+        assert result.mu_ineq.shape == (order,)
+
+    def test_auglag_lambda_eq_shape(self):
+        result = optimize(make_basis(order=3), simple_data())
+        # shift model has no equality constraints
+        assert result.lambda_eq.shape == (0,)
+
+    def test_auglag_mu_ineq_nonneg(self):
+        result = optimize(make_basis(), simple_data())
+        assert np.all(result.mu_ineq >= -1e-8)
+
+    def test_slsqp_multiplier_fields_are_none(self):
+        cfg = OptimizerConfig(solver="slsqp")
+        result = optimize(make_basis(), simple_data(), config=cfg)
+        assert result.rho_final is None
+        assert result.mu_ineq is None
+        assert result.lambda_eq is None
+
 
 # ---------------------------------------------------------------------------
 # Private helpers

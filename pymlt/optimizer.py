@@ -127,6 +127,18 @@ class OptimizationResult:
         returned ``theta``.  ``None`` for SLSQP / trust-constr fits.
         Useful when ``converged=False`` to judge how close the run got
         before exhausting its outer-iteration budget.
+    rho_final:
+        Final penalty parameter ρ from the PHR auglag solver.  ``None``
+        for SLSQP / trust-constr fits.
+    mu_ineq:
+        Final inequality multipliers (≥ 0), shape ``(m_ineq,)``, from the
+        auglag solver.  For shift models ``m_ineq = order``; for interaction
+        models ``m_ineq = order * q``.  ``None`` for SLSQP / trust-constr.
+    lambda_eq:
+        Final equality multipliers, shape ``(m_eq,)``, from the auglag
+        solver.  Currently always shape ``(0,)`` for all built-in models
+        (no equality constraints are imposed).  ``None`` for SLSQP /
+        trust-constr fits.
     """
 
     theta: NDArray[np.float64]
@@ -137,6 +149,9 @@ class OptimizationResult:
     solver_message: str
     n_outer_iter: int | None = None
     kkt_residual: float | None = None
+    rho_final: float | None = None
+    mu_ineq: NDArray[np.float64] | None = None
+    lambda_eq: NDArray[np.float64] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +824,9 @@ def _interaction_auglag(
         solver_message=best_result.message,
         n_outer_iter=best_result.n_outer_iter,
         kkt_residual=best_result.kkt_residual,
+        rho_final=best_result.rho_final,
+        mu_ineq=best_result.mu_ineq,
+        lambda_eq=best_result.lambda_eq,
     )
 
 
@@ -1052,4 +1070,7 @@ def _optimize_auglag(
         solver_message=best_auglag_result.message,
         n_outer_iter=best_auglag_result.n_outer_iter,
         kkt_residual=best_auglag_result.kkt_residual,
+        rho_final=best_auglag_result.rho_final,
+        mu_ineq=best_auglag_result.mu_ineq,
+        lambda_eq=best_auglag_result.lambda_eq,
     )

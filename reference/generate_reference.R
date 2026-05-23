@@ -1367,3 +1367,152 @@ cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 .write_survreg_scaling("weibull",     761)
 .write_survreg_scaling("lognormal",   762)
 .write_survreg_scaling("loglogistic", 763)
+
+# ---------------------------------------------------------------------------
+# Scaling-terms inference (issue #77) — vcov, sandwich (HC0), and a Wald
+# test for the γ block, for BoxCox + Coxph + Colr scaled fits.
+#
+# Re-uses the fits ``fit_sc`` (BoxCox + normal, exact),
+# ``fit_cxs`` (Coxph, right-censored), ``fit_co`` (Colr + logistic, exact)
+# generated above.  For each fit the saved fixtures are the
+# ``(k × k)`` inverse-information vcov and the ``(k × k)`` HC0 sandwich,
+# both flattened row-major (k = p + q_d + q_s).  An additional one-line
+# Wald-test fixture pins the statistic and p-value for the contrast that
+# picks out γ_1 (H0: γ_1 = 0).
+#
+# Sign conventions (ADR 0002, Decision 5):
+#
+# * BoxCox uses ``negative = TRUE`` so β_R = −β_pymlt.  Both rows and
+#   columns indexed by β therefore flip sign in the vcov; the Python test
+#   applies the diagonal signing matrix ``diag([1]*p + [-1]*q_d + [1]*q_s)``
+#   before comparing.
+# * Coxph / Colr use ``negative = FALSE`` (default) — β block is sign-
+#   aligned, so no signing diagonal is required.
+# * γ is sign-aligned across all three classes.
+#
+# Files written per model in {"boxcox", "coxph", "colr"}:
+#   reference/scaling_vcov_<model>.txt          — flatten_row_major(V)
+#   reference/scaling_vcov_<model>_HC0.txt      — flatten_row_major(V_HC0)
+#   reference/scaling_vcov_<model>_dim.txt      — "p q_d q_s" (one line)
+#   reference/scaling_vcov_<model>_wald_gamma.txt
+#                                               — "W df pvalue" (one line)
+# ---------------------------------------------------------------------------
+.write_scaled_vcov <- function(fit, tag, p, q_d, q_s,
+                               y, x_d, x_s, support, event = NULL) {
+  mlt_fit <- as.mlt(fit)
+  V_info <- vcov(mlt_fit)
+  # HC0 sandwich = V_info %*% (U'U) %*% V_info, computed directly from the
+  # pieces because ``sandwich::vcovHC`` calls ``model.frame`` which fails for
+  # multi-formula scaled mlt fits.  The closed form matches HC0 exactly.
+  U      <- sandwich::estfun(mlt_fit)
+  V_HC0  <- V_info %*% (t(U) %*% U) %*% V_info
+  k <- p + q_d + q_s
+  stopifnot(nrow(V_info) == k && ncol(V_info) == k)
+  stopifnot(nrow(V_HC0)  == k && ncol(V_HC0)  == k)
+  # Wald test: pick out γ_1 (first γ column, column p + q_d + 1 in R).
+  # H0: γ_1 = 0, info vcov, df = 1.
+  theta_full <- coef(mlt_fit)
+  Rmat <- matrix(0, nrow = 1, ncol = k)
+  Rmat[1, p + q_d + 1L] <- 1.0
+  Rtheta <- as.numeric(Rmat %*% theta_full)
+  RVRt   <- as.numeric(Rmat %*% V_info %*% t(Rmat))
+  W      <- Rtheta * (1 / RVRt) * Rtheta
+  pval   <- 1 - pchisq(W, df = 1)
+  # Self-contained dataset fixtures so each parity test can rebuild the
+  # exact same fit without depending on shared upstream blocks.
+  writeLines(format(y, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_y.txt", tag)))
+  if (!is.null(event)) {
+    writeLines(as.character(event),
+               con = file.path(out_dir,
+                               sprintf("scaling_vcov_%s_event.txt", tag)))
+  }
+  writeLines(format(x_d, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_x_d.txt", tag)))
+  writeLines(format(x_s, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_x_s.txt", tag)))
+  writeLines(paste(format(support[1], digits = 15),
+                   format(support[2], digits = 15)),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_support.txt", tag)))
+  writeLines(format(theta_full, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_theta.txt", tag)))
+  writeLines(format(flatten_row_major(V_info), digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s.txt", tag)))
+  writeLines(format(flatten_row_major(V_HC0),  digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_HC0.txt", tag)))
+  writeLines(sprintf("%d %d %d", p, q_d, q_s),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_dim.txt", tag)))
+  writeLines(sprintf("%.15g %d %.15g", W, 1L, pval),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_wald_gamma.txt", tag)))
+  cat(sprintf("scaling %s vcov ref: k=%d, W(gamma)=%.4f, p=%.4g\n",
+              tag, k, W, pval))
+}
+
+# Dedicated BoxCox vcov fit — n=200, order=4, seed=770 gives an interior
+# MLE (no active monotonicity constraints), so the full 8×8 vcov is
+# numerically well-conditioned and matches pymlt's ``inv(H)`` element-wise.
+set.seed(770)
+n_v_bc <- 200
+x_s_v_bc <- rnorm(n_v_bc)
+x_d_v_bc <- rnorm(n_v_bc)
+y_v_bc   <- 1.0 + 0.5 * x_d_v_bc + rnorm(n_v_bc, sd = exp(0.25 * x_s_v_bc))
+a_v_bc <- min(y_v_bc) - 0.1
+b_v_bc <- max(y_v_bc) + 0.1
+df_v_bc <- data.frame(y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc)
+fit_v_bc <- tram::BoxCox(y ~ x_d | x_s, data = df_v_bc,
+                         support = c(a_v_bc, b_v_bc), order = 4)
+.write_scaled_vcov(fit_v_bc, "boxcox",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc,
+                   support = c(a_v_bc, b_v_bc))
+
+# Dedicated Colr vcov fit — n=200, order=4, seed=770 gives an interior MLE.
+set.seed(770)
+n_v_co <- 200
+x_s_v_co <- rnorm(n_v_co)
+x_d_v_co <- rnorm(n_v_co)
+y_v_co   <- rlogis(n_v_co, location = 0.5 * x_d_v_co,
+                   scale = exp(0.25 * x_s_v_co))
+a_v_co <- min(y_v_co) - 0.1
+b_v_co <- max(y_v_co) + 0.1
+df_v_co <- data.frame(y = y_v_co, x_d = x_d_v_co, x_s = x_s_v_co)
+fit_v_co <- tram::Colr(y ~ x_d | x_s, data = df_v_co,
+                       support = c(a_v_co, b_v_co), order = 4)
+.write_scaled_vcov(fit_v_co, "colr",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_co, x_d = x_d_v_co, x_s = x_s_v_co,
+                   support = c(a_v_co, b_v_co))
+
+# Coxph + scale=~x_s, right-censored.  Coxph fits are structurally
+# constraint-binding on the baseline (the tail of the baseline hazard is
+# under-determined), so the θ_b block of the vcov reflects R's
+# active-constraint penalty and does not match pymlt's bare ``inv(H)``.
+# The β / γ sub-block is the practically meaningful block for covariate
+# inference and matches at the same tolerance as BoxCox / Colr.
+set.seed(770)
+n_v_cx <- 300
+x_s_v_cx <- rnorm(n_v_cx)
+x_d_v_cx <- rnorm(n_v_cx)
+t_v_cx <- rexp(n_v_cx, rate = exp(0.5 + 0.4 * x_d_v_cx + 0.25 * x_s_v_cx))
+cens_v_cx <- rexp(n_v_cx, rate = 0.10)
+y_v_cx   <- pmin(t_v_cx, cens_v_cx)
+event_v_cx <- as.integer(t_v_cx <= cens_v_cx)
+a_v_cx <- min(y_v_cx) * 0.5
+b_v_cx <- max(y_v_cx) * 1.1
+df_v_cx <- data.frame(y = y_v_cx, event = event_v_cx,
+                      x_d = x_d_v_cx, x_s = x_s_v_cx)
+fit_v_cx <- tram::Coxph(Surv(y, event) ~ x_d | x_s, data = df_v_cx,
+                        support = c(a_v_cx, b_v_cx), order = 4)
+.write_scaled_vcov(fit_v_cx, "coxph",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_cx, x_d = x_d_v_cx, x_s = x_s_v_cx,
+                   support = c(a_v_cx, b_v_cx), event = event_v_cx)
