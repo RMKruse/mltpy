@@ -251,6 +251,16 @@ class ConditionalTransformationModel:
         # Score matrix — computed eagerly at the end of fit().
         self._estfun_cache_: NDArray[np.float64] | None = None
 
+        self._A_ineq_: NDArray[np.float64] | None = None
+        """Inequality constraint matrix from the last auglag fit, shape
+        ``(m_ineq, total_params)``.  ``None`` before :meth:`fit` or when
+        the solver is not auglag."""
+
+        self._C_eq_: NDArray[np.float64] | None = None
+        """Equality constraint matrix from the last auglag fit when
+        ``lower`` / ``upper`` are pinned.  ``None`` when no equality
+        constraints were imposed, or when the solver is not auglag."""
+
         self.weights_: NDArray[np.float64] | None = None
         """Observation weights supplied to the last :meth:`fit` call.
         ``None`` when no weights were used."""
@@ -453,6 +463,8 @@ class ConditionalTransformationModel:
         self.theta_ = result.theta
         self.result_ = result
         self.is_fitted_ = True
+        self._A_ineq_ = result.constraint_A_ineq
+        self._C_eq_ = result.constraint_C_eq
         self.n_obs_ = (
             int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         )

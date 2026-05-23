@@ -139,6 +139,17 @@ class OptimizationResult:
         solver.  Currently always shape ``(0,)`` for all built-in models
         (no equality constraints are imposed).  ``None`` for SLSQP /
         trust-constr fits.
+    constraint_A_ineq:
+        Inequality constraint matrix used during optimisation, shape
+        ``(m_ineq, total_params)``.  Set for auglag fits; ``None`` for
+        SLSQP / trust-constr.  Consumed by ``model.fit()`` to stash
+        ``_A_ineq_`` for downstream inference (e.g. penalty-augmented
+        Hessian in ``vcov(regularize='active')``).
+    constraint_C_eq:
+        Equality constraint matrix used during optimisation, shape
+        ``(m_eq, total_params)``.  Non-``None`` only for auglag fits where
+        ``lower`` / ``upper`` are pinned (``m_eq >= 1``); ``None`` when no
+        equality constraints were imposed or when the solver is not auglag.
     """
 
     theta: NDArray[np.float64]
@@ -152,6 +163,8 @@ class OptimizationResult:
     rho_final: float | None = None
     mu_ineq: NDArray[np.float64] | None = None
     lambda_eq: NDArray[np.float64] | None = None
+    constraint_A_ineq: NDArray[np.float64] | None = None
+    constraint_C_eq: NDArray[np.float64] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +828,7 @@ def _interaction_auglag(
             kkt_residual=None,
         )
 
+    ia_c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
         theta=best_result.theta,
         log_likelihood=float(-best_nll),
@@ -827,6 +841,8 @@ def _interaction_auglag(
         rho_final=best_result.rho_final,
         mu_ineq=best_result.mu_ineq,
         lambda_eq=best_result.lambda_eq,
+        constraint_A_ineq=cm.A_ineq,
+        constraint_C_eq=ia_c_eq,
     )
 
 
@@ -1061,6 +1077,7 @@ def _optimize_auglag(
             kkt_residual=None,
         )
 
+    c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
         theta=best_auglag_result.theta,
         log_likelihood=float(-best_nll),
@@ -1073,4 +1090,6 @@ def _optimize_auglag(
         rho_final=best_auglag_result.rho_final,
         mu_ineq=best_auglag_result.mu_ineq,
         lambda_eq=best_auglag_result.lambda_eq,
+        constraint_A_ineq=cm.A_ineq,
+        constraint_C_eq=c_eq,
     )
