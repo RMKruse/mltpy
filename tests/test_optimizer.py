@@ -846,24 +846,13 @@ class TestFixedParamsAuglag:
         with pytest.raises(ValueError, match="out-of-range"):
             optimize(basis, y, config=cfg)
 
-    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
-    def test_fixed_params_rejected_on_non_auglag_solvers(self, solver):
-        """SLSQP / trust-constr would need a parallel equality-constraint
-        extension — deferred per issue #85 scope."""
-        basis = make_basis(order=3)
-        y = simple_data(n=40)
-        cfg = OptimizerConfig(solver=solver, fixed_params={1: 0.3})
-        with pytest.raises(NotImplementedError, match="fixed_params"):
-            optimize(basis, y, config=cfg)
-
     def test_fixed_params_empty_dict_is_treated_as_no_pin(self):
-        """``{}`` is falsy in Python — the NotImplementedError gate and
-        the C_eq-row build should both treat it as 'no pins'."""
+        """``{}`` is falsy in Python — the auglag C_eq-row build short-circuits
+        on it.  Sibling check for the SLSQP / trust-constr reduction path
+        lives in :class:`TestFixedParamsScipy`."""
         basis = make_basis(order=3)
         y = simple_data(n=40)
-        # Empty dict on a non-auglag solver must NOT raise (no pins ⇒ no
-        # scope-guard trigger)
-        cfg = OptimizerConfig(solver="slsqp", fixed_params={})
+        cfg = OptimizerConfig(solver="auglag", fixed_params={})
         result = optimize(basis, y, config=cfg)
         assert result.converged
 
@@ -893,3 +882,125 @@ class TestFixedParamsAuglag:
         cfg = OptimizerConfig(solver="auglag", fixed_params={0: 0.0})
         with pytest.raises(NotImplementedError, match="fixed_params"):
             optimize(basis, y, X=X, config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# fixed_params support (SLSQP / trust-constr paths) — issue #86
+# ---------------------------------------------------------------------------
+
+
+class TestFixedParamsScipy:
+    """``OptimizerConfig.fixed_params`` on the SLSQP and trust-constr paths.
+
+    Both paths reduce the problem to the free subvector (eliminating pinned
+    indices entirely) rather than adding equality constraints to scipy —
+    that guarantees ``θ[j] == v`` to machine precision regardless of solver
+    tolerance, and avoids SLSQP's known weakness with mixed equality +
+    inequality systems.  Scope: shift basis only (InteractionBasis stays
+    rejected, see :class:`TestFixedParamsAuglag`).
+    """
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_pins_theta_index_to_value_exactly(self, solver):
+        """Reduction approach: the pinned entry is never optimised over, so
+        the returned ``θ[j]`` equals ``v`` to machine precision (tighter than
+        the ``1e-8`` tolerance the auglag equality-row path achieves)."""
+        cfg = OptimizerConfig(solver=solver, fixed_params={1: 0.3})
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        result = optimize(basis, y, config=cfg)
+        assert result.theta[1] == 0.3
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_free_theta_matches_auglag(self, solver):
+        """Acceptance criterion #1b: with the same pin, the free entries of
+        the SLSQP / trust-constr fit agree with the auglag fit to ``rtol=1e-4``.
+
+        This is the substantive correctness check — it proves all three
+        solvers are solving the *same* constrained problem (pinned monotone
+        likelihood maximisation) rather than three subtly-different
+        approximations of it.
+        """
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        pin = {1: 0.3}
+
+        ref = optimize(
+            basis, y, config=OptimizerConfig(solver="auglag", fixed_params=pin)
+        )
+        got = optimize(
+            basis, y, config=OptimizerConfig(solver=solver, fixed_params=pin)
+        )
+
+        # Compare on free entries only — pinned index is trivially equal.
+        free_mask = np.ones_like(ref.theta, dtype=bool)
+        free_mask[list(pin.keys())] = False
+        np.testing.assert_allclose(
+            got.theta[free_mask], ref.theta[free_mask], rtol=1e-4
+        )
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_multiple_indices(self, solver):
+        """Two pinned indices stress the multi-column slicing of the
+        constraint matrix.  Both pins must hold exactly and the constraint
+        Jacobian must remain consistent across indices (monotonicity still
+        applies to the unpinned θ_b entries via the sliced ``A_ineq``).
+        """
+        basis = make_basis(order=4)  # 5 Bernstein coefficients
+        y = simple_data(n=60)
+        cfg = OptimizerConfig(solver=solver, fixed_params={0: 0.0, 3: 0.7})
+        result = optimize(basis, y, config=cfg)
+
+        assert result.theta[0] == 0.0
+        assert result.theta[3] == 0.7
+        # Monotonicity must still hold across the full vector — reduction must
+        # not have dropped any inequality rows.
+        assert np.all(np.diff(result.theta) >= -1e-8), (
+            f"non-monotone fit: diffs={np.diff(result.theta)}"
+        )
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_stacks_with_lower_upper(self, solver):
+        """``lower`` / ``upper`` boundary pins are equality constraints
+        emitted by :class:`~pymlt.constraints.BoundaryConstraint`.  When the
+        SLSQP / trust-constr branch reduces away ``fixed_params`` indices,
+        the boundary equality rows must be sliced through the same shift so
+        the pins continue to hold on the reduced subvector."""
+        basis = make_basis(order=3)  # 4 Bernstein coefficients
+        y = simple_data(n=60)
+        cfg = OptimizerConfig(
+            solver=solver, lower=0.0, upper=1.0, fixed_params={2: 0.4}
+        )
+        result = optimize(basis, y, config=cfg)
+
+        # All three pins honoured.  lower/upper pass through scipy's equality
+        # constraint machinery (tolerance ~ftol/gtol = config.tol = 1e-8),
+        # fixed_params is exact by construction.
+        np.testing.assert_allclose(result.theta[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[-1], 1.0, atol=1e-6)
+        assert result.theta[2] == 0.4
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    @pytest.mark.parametrize("bad_index", [9, -1])
+    def test_fixed_params_out_of_range_index_raises(self, solver, bad_index):
+        """Index validation runs before scipy is invoked.  Same error text
+        (``"out-of-range"``) as the auglag path so user-facing diagnostics
+        do not depend on the solver choice."""
+        basis = make_basis(order=3)  # total_params = 4 (no covariates)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver=solver, fixed_params={bad_index: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_empty_dict_is_treated_as_no_pin(self, solver):
+        """``{}`` is falsy in Python — the reduction branch short-circuits
+        on it and the run reduces to a plain unconstrained-pin scipy fit.
+        Verifies no spurious validation error from
+        :func:`_fixed_params_split` (which would reject because an empty
+        keys() iterable has no out-of-range indices, but should never run)."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver=solver, fixed_params={})
+        result = optimize(basis, y, config=cfg)
+        assert result.converged

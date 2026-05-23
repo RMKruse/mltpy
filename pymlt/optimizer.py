@@ -98,14 +98,26 @@ class OptimizerConfig:
     fixed_params:
         Optional ``{index: value}`` mapping that pins arbitrary entries of
         the full parameter vector ``[theta_b | beta | gamma]`` at the given
-        values during optimisation.  Each entry is appended as an equality
-        row ``e_i · θ = value`` on the auglag ``C_eq``/``d_eq`` block —
-        analogous to ``lower``/``upper`` but for any index, not just the
-        Bernstein boundaries.  Honoured only by ``solver="auglag"`` with a
-        shift basis; combining with ``"slsqp"`` / ``"trust-constr"`` or with
-        :class:`~pymlt.basis.InteractionBasis` raises
-        :class:`NotImplementedError`.  Useful for profile likelihood, score
+        values during optimisation.  Useful for profile likelihood, score
         tests, and nested-model fits.
+
+        * ``solver="auglag"`` (issue #85) — each entry is appended as an
+          equality row ``e_i · θ = value`` on the ``C_eq``/``d_eq`` block,
+          stacked under any ``lower``/``upper`` rows.  The pin holds to the
+          auglag KKT tolerance (~1e-8); the equality row remains visible on
+          ``OptimizationResult.constraint_C_eq`` so downstream consumers
+          (``vcov(regularize='active')``) see it.
+        * ``solver="slsqp"`` / ``"trust-constr"`` (issue #86) — the pinned
+          indices are *eliminated* from the optimisation problem entirely:
+          scipy sees the smaller free-subvector objective and constraint
+          matrix sliced to the free columns.  The pin therefore holds to
+          machine precision regardless of solver tolerance.  ``constraint_C_eq``
+          is ``None`` on this path (no equality row exists).
+        * :class:`~pymlt.basis.InteractionBasis` is not yet supported —
+          generalising to ``vec_C(Θ)`` indices needs an explicit ADR
+          decision and raises :class:`NotImplementedError`.
+
+        Indices outside ``[0, total_params)`` raise :class:`ValueError`.
     """
 
     solver: Literal["auglag", "slsqp", "trust-constr"] = "auglag"
@@ -409,6 +421,57 @@ def _initial_theta(
     return cast(NDArray[np.float64], np.concatenate(parts))
 
 
+def _fixed_params_split(
+    fixed_params: dict[int, float],
+    total_params: int,
+) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.float64]]:
+    """Validate a ``fixed_params`` mapping and split it into index/value arrays.
+
+    Used by the SLSQP / trust-constr branch of :func:`optimize` to reduce the
+    problem to its free subvector (issue #86).  The auglag path keeps the
+    equality-row treatment introduced in #85 because its ``C_eq`` block is
+    consumed by ``vcov(regularize='active')`` downstream — see ADR-less note
+    in the SLSQP/trust-constr branch comment.
+
+    Parameters
+    ----------
+    fixed_params:
+        ``{index: value}`` pin mapping.  Caller is expected to gate on falsy
+        values (``if config.fixed_params:``) so an empty dict never reaches
+        this function.
+    total_params:
+        Length of the full parameter vector ``[theta_b | beta | gamma]``.
+
+    Returns
+    -------
+    tuple
+        ``(free_idx, fixed_idx, fixed_vals)``:
+
+        * ``free_idx`` — sorted ``np.intp`` indices NOT pinned.
+        * ``fixed_idx`` — sorted ``np.intp`` indices that ARE pinned.
+        * ``fixed_vals`` — pin values in the same order as ``fixed_idx``.
+
+    Raises
+    ------
+    ValueError
+        If any index lies outside ``[0, total_params)``.  Message contains
+        ``"out-of-range"`` to match the auglag-path validation text so a
+        single test pattern covers both branches.
+    """
+    bad = sorted(i for i in fixed_params if not (0 <= i < total_params))
+    if bad:
+        raise ValueError(
+            f"fixed_params indices must lie in [0, {total_params}); "
+            f"got out-of-range indices {bad}."
+        )
+    fixed_idx = np.array(sorted(fixed_params.keys()), dtype=np.intp)
+    fixed_vals = np.array([float(fixed_params[i]) for i in fixed_idx], dtype=np.float64)
+    free_mask = np.ones(total_params, dtype=bool)
+    free_mask[fixed_idx] = False
+    free_idx = np.flatnonzero(free_mask).astype(np.intp)
+    return free_idx, fixed_idx, fixed_vals
+
+
 def _perturb_and_project(
     theta: NDArray[np.float64],
     n_params: int,
@@ -553,16 +616,6 @@ def optimize(
         n_params, X, lower=config.lower, upper=config.upper, q_s=q_s
     )
 
-    if config.fixed_params and config.solver != "auglag":
-        # Issue #85 — fixed_params is wired through the auglag C_eq/d_eq
-        # equality scaffolding only.  The SLSQP / trust-constr paths would
-        # need a parallel equality-constraint extension to BoundaryConstraint
-        # — deferred to a follow-up.
-        raise NotImplementedError(
-            f"fixed_params= is only supported with solver='auglag' "
-            f"(got solver={config.solver!r}). See issue #85."
-        )
-
     if config.solver == "auglag":
         return _optimize_auglag(
             basis=basis,
@@ -612,29 +665,114 @@ def optimize(
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
 
+    # fixed_params (issue #86) — reduction approach for the scipy paths.
+    # Rather than appending equality constraints (the auglag treatment, #85),
+    # the pinned indices are eliminated from the optimisation problem
+    # altogether: scipy sees a smaller objective on theta_free and a
+    # constraint matrix sliced to the free columns, with the constant
+    # contribution of the pinned values absorbed into the right-hand side.
+    # The pin then holds to machine precision regardless of solver tolerance,
+    # and SLSQP avoids its known mixed-equality+inequality weakness.
+    free_idx: NDArray[np.intp] | None = None
+    fixed_idx: NDArray[np.intp] | None = None
+    fixed_vals: NDArray[np.float64] | None = None
+    obj_used: Callable[[NDArray[np.float64]], Any] = obj
+    constraints_used: Any = constraints
+    if config.fixed_params:
+        free_idx, fixed_idx, fixed_vals = _fixed_params_split(
+            config.fixed_params, total_params
+        )
+        theta_init[fixed_idx] = fixed_vals
+        _free_idx = free_idx
+        _fixed_idx = fixed_idx
+        _fixed_vals = fixed_vals
+
+        def _reconstruct(theta_free: NDArray[np.float64]) -> NDArray[np.float64]:
+            full = np.empty(total_params, dtype=np.float64)
+            full[_free_idx] = theta_free
+            full[_fixed_idx] = _fixed_vals
+            return full
+
+        if config.use_gradient:
+
+            def obj_used(
+                tf: NDArray[np.float64], _o: Any = obj, _fi: Any = _free_idx
+            ) -> Any:
+                res = _o(_reconstruct(tf))
+                if isinstance(res, tuple):
+                    nll, grad = res
+                    return nll, np.asarray(grad)[_fi]
+                return res
+        else:
+
+            def obj_used(tf: NDArray[np.float64], _o: Any = obj) -> Any:
+                return _o(_reconstruct(tf))
+
+        if config.solver == "slsqp":
+
+            def _wrap_dict(d: dict[str, Any]) -> dict[str, Any]:
+                f, j, t = d["fun"], d["jac"], d["type"]
+                return {
+                    "type": t,
+                    "fun": lambda tf, _f=f: _f(_reconstruct(tf)),
+                    "jac": lambda tf, _j=j: np.asarray(_j(_reconstruct(tf)))[
+                        ..., _free_idx
+                    ],
+                }
+
+            constraints_used = [_wrap_dict(d) for d in constraints]
+        else:  # trust-constr
+
+            def _slice_lc(lc: LinearConstraint) -> LinearConstraint:
+                A = np.atleast_2d(np.asarray(lc.A, dtype=np.float64))
+                shift = A[:, _fixed_idx] @ _fixed_vals  # shape (m,)
+                lb_arr = (
+                    np.broadcast_to(
+                        np.asarray(lc.lb, dtype=np.float64), shift.shape
+                    ).astype(np.float64)
+                    - shift
+                )
+                ub_arr = (
+                    np.broadcast_to(
+                        np.asarray(lc.ub, dtype=np.float64), shift.shape
+                    ).astype(np.float64)
+                    - shift
+                )
+                return LinearConstraint(A[:, _free_idx], lb=lb_arr, ub=ub_arr)
+
+            constraints_used = [_slice_lc(lc) for lc in constraints]
+
     best_scipy_result = None
     best_nll = float("inf")
     n_restarts_used = 0
 
     for attempt in range(config.max_restarts + 1):
         if attempt == 0:
-            theta_try = theta_init.copy()
+            theta_try_full = theta_init.copy()
         else:
             n_restarts_used = attempt
-            theta_try = _perturb_and_project(
+            theta_try_full = _perturb_and_project(
                 theta_init,
                 n_params,
                 rng,
                 nonneg_lower=nonneg_lower,
             )
+            if fixed_idx is not None:
+                # Perturbation projects theta_b onto the monotone cone, which
+                # may shift pinned entries.  Re-applying the pins here keeps
+                # the reduced theta_try aligned with the constraint slicing
+                # (lb/ub were shifted by ``A[:, fixed_idx] @ fixed_vals``).
+                theta_try_full[fixed_idx] = fixed_vals
+
+        theta_try = theta_try_full[free_idx] if free_idx is not None else theta_try_full
 
         try:
             scipy_result = minimize(
-                obj,
+                obj_used,
                 theta_try,
                 method=config.solver,
                 jac=jac,
-                constraints=constraints,
+                constraints=constraints_used,
                 options=options,
             )
         except LinAlgError as exc:
@@ -689,8 +827,19 @@ def optimize(
             solver_message="All optimisation attempts raised LinAlgError.",
         )
 
+    # Reduction path returns the optimum on the free subvector; lift it back
+    # to the full layout (fixed entries restored to their pinned values) so
+    # downstream consumers see the unchanged ``[theta_b | beta | gamma]``
+    # representation regardless of whether fixed_params was used.
+    if free_idx is not None and fixed_idx is not None and fixed_vals is not None:
+        final_theta = np.empty(total_params, dtype=np.float64)
+        final_theta[free_idx] = best_scipy_result.x
+        final_theta[fixed_idx] = fixed_vals
+    else:
+        final_theta = best_scipy_result.x
+
     return OptimizationResult(
-        theta=best_scipy_result.x,
+        theta=final_theta,
         log_likelihood=float(-best_scipy_result.fun),
         converged=bool(best_scipy_result.success),
         n_iter=int(getattr(best_scipy_result, "nit", 0)),
