@@ -811,3 +811,98 @@ class TestVcovRegularize:
     def test_vcov_invalid_regularize_raises_valueerror(self):
         with pytest.raises(ValueError, match="regularize"):
             self.m.vcov(regularize="unknown")
+
+
+# ---------------------------------------------------------------------------
+# wald_test(regularize=...) — #84
+# ---------------------------------------------------------------------------
+
+
+class TestWaldTestRegularize:
+    """wald_test forwards regularize to vcov / sandwich_vcov (#84)."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(42)
+        n = 200
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.5 * self.X[:, 0] - 0.3 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+        p = self.m.theta_.size
+        # Test last covariate parameter = 0.
+        self.R = np.eye(1, p, p - 1)
+
+    def _make_singular_constrained_model(self):
+        m = copy.copy(self.m)
+        p = m.theta_.size
+
+        H = self.m.hessian_.copy()
+        H[0, :] = 0.0
+        H[:, 0] = 0.0
+        m.hessian_ = H
+
+        order = p - 2
+        A = np.zeros((order, p))
+        for i in range(order):
+            A[i, i + 1] = 1.0
+            A[i, i] = -1.0
+        m._A_ineq_ = A
+
+        mu = np.zeros(order)
+        mu[0] = 5.0
+        rho = 100.0
+        m.result_ = OptimizationResult(
+            theta=m.theta_,
+            log_likelihood=float(m.result_.log_likelihood),
+            converged=True,
+            n_iter=m.result_.n_iter,
+            n_restarts=m.result_.n_restarts,
+            solver_message=m.result_.solver_message,
+            rho_final=rho,
+            mu_ineq=mu,
+        )
+        return m
+
+    def test_wald_test_accepts_regularize_kwarg(self):
+        """wald_test(R, regularize='active') and regularize=None are callable."""
+        _ = self.m.wald_test(self.R, regularize="active")
+        _ = self.m.wald_test(self.R, regularize=None)
+
+    def test_wald_test_default_regularize_is_active(self):
+        """wald_test(R) == wald_test(R, regularize='active')."""
+        res_default = self.m.wald_test(self.R)
+        res_active = self.m.wald_test(self.R, regularize="active")
+        assert res_default.statistic == res_active.statistic
+
+    def test_wald_test_information_forwards_regularize(self):
+        """wald_test(R, regularize=...) passes regularize to vcov() on information path."""
+        res = self.m.wald_test(self.R, regularize="active")
+        V = self.m.vcov(regularize="active")
+        diff = self.R @ self.m.theta_
+        RVR = self.R @ V @ self.R.T
+        W_expected = float(diff @ np.linalg.inv(RVR) @ diff)
+        np.testing.assert_allclose(res.statistic, W_expected, rtol=1e-10)
+
+    def test_wald_test_sandwich_forwards_regularize(self):
+        """wald_test(R, vcov='sandwich', regularize=...) passes regularize to sandwich_vcov()."""
+        res = self.m.wald_test(self.R, vcov="sandwich", regularize="active")
+        V = self.m.sandwich_vcov(regularize="active")
+        diff = self.R @ self.m.theta_
+        RVR = self.R @ V @ self.R.T
+        W_expected = float(diff @ np.linalg.inv(RVR) @ diff)
+        np.testing.assert_allclose(res.statistic, W_expected, rtol=1e-10)
+
+    def test_wald_test_active_finite_on_singular_constrained(self):
+        """regularize='active' gives a finite Wald statistic on a singular Hessian fit."""
+        m = self._make_singular_constrained_model()
+        res = m.wald_test(self.R, regularize="active")
+        assert np.isfinite(res.statistic)
+        assert 0.0 <= res.p_value <= 1.0
+
+    def test_wald_test_none_raises_on_singular(self):
+        """regularize=None propagates RuntimeError from vcov on singular Hessian."""
+        m = self._make_singular_constrained_model()
+        with pytest.raises(RuntimeError, match="singular"):
+            m.wald_test(self.R, regularize=None)

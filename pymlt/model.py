@@ -1688,6 +1688,7 @@ class ConditionalTransformationModel:
         R: NDArray[np.float64],
         r: NDArray[np.float64] | None = None,
         vcov: Literal["information", "sandwich"] = "information",
+        regularize: str | None = "active",
     ) -> "WaldTestResult":
         """Wald test for linear restrictions ``Rθ = r``.
 
@@ -1716,6 +1717,11 @@ class ConditionalTransformationModel:
             default) uses the observed Fisher information :meth:`vcov`;
             ``"sandwich"`` uses the HC0 sandwich estimator
             :meth:`sandwich_vcov`.
+        regularize : str | None
+            Passed directly to :meth:`vcov` (or :meth:`sandwich_vcov`).  See
+            :meth:`vcov` for the accepted values and their effect.  Default
+            ``"active"`` applies penalty-augmented Hessian recovery when
+            inversion fails.
 
         Returns
         -------
@@ -1751,7 +1757,10 @@ class ConditionalTransformationModel:
             r_vec = np.asarray(r, dtype=np.float64).ravel()
             if r_vec.size != k:
                 raise ValueError(f"r has {r_vec.size} elements but R has {k} rows.")
-        V = self.vcov() if vcov == "information" else self.sandwich_vcov()
+        if vcov == "information":
+            V = self.vcov(regularize=regularize)
+        else:
+            V = self.sandwich_vcov(regularize=regularize)
         diff = R @ self.theta_ - r_vec
         RVR = R @ V @ R.T
         try:
