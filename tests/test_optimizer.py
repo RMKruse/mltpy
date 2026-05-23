@@ -7,8 +7,10 @@ import warnings
 import numpy as np
 import pytest
 
+from pymlt._auglag import AugLagOptions
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import MonotonicityConstraint
+from pymlt.likelihood import negative_log_likelihood
 from pymlt.optimizer import (
     OptimizationResult,
     OptimizerConfig,
@@ -51,6 +53,12 @@ class TestOptimizerConfig:
         assert cfg.max_restarts == 3
         assert cfg.use_gradient is True
         assert cfg.verbose is False
+
+    def test_polish_defaults_true(self):
+        assert OptimizerConfig().polish is True
+
+    def test_polish_can_be_disabled(self):
+        assert OptimizerConfig(polish=False).polish is False
 
     def test_custom(self):
         cfg = OptimizerConfig(solver="trust-constr", max_iter=500, verbose=True)
@@ -616,3 +624,134 @@ class TestOptimizeVerboseNonConvergence:
         cfg = OptimizerConfig(solver="slsqp", max_iter=1, max_restarts=3, verbose=True)
         with pytest.warns(RuntimeWarning, match="did not converge"):
             optimize(make_basis(order=3), simple_data(n=80), config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Newton-CG polish step
+# ---------------------------------------------------------------------------
+
+
+class TestPolishStep:
+    """Newton-CG polish step applied after auglag for interior-MLE fits."""
+
+    @pytest.fixture
+    def interior_setup(self):
+        """Logistic data clipped to (-5, 5) — all monotonicity constraints inactive."""
+        rng = np.random.default_rng(42)
+        y_raw = rng.logistic(0.0, 1.0, 300)
+        y = np.clip(y_raw, -5.0, 5.0)
+        basis = BernsteinBasis(order=6, support=(-5.0, 5.0))
+        return basis, y
+
+    # Deliberately very loose: 1 outer iter, coarse inner solver — leaves
+    # gradient ~1.3, well above the trust-ncg convergence threshold.
+    _LOOSE = AugLagOptions(
+        outer_tol=1e-1,
+        max_outer_iter=1,
+        inner_options={"maxiter": 20, "gtol": 1e-2, "ftol": 1e-3},
+    )
+
+    def test_polish_does_not_regress_nll(self, interior_setup):
+        """polish=True returns NLL at least as good as polish=False."""
+        basis, y = interior_setup
+        r_no = optimize(basis, y, config=OptimizerConfig(solver="auglag", polish=False))
+        r_yes = optimize(basis, y, config=OptimizerConfig(solver="auglag", polish=True))
+        assert r_yes.log_likelihood >= r_no.log_likelihood - 1e-10
+
+    def test_polish_tightens_gradient_on_loose_auglag(self, interior_setup):
+        """Polish tightens the gradient by orders of magnitude on a coarse auglag."""
+        basis, y = interior_setup
+        r_no = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=False
+            ),
+        )
+        r_yes = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True
+            ),
+        )
+        _, g_no = negative_log_likelihood(r_no.theta, basis, y, gradient=True)
+        _, g_yes = negative_log_likelihood(r_yes.theta, basis, y, gradient=True)
+        assert np.linalg.norm(g_yes) < np.linalg.norm(g_no) * 1e-3
+
+    def test_polish_skipped_when_disabled(self, interior_setup):
+        """With the same seed, polish=False and polish=True start at the same auglag
+        theta; polish=True then reduces the gradient strictly."""
+        basis, y = interior_setup
+        r_no = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag",
+                auglag_options=self._LOOSE,
+                polish=False,
+                random_state=0,
+            ),
+        )
+        r_yes = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True, random_state=0
+            ),
+        )
+        _, g_no = negative_log_likelihood(r_no.theta, basis, y, gradient=True)
+        _, g_yes = negative_log_likelihood(r_yes.theta, basis, y, gradient=True)
+        assert np.linalg.norm(g_yes) < np.linalg.norm(g_no)
+
+    def test_polished_theta_feasible(self, interior_setup):
+        """Polish must not push theta_b outside the monotone cone."""
+        basis, y = interior_setup
+        result = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True
+            ),
+        )
+        n_params = basis.order + 1
+        theta_b = result.theta[:n_params]
+        assert np.all(np.diff(theta_b) >= -1e-8)
+
+    def test_polish_skipped_for_slsqp(self, interior_setup):
+        """polish flag has no effect on non-auglag solvers."""
+        basis, y = interior_setup
+        r_no = optimize(basis, y, config=OptimizerConfig(solver="slsqp", polish=False))
+        r_yes = optimize(basis, y, config=OptimizerConfig(solver="slsqp", polish=True))
+        np.testing.assert_array_equal(r_no.theta, r_yes.theta)
+
+    def test_polish_skipped_when_constraints_active(self):
+        """Coxph has active monotonicity constraints — polish must be skipped."""
+        import warnings
+
+        from pymlt.tram import Coxph
+
+        rng = np.random.default_rng(0)
+        t = rng.exponential(1.0, 100)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            m_no = Coxph(
+                order=5,
+                support=(0.0, 10.0),
+                optimizer_config=OptimizerConfig(
+                    solver="auglag", polish=False, random_state=7
+                ),
+            )
+            m_no.fit(t)
+            m_yes = Coxph(
+                order=5,
+                support=(0.0, 10.0),
+                optimizer_config=OptimizerConfig(
+                    solver="auglag", polish=True, random_state=7
+                ),
+            )
+            m_yes.fit(t)
+
+        # When constraints are active the polish condition fails → same theta
+        np.testing.assert_array_equal(m_no.theta_, m_yes.theta_)

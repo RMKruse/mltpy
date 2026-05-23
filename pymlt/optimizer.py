@@ -33,6 +33,9 @@ from pymlt.likelihood import (
     _get_dist,
     _negative_log_likelihood_from_dist,
 )
+from pymlt.likelihood import (
+    hessian as _hessian,
+)
 from pymlt.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,14 @@ class OptimizerConfig:
         :func:`~pymlt.constraints.build_constraint_matrices` for auglag.
     upper:
         If not ``None``, fixes ``θ[n_params−1] = upper`` analogously.
+    polish:
+        If ``True`` (default), run a Newton-CG polish step after auglag
+        converges when no monotonicity constraints are active (interior-MLE
+        fits).  Uses ``trust-ncg`` seeded at auglag's θ-hat with the
+        analytical Hessian from :func:`~pymlt.likelihood.hessian`.  The
+        polished θ is accepted only when NLL does not increase by more than
+        ``1e-12`` and the monotonicity cone is preserved.  Has no effect on
+        ``slsqp`` / ``trust-constr`` solvers.
     """
 
     solver: Literal["auglag", "slsqp", "trust-constr"] = "auglag"
@@ -96,6 +107,7 @@ class OptimizerConfig:
     auglag_options: AugLagOptions | None = None
     lower: float | None = None
     upper: float | None = None
+    polish: bool = True
 
 
 @dataclass
@@ -727,6 +739,7 @@ def _optimize_interaction(
             y=y,
             x_arr=x_arr,
             dist=dist,
+            base_distribution=base_distribution,
             weights=weights,
             offset=offset,
             perturb=perturb,
@@ -757,6 +770,7 @@ def _interaction_auglag(
     y: NDArray[np.float64] | CensoredData,
     x_arr: NDArray[np.float64],
     dist: DistOps,
+    base_distribution: BaseDistribution,
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
@@ -828,10 +842,32 @@ def _interaction_auglag(
             kkt_residual=None,
         )
 
+    # Newton-CG polish: only when all Kronecker-constraint multipliers are inactive
+    ia_final_theta = best_result.theta
+    ia_final_nll = best_nll
+    if config.polish and np.all(best_result.mu_ineq < 1e-6):
+        theta_polished = _ncg_polish(
+            best_result.theta,
+            obj,
+            0,
+            basis,
+            y,
+            x_arr,
+            CensoringType.NONE,
+            base_distribution,
+            weights,
+            offset,
+            None,
+            A_ineq=cm.A_ineq,
+        )
+        if theta_polished is not None:
+            ia_final_theta = theta_polished
+            ia_final_nll = float(obj(theta_polished)[0])
+
     ia_c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
-        theta=best_result.theta,
-        log_likelihood=float(-best_nll),
+        theta=ia_final_theta,
+        log_likelihood=float(-ia_final_nll),
         converged=best_result.converged,
         n_iter=best_result.n_inner_iter,
         n_restarts=n_restarts_used,
@@ -948,6 +984,80 @@ def _interaction_scipy(
         n_restarts=n_restarts_used,
         solver_message=str(best_scipy_result.message),
     )
+
+
+def _ncg_polish(
+    theta: NDArray[np.float64],
+    obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    n_params: int,
+    basis: BernsteinBasis | InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    base_distribution: BaseDistribution,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    scaling: NDArray[np.float64] | None,
+    *,
+    A_ineq: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64] | None:
+    """Newton-CG polish: trust-ncg from auglag's θ-hat using the analytical Hessian.
+
+    Parameters
+    ----------
+    theta:
+        Starting point (auglag's best θ).
+    obj:
+        NLL objective returning ``(nll, grad)``.
+    n_params:
+        Number of Bernstein basis coefficients (shift path) or ``None``-equivalent
+        when ``A_ineq`` is provided (interaction path uses A_ineq for feasibility).
+    A_ineq:
+        Optional inequality constraint matrix.  When provided, feasibility is
+        checked via ``A_ineq @ theta_polished >= 0`` instead of the shift-model
+        ``D @ theta_b >= 0`` check.
+
+    Returns
+    -------
+    NDArray[np.float64] or None
+        Polished parameter vector, or ``None`` if polish failed or was rejected.
+    """
+    nll_before, _ = obj(theta)
+
+    def hess_fn(t: NDArray[np.float64]) -> NDArray[np.float64]:
+        try:
+            return _hessian(
+                t,
+                basis,
+                y,
+                X,
+                censoring,
+                base_distribution,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
+            )
+        except (InfeasibleParameterError, Exception):
+            return np.eye(len(t), dtype=np.float64) * 1e6
+
+    try:
+        result = minimize(obj, theta, method="trust-ncg", jac=True, hess=hess_fn)
+    except Exception:
+        return None
+
+    theta_new = np.asarray(result.x, dtype=np.float64)
+    nll_new, _ = obj(theta_new)
+
+    if nll_new > nll_before + 1e-12:
+        return None
+
+    if A_ineq is not None:
+        if np.any(A_ineq @ theta_new < -1e-8):
+            return None
+    elif n_params >= 2 and np.any(np.diff(theta_new[:n_params]) < -1e-8):
+        return None
+
+    return theta_new
 
 
 def _optimize_auglag(
@@ -1077,10 +1187,37 @@ def _optimize_auglag(
             kkt_residual=None,
         )
 
+    # Newton-CG polish: only for interior-MLE fits (no active inequalities, no
+    # equality constraints — the unconstrained trust-ncg would violate lower/upper
+    # boundary pins if cm.C_eq has rows).
+    final_theta = best_auglag_result.theta
+    final_nll = best_nll
+    if (
+        config.polish
+        and cm.C_eq.shape[0] == 0
+        and np.all(best_auglag_result.mu_ineq < 1e-6)
+    ):
+        theta_polished = _ncg_polish(
+            best_auglag_result.theta,
+            obj,
+            n_params,
+            basis,
+            y,
+            X,
+            censoring,
+            base_distribution,
+            weights,
+            offset,
+            scaling,
+        )
+        if theta_polished is not None:
+            final_theta = theta_polished
+            final_nll = float(obj(theta_polished)[0])
+
     c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
-        theta=best_auglag_result.theta,
-        log_likelihood=float(-best_nll),
+        theta=final_theta,
+        log_likelihood=float(-final_nll),
         converged=best_auglag_result.converged,
         n_iter=best_auglag_result.n_inner_iter,
         n_restarts=n_restarts_used,
