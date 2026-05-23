@@ -755,3 +755,141 @@ class TestPolishStep:
 
         # When constraints are active the polish condition fails → same theta
         np.testing.assert_array_equal(m_no.theta_, m_yes.theta_)
+
+
+# ---------------------------------------------------------------------------
+# fixed_params support (auglag path) — issue #85
+# ---------------------------------------------------------------------------
+
+
+class TestFixedParamsAuglag:
+    """``OptimizerConfig.fixed_params`` pins arbitrary indices of the full
+    parameter vector ``[theta_b | beta | gamma]`` at user-supplied values
+    during optimisation.  Implemented as equality rows on ``C_eq``/``d_eq``,
+    so the constraint reuses the same scaffolding as ``lower``/``upper``
+    and is honoured by the auglag solver natively.
+
+    Scope (this iteration): ``solver="auglag"`` + shift basis only.
+    SLSQP / trust-constr and ``InteractionBasis`` are rejected with
+    ``NotImplementedError``.
+    """
+
+    def test_fixed_params_pins_theta_index_to_value(self):
+        """fixed_params={i: v} + auglag → result.theta[i] == v at feasibility tol."""
+        cfg = OptimizerConfig(solver="auglag", fixed_params={1: 0.3})
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        result = optimize(basis, y, config=cfg)
+        np.testing.assert_allclose(result.theta[1], 0.3, atol=1e-8)
+
+    def test_fixed_params_off_mle_reduces_log_likelihood(self):
+        """Pinning a parameter away from the unconstrained MLE must strictly
+        reduce the log-likelihood — proves the equality is a real constraint
+        seen by the inner solver, not a stub that the optimiser ignores."""
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        free = optimize(basis, y, config=OptimizerConfig(solver="auglag"))
+        # Pin theta[1] far from its free value
+        off = float(free.theta[1]) + 2.0
+        pinned = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(solver="auglag", fixed_params={1: off}),
+        )
+        np.testing.assert_allclose(pinned.theta[1], off, atol=1e-8)
+        # A genuine constraint can only lower the log-likelihood.  Allow a
+        # tiny float-round slack so an exactly-at-the-MLE pin would still pass.
+        assert pinned.log_likelihood < free.log_likelihood - 1e-6
+
+    def test_fixed_params_adds_one_c_eq_row_per_pinned_index(self):
+        """constraint_C_eq grows by exactly len(fixed_params) rows when no
+        lower/upper are set.  Each row is a unit vector at the pinned index."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={0: 0.0, 2: 0.5})
+        result = optimize(basis, y, config=cfg)
+
+        assert result.constraint_C_eq is not None
+        # Two pinned indices → two equality rows over the full theta_ (length 4)
+        assert result.constraint_C_eq.shape == (2, basis.order + 1)
+        # Each row is a unit vector at the pinned index
+        expected = np.zeros((2, basis.order + 1))
+        expected[0, 0] = 1.0
+        expected[1, 2] = 1.0
+        np.testing.assert_array_equal(result.constraint_C_eq, expected)
+
+    def test_fixed_params_stacks_with_lower_upper(self):
+        """fixed_params rows are appended after the lower/upper rows; none
+        of the existing pins are clobbered."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(
+            solver="auglag", lower=0.0, upper=1.0, fixed_params={2: 0.4}
+        )
+        result = optimize(basis, y, config=cfg)
+
+        assert result.constraint_C_eq is not None
+        # 2 boundary rows (lower=theta[0], upper=theta[-1]) + 1 fixed_params row
+        assert result.constraint_C_eq.shape == (3, basis.order + 1)
+        # All three pins are honoured at the fitted theta.  Tolerance is the
+        # auglag KKT residual budget — three stacked equalities tighten the
+        # joint feasibility a touch beyond the single-side R-parity case.
+        np.testing.assert_allclose(result.theta[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[-1], 1.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[2], 0.4, atol=1e-6)
+
+    def test_fixed_params_out_of_range_index_raises(self):
+        """Indices outside [0, total_params) must be caught before auglag."""
+        basis = make_basis(order=3)  # total_params = 4 (no covariates)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={9: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_rejected_on_non_auglag_solvers(self, solver):
+        """SLSQP / trust-constr would need a parallel equality-constraint
+        extension — deferred per issue #85 scope."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver=solver, fixed_params={1: 0.3})
+        with pytest.raises(NotImplementedError, match="fixed_params"):
+            optimize(basis, y, config=cfg)
+
+    def test_fixed_params_empty_dict_is_treated_as_no_pin(self):
+        """``{}`` is falsy in Python — the NotImplementedError gate and
+        the C_eq-row build should both treat it as 'no pins'."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        # Empty dict on a non-auglag solver must NOT raise (no pins ⇒ no
+        # scope-guard trigger)
+        cfg = OptimizerConfig(solver="slsqp", fixed_params={})
+        result = optimize(basis, y, config=cfg)
+        assert result.converged
+
+    def test_fixed_params_negative_index_raises(self):
+        """Negative indices are rejected — keeps the API non-ambiguous (we
+        do not silently wrap ``-1`` to ``total_params - 1``)."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={-1: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    def test_fixed_params_rejected_with_interaction_basis(self):
+        """InteractionBasis uses a vec_C(Θ) layout — pinning by index needs
+        its own design decision (column/row indexing, Kronecker padding).
+        Deferred per issue #85 scope."""
+        from pymlt.basis import BernsteinBasis, InteractionBasis, OneHotBasis
+
+        rng = np.random.default_rng(0)
+        n = 40
+        y = rng.uniform(0.05, 0.95, n)
+        X = rng.integers(0, 2, size=(n, 1)).astype(float)
+        basis = InteractionBasis(
+            BernsteinBasis(order=2, support=(0.0, 1.0)),
+            OneHotBasis(K=2),
+        )
+        cfg = OptimizerConfig(solver="auglag", fixed_params={0: 0.0})
+        with pytest.raises(NotImplementedError, match="fixed_params"):
+            optimize(basis, y, X=X, config=cfg)

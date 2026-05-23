@@ -95,6 +95,17 @@ class OptimizerConfig:
         polished θ is accepted only when NLL does not increase by more than
         ``1e-12`` and the monotonicity cone is preserved.  Has no effect on
         ``slsqp`` / ``trust-constr`` solvers.
+    fixed_params:
+        Optional ``{index: value}`` mapping that pins arbitrary entries of
+        the full parameter vector ``[theta_b | beta | gamma]`` at the given
+        values during optimisation.  Each entry is appended as an equality
+        row ``e_i · θ = value`` on the auglag ``C_eq``/``d_eq`` block —
+        analogous to ``lower``/``upper`` but for any index, not just the
+        Bernstein boundaries.  Honoured only by ``solver="auglag"`` with a
+        shift basis; combining with ``"slsqp"`` / ``"trust-constr"`` or with
+        :class:`~pymlt.basis.InteractionBasis` raises
+        :class:`NotImplementedError`.  Useful for profile likelihood, score
+        tests, and nested-model fits.
     """
 
     solver: Literal["auglag", "slsqp", "trust-constr"] = "auglag"
@@ -108,6 +119,7 @@ class OptimizerConfig:
     lower: float | None = None
     upper: float | None = None
     polish: bool = True
+    fixed_params: dict[int, float] | None = None
 
 
 @dataclass
@@ -159,9 +171,11 @@ class OptimizationResult:
         Hessian in ``vcov(regularize='active')``).
     constraint_C_eq:
         Equality constraint matrix used during optimisation, shape
-        ``(m_eq, total_params)``.  Non-``None`` only for auglag fits where
-        ``lower`` / ``upper`` are pinned (``m_eq >= 1``); ``None`` when no
-        equality constraints were imposed or when the solver is not auglag.
+        ``(m_eq, total_params)``.  Non-``None`` for auglag fits whenever any
+        equality row is imposed — by ``lower`` / ``upper`` (boundary pins) or
+        by ``fixed_params`` (arbitrary-index pins, issue #85), stacked in
+        that order.  ``None`` when no equality constraints were imposed or
+        when the solver is not auglag.
     """
 
     theta: NDArray[np.float64]
@@ -497,6 +511,15 @@ def optimize(
                 "scaling= is not supported with InteractionBasis in v0.4 "
                 "(see docs/adr/0002-scaling-terms.md, Decision 2)."
             )
+        if config.fixed_params:
+            # Issue #85 — fixed_params currently lives only on the shift /
+            # auglag path.  Generalising to vec_C(Θ) indices needs an
+            # explicit decision (column-vs-row layout, Kronecker padding),
+            # so we defer until that ADR lands.
+            raise NotImplementedError(
+                "fixed_params= is not supported with InteractionBasis "
+                "(auglag shift-basis path only in this release)."
+            )
         return _optimize_interaction(
             basis=basis,
             y=y,
@@ -529,6 +552,16 @@ def optimize(
     theta_init = _initial_theta(
         n_params, X, lower=config.lower, upper=config.upper, q_s=q_s
     )
+
+    if config.fixed_params and config.solver != "auglag":
+        # Issue #85 — fixed_params is wired through the auglag C_eq/d_eq
+        # equality scaffolding only.  The SLSQP / trust-constr paths would
+        # need a parallel equality-constraint extension to BoundaryConstraint
+        # — deferred to a follow-up.
+        raise NotImplementedError(
+            f"fixed_params= is only supported with solver='auglag' "
+            f"(got solver={config.solver!r}). See issue #85."
+        )
 
     if config.solver == "auglag":
         return _optimize_auglag(
@@ -1093,6 +1126,32 @@ def _optimize_auglag(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
     )
+    # fixed_params (issue #85): append one equality row per pinned index.
+    # Each row is e_i with rhs v_i, stacked under any existing rows from
+    # lower / upper.  Indices must reference the full theta_ vector
+    # [theta_b | beta | gamma] of length total_params.  The starting point
+    # is overwritten on those indices so the very first inner iteration
+    # already satisfies the new equalities (cuts down auglag's outer-loop
+    # multiplier-update count).
+    if config.fixed_params:
+        bad = [i for i in config.fixed_params if not (0 <= i < total_params)]
+        if bad:
+            raise ValueError(
+                f"fixed_params indices must lie in [0, {total_params}); "
+                f"got out-of-range indices {bad}."
+            )
+        extra_rows = np.zeros((len(config.fixed_params), total_params))
+        extra_rhs = np.empty(len(config.fixed_params), dtype=np.float64)
+        for row, (idx, val) in enumerate(config.fixed_params.items()):
+            extra_rows[row, idx] = 1.0
+            extra_rhs[row] = float(val)
+            theta_init[idx] = float(val)
+        cm = type(cm)(
+            A_ineq=cm.A_ineq,
+            b_ineq=cm.b_ineq,
+            C_eq=np.vstack([cm.C_eq, extra_rows]),
+            d_eq=np.concatenate([cm.d_eq, extra_rhs]),
+        )
     # auglag always needs gradients for the L-BFGS-B inner solver
     obj = _make_objective(
         basis,
