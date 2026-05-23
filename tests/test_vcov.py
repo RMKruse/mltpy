@@ -503,6 +503,104 @@ class TestSandwichVcov:
 
 
 # ---------------------------------------------------------------------------
+# sandwich_vcov(regularize=...) and sandwich_se(regularize=...)
+# ---------------------------------------------------------------------------
+
+
+class TestSandwichVcovRegularize:
+    """sandwich_vcov / sandwich_se inherit the vcov bread regularization (#83)."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(42)
+        n = 200
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.5 * self.X[:, 0] - 0.3 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+
+    def _make_singular_constrained_model(self):
+        """Copy of self.m with an injected singular Hessian and active-constraint
+        metadata (same helper pattern as TestVcovRegularize)."""
+        m = copy.copy(self.m)
+        p = m.theta_.size
+
+        H = self.m.hessian_.copy()
+        H[0, :] = 0.0
+        H[:, 0] = 0.0
+        m.hessian_ = H
+
+        order = p - 2
+        A = np.zeros((order, p))
+        for i in range(order):
+            A[i, i + 1] = 1.0
+            A[i, i] = -1.0
+        m._A_ineq_ = A
+
+        mu = np.zeros(order)
+        mu[0] = 5.0
+        rho = 100.0
+        m.result_ = OptimizationResult(
+            theta=m.theta_,
+            log_likelihood=float(m.result_.log_likelihood),
+            converged=True,
+            n_iter=m.result_.n_iter,
+            n_restarts=m.result_.n_restarts,
+            solver_message=m.result_.solver_message,
+            rho_final=rho,
+            mu_ineq=mu,
+        )
+        return m
+
+    def test_sandwich_vcov_accepts_regularize_kwarg(self):
+        """sandwich_vcov(regularize='active') and sandwich_vcov(regularize=None) callable."""
+        _ = self.m.sandwich_vcov(regularize="active")
+        _ = self.m.sandwich_vcov(regularize=None)
+
+    def test_sandwich_vcov_default_is_active(self):
+        """sandwich_vcov() == sandwich_vcov(regularize='active') on a well-conditioned fit."""
+        V_default = self.m.sandwich_vcov()
+        V_active = self.m.sandwich_vcov(regularize="active")
+        np.testing.assert_array_equal(V_default, V_active)
+
+    def test_sandwich_vcov_bread_is_vcov(self):
+        """V_sandwich = vcov() @ meat @ vcov() — bread computed via vcov()."""
+        V = self.m.sandwich_vcov(regularize="active")
+        bread = self.m.vcov(regularize="active")
+        meat = self.m.estfun().T @ self.m.estfun()
+        V_expected = bread @ meat @ bread
+        np.testing.assert_allclose(V, V_expected, atol=1e-12)
+
+    def test_sandwich_vcov_invalid_regularize_raises(self):
+        with pytest.raises(ValueError, match="regularize"):
+            self.m.sandwich_vcov(regularize="unknown")
+
+    def test_sandwich_vcov_active_finite_on_singular_constrained(self):
+        """regularize='active' recovers finite sandwich on singular Hessian."""
+        m = self._make_singular_constrained_model()
+        V = m.sandwich_vcov(regularize="active")
+        assert np.all(np.isfinite(V))
+        assert V.shape == (m.theta_.size, m.theta_.size)
+
+    def test_sandwich_vcov_none_raises_on_singular(self):
+        """regularize=None propagates RuntimeError from vcov on singular Hessian."""
+        m = self._make_singular_constrained_model()
+        with pytest.raises(RuntimeError, match="singular"):
+            m.sandwich_vcov(regularize=None)
+
+    def test_sandwich_se_accepts_regularize_kwarg(self):
+        se = self.m.sandwich_se(regularize="active")
+        assert se.shape == (self.m.theta_.size,)
+        assert np.all(se > 0)
+
+    def test_sandwich_se_default_is_active(self):
+        se_default = self.m.sandwich_se()
+        se_active = self.m.sandwich_se(regularize="active")
+        np.testing.assert_array_equal(se_default, se_active)
+
+
+# ---------------------------------------------------------------------------
 # Wald tests
 # ---------------------------------------------------------------------------
 

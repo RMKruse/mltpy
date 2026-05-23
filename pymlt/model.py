@@ -1368,9 +1368,7 @@ class ConditionalTransformationModel:
                 "Please call fit(y) again."
             )
         if regularize not in ("active", None):
-            raise ValueError(
-                f"regularize must be 'active' or None, got {regularize!r}"
-            )
+            raise ValueError(f"regularize must be 'active' or None, got {regularize!r}")
         try:
             return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
         except np.linalg.LinAlgError as exc:
@@ -1579,9 +1577,7 @@ class ConditionalTransformationModel:
         out[mask_i] = 0.5 * (y.lower[mask_i] + y.upper[mask_i])
         return out
 
-    def standard_errors(
-        self, regularize: str | None = "active"
-    ) -> NDArray[np.float64]:
+    def standard_errors(self, regularize: str | None = "active") -> NDArray[np.float64]:
         """Vector of asymptotic standard errors for :attr:`theta_`.
 
         Computed as ``sqrt(diag(vcov(regularize=regularize)))``.  Length
@@ -1611,24 +1607,29 @@ class ConditionalTransformationModel:
             )
         return cast(NDArray[np.float64], np.sqrt(diag))
 
-    def sandwich_vcov(self) -> NDArray[np.float64]:
+    def sandwich_vcov(self, regularize: str | None = "active") -> NDArray[np.float64]:
         """Sandwich (robust) variance–covariance matrix of :attr:`theta_`.
 
         Computes the HC0 sandwich estimator
 
         .. math::
-            V_{\\text{sand}} = H^{-1} M H^{-1},
+            V_{\\text{sand}} = B M B,
+            \\quad B = \\mathrm{vcov}(\\mathrm{regularize}),
             \\quad M = \\sum_i s_i s_i^\\top,
 
-        where :math:`H` is the observed information matrix (:attr:`hessian_`)
-        and :math:`s_i = \\partial\\ell_i/\\partial\\theta` is the score
-        contribution of observation :math:`i` (row :math:`i` of
-        :meth:`estfun`).  At the MLE, :math:`M` equals the *meat* of the
-        sandwich.
+        where :math:`B` is the *bread* — the inverse observed information
+        computed by :meth:`vcov` — and :math:`s_i` is the per-observation
+        score (row :math:`i` of :meth:`estfun`).
 
-        Under model mis-specification this is more robust than the
-        inverse-information :meth:`vcov`.  Under the correctly specified model
-        both converge to the same limit.
+        The ``regularize`` parameter is forwarded to :meth:`vcov`, so the
+        bread inherits the same penalty-augmented Hessian recovery as
+        ``vcov(regularize='active')`` (the default).
+
+        Parameters
+        ----------
+        regularize : {'active', None}, default 'active'
+            Passed directly to :meth:`vcov`.  See that method's documentation
+            for details.
 
         Returns
         -------
@@ -1639,29 +1640,27 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        ValueError
+            If *regularize* is not ``'active'`` or ``None``.
         RuntimeError
-            If the Hessian is singular.
+            If the Hessian is singular and ``regularize=None``.
         """
         self._check_is_fitted()
-        if self.hessian_ is None:
-            raise RuntimeError(
-                "hessian_ is unexpectedly missing after fitting. "
-                "Please call fit(y) again."
-            )
-        try:
-            H_inv = np.linalg.inv(self.hessian_)
-        except np.linalg.LinAlgError as exc:
-            raise RuntimeError(
-                "sandwich_vcov() could not be computed: the Hessian is singular."
-            ) from exc
+        bread = self.vcov(regularize=regularize)
         ef = self.estfun()
         meat = ef.T @ ef
-        return cast(NDArray[np.float64], H_inv @ meat @ H_inv)
+        return bread @ meat @ bread
 
-    def sandwich_se(self) -> NDArray[np.float64]:
+    def sandwich_se(self, regularize: str | None = "active") -> NDArray[np.float64]:
         """Sandwich (robust) standard errors for :attr:`theta_`.
 
-        Computed as ``sqrt(diag(sandwich_vcov()))``.
+        Computed as ``sqrt(diag(sandwich_vcov(regularize=regularize)))``.
+
+        Parameters
+        ----------
+        regularize : {'active', None}, default 'active'
+            Passed directly to :meth:`sandwich_vcov`.  See :meth:`vcov` for
+            details.
 
         Returns
         -------
@@ -1676,7 +1675,7 @@ class ConditionalTransformationModel:
             Propagated from :meth:`sandwich_vcov` on singular Hessians, or if
             the sandwich variance matrix has negative diagonal entries.
         """
-        diag = np.diag(self.sandwich_vcov())
+        diag = np.diag(self.sandwich_vcov(regularize=regularize))
         if np.any(diag < 0):
             raise RuntimeError(
                 "sandwich_vcov() contains negative diagonal entries — the "
