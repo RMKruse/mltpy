@@ -526,25 +526,21 @@ def _censoring_for(tag: str) -> CensoringType:
     }[tag]
 
 
-@pytest.mark.parametrize("tag", ["boxcox", "coxph", "colr"])
-def test_scaled_vcov_matches_R(tag: str) -> None:
+@pytest.mark.parametrize("tag", ["boxcox", "colr"])
+def test_scaled_vcov_bare_matches_R(tag: str) -> None:
     """``inv(hessian(θ_R, ...))`` matches R's ``vcov(as.mlt(fit))``.
 
-    Evaluates pymlt's analytical Hessian at R's reported θ (sign-flipped for
-    BoxCox's β) and compares the inverse to R's ``vcov(as.mlt(fit))`` after
-    applying the matching per-class sign matrix to rows and columns.  This
-    is the same function-vs-function pattern used by ``test_vcov.py`` for
-    the unscaled case.
+    Function-vs-function check at R's reported θ (sign-flipped for BoxCox's
+    β).  For BoxCox and Colr the dedicated fixtures land at *interior*
+    MLEs (no active monotonicity constraints), so R's ``vcov.mlt`` reduces
+    to bare ``solve(H)`` and pymlt's bare ``inv(H @ θ_R)`` matches the
+    full ``(p+q_d+q_s)²`` block at rtol=1e-4 / atol=1e-6.
 
-    For BoxCox and Colr the dedicated vcov fixtures are tuned to an
-    *interior* MLE (no active monotonicity constraints), so the full
-    ``(p+q_d+q_s, p+q_d+q_s)`` matrix matches at rtol=1e-4 / atol=1e-6.
-    For Coxph the baseline hazard is structurally constraint-binding (the
-    tail θ_b values stack at the monotonicity boundary regardless of seed),
-    so R's ``vcov.mlt`` includes an active-constraint penalty term that
-    pymlt's bare ``inv(H)`` does not.  The β / γ sub-block — the
-    practically meaningful one for covariate inference — still matches at
-    the same tolerance, so the test compares only that sub-block on Coxph.
+    The Coxph case lives in :func:`test_scaled_vcov_coxph_matches_R_via_auglag`
+    because its baseline hazard is structurally constraint-binding and R's
+    ``vcov.mlt`` applies an active-set penalty that bare ``inv(H)`` misses
+    — the test there exercises pymlt's ``regularize='auglag'`` mode
+    end-to-end instead.
     """
     ref = _load_scaled_vcov_fixture(tag)
     if ref is None:
@@ -563,22 +559,46 @@ def test_scaled_vcov_matches_R(tag: str) -> None:
     V_py = np.linalg.inv(H)
     S = _sign_matrix_for(tag, ref["p"], ref["q_d"], ref["q_s"])
     V_expected = S @ ref["V_info_r"] @ S
-    # Coxph: compare only the β / γ sub-block (rows/cols p..k) at a looser
-    # tolerance.  R's ``vcov.mlt`` adds a penalty term on the active θ_b
-    # constraint boundary; that penalty leaks into the β / γ cross-terms
-    # via the inverse Hessian, giving ~3–5% relative differences on the
-    # off-diagonal even after restricting to the β / γ block.  BoxCox /
-    # Colr have interior MLEs and match element-wise at rtol=1e-4.
-    if tag == "coxph":
-        sl = slice(ref["p"], ref["p"] + ref["q_d"] + ref["q_s"])
-        np.testing.assert_allclose(
-            V_py[sl, sl], V_expected[sl, sl], rtol=5e-2, atol=2e-4
-        )
-    else:
-        np.testing.assert_allclose(V_py, V_expected, rtol=1e-4, atol=1e-6)
+    np.testing.assert_allclose(V_py, V_expected, rtol=1e-4, atol=1e-6)
 
 
-@pytest.mark.parametrize("tag", ["boxcox", "coxph", "colr"])
+def test_scaled_vcov_coxph_matches_R_via_auglag() -> None:
+    """``Coxph.vcov(regularize='auglag')`` matches R's ``vcov(as.mlt(fit))``.
+
+    The scaled-baseline Coxph fit lands at the monotonicity boundary (two
+    adjacent θ_b coefficients tie up).  At that boundary R's
+    ``vcov(as.mlt(fit))`` applies an active-set penalty that bare
+    ``inv(H)`` from pymlt misses — the function-vs-function check would
+    fail at ``max_rel ≈ 37`` on the full block.  ``vcov(regularize='auglag')``
+    pre-augments the Hessian along binding rows with the same
+    ``ρ · Aᵀ_active A_active`` term R uses, recovering full-block parity at
+    ``rtol ≈ 5e-3`` (driven by the small optimiser drift in θ, ``Δθ ≈
+    1e-5``).
+
+    Why ``'auglag'`` rather than the default ``'active'``: the latter is
+    lazy and only fires on bare-inversion failure, so on the
+    well-conditioned (cond≈243) Coxph Hessian here it returns bare
+    ``inv(H)`` — the same value that mismatches R.  ``'auglag'`` is the
+    opt-in unconditional mode introduced precisely for this case (see
+    ``vcov`` docstring for the trade-off).  The BoxCox / Colr fixtures
+    land interior and continue to match R via the bare path in
+    :func:`test_scaled_vcov_bare_matches_R`.
+    """
+    ref = _load_scaled_vcov_fixture("coxph")
+    if ref is None:
+        pytest.skip("scaling_vcov_coxph_* reference fixtures not found")
+    model = _fit_scaled("coxph", ref)
+    V_py = model.vcov(regularize="auglag")
+    S = _sign_matrix_for("coxph", ref["p"], ref["q_d"], ref["q_s"])
+    V_expected = S @ ref["V_info_r"] @ S
+    # Full block parity, including the θ_b and cross-block entries that
+    # bare ``inv(H)`` was ~37× off on.  Tolerance absorbs the small
+    # optimiser drift between pymlt's and R's auglag (``Δθ ≈ 1e-5``)
+    # propagated through the inverse of an ill-conditioned matrix.
+    np.testing.assert_allclose(V_py, V_expected, rtol=5e-3, atol=1e-4)
+
+
+@pytest.mark.parametrize("tag", ["boxcox", "colr"])
 def test_scaled_sandwich_matches_R(tag: str) -> None:
     """``V_HC0 = V_info U'U V_info`` (HC0 sandwich) matches R element-wise.
 
@@ -588,7 +608,12 @@ def test_scaled_sandwich_matches_R(tag: str) -> None:
     meat is computed from the same per-observation scores (signed for β
     under BoxCox) the comparison is essentially testing whether pymlt's
     ``score_matrix`` reproduces R's ``estfun.mlt`` row-by-row at the same θ.
-    Coxph β / γ sub-block only, same reason as the vcov test.
+
+    The Coxph case lives in
+    :func:`test_scaled_sandwich_coxph_matches_R_via_auglag` for the same
+    reason as the vcov test: R's bread carries an active-set penalty that
+    bare ``inv(H)`` misses, and the leak compounds through both bread
+    copies of the sandwich.
     """
     ref = _load_scaled_vcov_fixture(tag)
     if ref is None:
@@ -617,20 +642,39 @@ def test_scaled_sandwich_matches_R(tag: str) -> None:
     V_py_HC0 = V_py_info @ (U.T @ U) @ V_py_info
     S = _sign_matrix_for(tag, ref["p"], ref["q_d"], ref["q_s"])
     V_expected = S @ ref["V_HC0_r"] @ S
-    if tag == "coxph":
-        # Coxph sandwich tolerance is looser than the info vcov tolerance:
-        # the penalty leak from the active θ_b constraint multiplies through
-        # both the bread (V_info) and the implicit meat reweighting, so
-        # diagonal entries of the β / γ sub-block drift up to ~10% relative.
-        sl = slice(ref["p"], ref["p"] + ref["q_d"] + ref["q_s"])
-        np.testing.assert_allclose(
-            V_py_HC0[sl, sl], V_expected[sl, sl], rtol=1e-1, atol=5e-4
-        )
-    else:
-        np.testing.assert_allclose(V_py_HC0, V_expected, rtol=1e-4, atol=1e-6)
+    np.testing.assert_allclose(V_py_HC0, V_expected, rtol=1e-4, atol=1e-6)
 
 
-@pytest.mark.parametrize("tag", ["boxcox", "coxph", "colr"])
+def test_scaled_sandwich_coxph_matches_R_via_auglag() -> None:
+    """``Coxph.sandwich_vcov(regularize='auglag')`` matches R's sandwich full-block.
+
+    Same mechanism as :func:`test_scaled_vcov_coxph_matches_R_via_auglag`:
+    the scaled Coxph fit binds two adjacent θ_b coefficients on the
+    monotonicity boundary, so R's ``vcov(as.mlt(fit))`` — which forms the
+    bread of the sandwich — augments along the active constraint.  Pymlt's
+    bread must follow suit; otherwise the penalty leak compounds through
+    both ``V_info`` copies of ``V = V_info · UᵀU · V_info``.
+
+    End-to-end fit through the public ``sandwich_vcov`` API (not
+    function-vs-function at θ_R), so the tolerance absorbs both the small
+    optimiser drift in θ̂ (``Δθ ≈ 1e-5``) and the meat reweighting that
+    comes from evaluating ``U`` at pymlt's θ̂ rather than R's.  Empirically
+    those two error sources combine to ``max_rel ≈ 5e-5`` on the full block;
+    we use the same ``rtol=1e-4, atol=1e-6`` as the BoxCox / Colr branch so
+    Coxph is no longer the loose case.  The previous sub-block-only check at
+    rtol=1e-1 is superseded entirely.
+    """
+    ref = _load_scaled_vcov_fixture("coxph")
+    if ref is None:
+        pytest.skip("scaling_vcov_coxph_* reference fixtures not found")
+    model = _fit_scaled("coxph", ref)
+    V_py_HC0 = model.sandwich_vcov(regularize="auglag")
+    S = _sign_matrix_for("coxph", ref["p"], ref["q_d"], ref["q_s"])
+    V_expected = S @ ref["V_HC0_r"] @ S
+    np.testing.assert_allclose(V_py_HC0, V_expected, rtol=1e-4, atol=1e-6)
+
+
+@pytest.mark.parametrize("tag", ["boxcox", "colr"])
 def test_scaled_wald_test_gamma_matches_R(tag: str) -> None:
     """Wald(H0: γ_1 = 0) on a scaled fit matches R's W statistic and p-value.
 
@@ -638,9 +682,13 @@ def test_scaled_wald_test_gamma_matches_R(tag: str) -> None:
     end-to-end, not just the analytical Hessian).  The statistic and p-value
     target R's ``Rθ' (RVR')⁻¹ Rθ`` computed from ``vcov(as.mlt(fit))``.
 
-    For BoxCox / Colr the vcov is interior and parity is exact at rtol=1e-4.
-    For Coxph the active-constraint penalty in R's vcov perturbs the γ-row
-    of (RVR'); we relax tolerance to rtol=5e-2 to absorb that.
+    For BoxCox / Colr the vcov is interior and parity holds at rtol=1e-3 —
+    pymlt re-fits rather than using R's reported θ, so the optimiser stops
+    at a slightly different θ̂ and that residual propagates into Rθ and
+    (RVR').  The Coxph case lives in
+    :func:`test_scaled_wald_test_gamma_coxph_matches_R_via_auglag` because
+    its active-constraint penalty has to be reproduced via
+    ``regularize='auglag'`` for parity on the γ-row of (RVR').
     """
     ref = _load_scaled_vcov_fixture(tag)
     if ref is None:
@@ -650,16 +698,38 @@ def test_scaled_wald_test_gamma_matches_R(tag: str) -> None:
     R = np.zeros((1, k))
     R[0, ref["p"] + ref["q_d"]] = 1.0
     result = model.wald_test(R)
-    if tag == "coxph":
-        rtol = 5e-2
-        atol = 1e-2
-    else:
-        # Pymlt re-fits the model rather than using R's reported θ, so the
-        # optimiser stops at a slightly different θ̂ — that residual
-        # propagates into Rθ and (RVR'), giving ~1e-3 relative drift on W
-        # even when both fits have an interior MLE.
-        rtol = 1e-3
-        atol = 1e-5
+    rtol = 1e-3
+    atol = 1e-5
+    np.testing.assert_allclose(result.statistic, ref["W_r"], rtol=rtol, atol=atol)
+    np.testing.assert_allclose(result.p_value, ref["wald_p_r"], rtol=rtol, atol=atol)
+    assert result.df == ref["wald_df_r"] == 1
+
+
+def test_scaled_wald_test_gamma_coxph_matches_R_via_auglag() -> None:
+    """Wald(H0: γ_1 = 0) on scaled Coxph matches R via auglag-bread vcov.
+
+    The Wald statistic is ``Rθ̂ᵀ (R V Rᵀ)⁻¹ Rθ̂`` with ``V`` the bread of
+    the sandwich (or the information vcov, here).  On scaled Coxph the
+    fitted θ̂ binds the baseline monotonicity boundary, so R's
+    ``vcov(as.mlt(fit))`` augments along the active constraint.  Calling
+    ``model.wald_test(R, regularize='auglag')`` threads that same
+    augmentation into pymlt's V, recovering parity on the γ-row that bare
+    ``inv(H)`` was off by ~37×.  Empirically W matches R at ``rel ≈ 8e-5``;
+    we use the same ``rtol=1e-3, atol=1e-5`` as the BoxCox / Colr branch
+    (driven by the optimiser-drift residual in θ̂ that propagates into Rθ
+    and (RVR'), not by the active-constraint penalty).  The previous loose
+    Coxph branch (``rtol=5e-2, atol=1e-2``) is superseded entirely.
+    """
+    ref = _load_scaled_vcov_fixture("coxph")
+    if ref is None:
+        pytest.skip("scaling_vcov_coxph_* reference fixtures not found")
+    model = _fit_scaled("coxph", ref)
+    k = ref["p"] + ref["q_d"] + ref["q_s"]
+    R = np.zeros((1, k))
+    R[0, ref["p"] + ref["q_d"]] = 1.0
+    result = model.wald_test(R, regularize="auglag")
+    rtol = 1e-3
+    atol = 1e-5
     np.testing.assert_allclose(result.statistic, ref["W_r"], rtol=rtol, atol=atol)
     np.testing.assert_allclose(result.p_value, ref["wald_p_r"], rtol=rtol, atol=atol)
     assert result.df == ref["wald_df_r"] == 1

@@ -1331,18 +1331,35 @@ class ConditionalTransformationModel:
 
         Parameters
         ----------
-        regularize : {'active', None}, default 'active'
+        regularize : {'active', 'auglag', None}, default 'active'
             Regularization strategy for near-singular Hessians.
 
             * ``'active'`` — if direct inversion fails, augment the Hessian
               with a penalty term along active monotonicity constraints before
-              re-attempting: ``H_reg = H + ρ · Aᵀ A`` where ``A`` is the
-              sub-matrix of rows of ``_A_ineq_`` for which the KKT multiplier
-              exceeds :attr:`_ACTIVE_CONSTRAINT_TOL`, and ``ρ`` is the final
-              auglag penalty parameter.  When auglag data are not available
-              (SLSQP / trust-constr fits) the pseudoinverse is used as a
-              fallback.  This is the default because the Hessian can be
-              singular at constrained MLEs.
+              re-attempting: ``H_reg = H + ρ · Aᵀ_active · A_active`` where
+              ``A_active`` is the sub-matrix of rows of ``_A_ineq_`` for
+              which the KKT multiplier exceeds
+              :attr:`_ACTIVE_CONSTRAINT_TOL`, and ``ρ`` is the final auglag
+              penalty parameter.  When auglag data are not available (SLSQP
+              / trust-constr fits) the pseudoinverse is used as a fallback.
+              This is the default because the Hessian can be singular at
+              constrained MLEs, and on well-conditioned fits it reduces to
+              bare ``H⁻¹`` (R ``mlt::vcov.mlt`` behaves the same way in the
+              cases where pymlt's bare ``inv(H)`` already matches R — see
+              ``tests/test_confidence.py``).
+            * ``'auglag'`` — *always* apply the penalty augmentation when
+              active monotonicity rows exist, rather than waiting for bare
+              inversion to fail.  Mirrors R ``mlt::vcov.mlt`` on the
+              constrained branches that bare ``inv(H)`` misses (notably the
+              scaled-baseline Coxph path, where bare ``inv(H)`` diverges
+              from R's ``vcov(as.mlt(fit))`` by ~37× on the binding rows
+              while the augmented matrix matches at ``rtol≈1e-4``).  Falls
+              back to bare ``H`` when no constraint binds or auglag data
+              are unavailable; uses ``numpy.linalg.pinv`` if the augmented
+              matrix is still singular.  Opt-in because it inflates
+              standard errors along tied rows and consequently widens
+              ``confint`` / ``confband`` outputs in cases where pymlt's
+              bare ``inv(H)`` already matches R.
             * ``None`` — raise ``RuntimeError`` on singular Hessian (original
               behaviour; useful when you need a diagnostic failure).
 
@@ -1354,7 +1371,7 @@ class ConditionalTransformationModel:
         Raises
         ------
         ValueError
-            If *regularize* is not ``'active'`` or ``None``.
+            If *regularize* is not ``'active'``, ``'auglag'``, or ``None``.
         NotFittedError
             If called before :meth:`fit`.
         RuntimeError
@@ -1367,8 +1384,24 @@ class ConditionalTransformationModel:
                 "hessian_ is unexpectedly missing after fitting. "
                 "Please call fit(y) again."
             )
-        if regularize not in ("active", None):
-            raise ValueError(f"regularize must be 'active' or None, got {regularize!r}")
+        if regularize not in ("active", "auglag", None):
+            raise ValueError(
+                f"regularize must be 'active', 'auglag', or None, got {regularize!r}"
+            )
+
+        # 'auglag': pre-augment unconditionally when active constraints exist.
+        # The other two modes go through bare inv first.
+        if regularize == "auglag":
+            H_use = self._augment_hessian_with_active_penalty(self.hessian_)
+            try:
+                return cast(NDArray[np.float64], np.linalg.inv(H_use))
+            except np.linalg.LinAlgError:
+                # Augmented matrix still singular (no auglag artefacts, or
+                # active set failed to span the null space).  Graceful
+                # pseudoinverse rather than raising — 'auglag' is the
+                # opt-in regularising mode and shouldn't fail loudly.
+                return cast(NDArray[np.float64], np.linalg.pinv(H_use))
+
         try:
             return cast(NDArray[np.float64], np.linalg.inv(self.hessian_))
         except np.linalg.LinAlgError as exc:
@@ -1378,25 +1411,42 @@ class ConditionalTransformationModel:
                     "or ill-conditioned.  Possible causes: active monotonicity "
                     "constraint at the MLE, basis order too high relative to "
                     "sample size, or collinear covariates.  "
-                    "Pass regularize='active' to use the penalty-augmented Hessian."
+                    "Pass regularize='active' (penalty fallback) or 'auglag' "
+                    "(unconditional augmentation) to recover a finite vcov."
                 ) from exc
 
         # regularize='active' fallback: penalty-augmented Hessian.
-        H_reg = self.hessian_.copy()
-        if (
-            self._A_ineq_ is not None
-            and self.result_ is not None
-            and self.result_.mu_ineq is not None
-            and self.result_.rho_final is not None
-        ):
-            active_mask = self.result_.mu_ineq > self._ACTIVE_CONSTRAINT_TOL
-            if np.any(active_mask):
-                A_active = self._A_ineq_[active_mask, :]
-                H_reg = H_reg + self.result_.rho_final * A_active.T @ A_active
+        H_reg = self._augment_hessian_with_active_penalty(self.hessian_)
         try:
             return cast(NDArray[np.float64], np.linalg.inv(H_reg))
         except np.linalg.LinAlgError:
             return cast(NDArray[np.float64], np.linalg.pinv(H_reg))
+
+    def _augment_hessian_with_active_penalty(
+        self, H: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """Return ``H + ρ · Aᵀ_active · A_active`` if auglag data is available.
+
+        ``A_active`` is the sub-matrix of rows of ``_A_ineq_`` whose KKT
+        multiplier (``result_.mu_ineq``) exceeds
+        :attr:`_ACTIVE_CONSTRAINT_TOL`; ``ρ`` is ``result_.rho_final``.
+        When any of the auglag artefacts is missing (SLSQP / trust-constr
+        fits) or no constraint binds, ``H`` is returned unchanged.  Shared
+        by the ``'active'`` and ``'auglag'`` branches of :meth:`vcov` so the
+        penalty formula has a single source of truth.
+        """
+        if (
+            self._A_ineq_ is None
+            or self.result_ is None
+            or self.result_.mu_ineq is None
+            or self.result_.rho_final is None
+        ):
+            return H
+        active_mask = self.result_.mu_ineq > self._ACTIVE_CONSTRAINT_TOL
+        if not np.any(active_mask):
+            return H
+        A_active = self._A_ineq_[active_mask, :]
+        return H + self.result_.rho_final * (A_active.T @ A_active)
 
     def estfun(self) -> NDArray[np.float64]:
         """Per-observation score contributions, ``(n, p+q)``.

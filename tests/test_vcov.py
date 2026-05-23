@@ -814,6 +814,124 @@ class TestVcovRegularize:
 
 
 # ---------------------------------------------------------------------------
+# vcov(regularize='auglag') — unconditional active-set augmentation
+# ---------------------------------------------------------------------------
+
+
+class TestVcovAuglag:
+    """``regularize='auglag'`` always applies the active-set penalty.
+
+    Distinct from ``'active'`` (which only augments on bare-inversion
+    failure) and from ``None`` (no augmentation, raise on singular).  The
+    motivating case is scaled-baseline Coxph, where R's
+    ``vcov(as.mlt(fit))`` applies the augmentation but pymlt's bare
+    ``inv(H)`` doesn't — see ``test_scaling_inference.py`` for the parity
+    check.  These tests pin the mode's algebraic identity and its
+    relationship to the other two modes on plain (unscaled) fits.
+    """
+
+    def setup_method(self):
+        rng = np.random.default_rng(0)
+        n = 150
+        self.X = rng.normal(0, 1, (n, 2))
+        self.y = 0.5 * self.X[:, 0] - 0.3 * self.X[:, 1] + rng.normal(0, 1, n)
+        self.m = MLT(
+            order=5,
+            support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
+        ).fit(self.y, X=self.X)
+
+    def test_vcov_auglag_callable(self):
+        """``vcov(regularize='auglag')`` returns a finite symmetric matrix."""
+        V = self.m.vcov(regularize="auglag")
+        k = self.m.theta_.size
+        assert V.shape == (k, k)
+        np.testing.assert_allclose(V, V.T, atol=1e-10)
+        assert np.all(np.isfinite(V))
+
+    def test_vcov_auglag_inverts_augmented_hessian(self):
+        """``vcov('auglag') == inv(H + ρ·Aᵀ_active·A_active)`` to round-off.
+
+        Defining property of the mode.  Compared element-wise against a
+        hand-rolled augmentation built from the same auglag artefacts
+        (``_A_ineq_``, ``mu_ineq``, ``rho_final``) the implementation
+        consumes — the two paths must agree exactly (no algorithmic
+        divergence permitted).
+        """
+        V = self.m.vcov(regularize="auglag")
+        H_reg = self.m.hessian_.copy()
+        if (
+            self.m._A_ineq_ is not None
+            and self.m.result_ is not None
+            and self.m.result_.mu_ineq is not None
+            and self.m.result_.rho_final is not None
+        ):
+            active = self.m.result_.mu_ineq > self.m._ACTIVE_CONSTRAINT_TOL
+            if active.any():
+                A_act = self.m._A_ineq_[active, :]
+                H_reg = H_reg + self.m.result_.rho_final * (A_act.T @ A_act)
+        np.testing.assert_allclose(V, np.linalg.inv(H_reg), atol=1e-14)
+
+    def test_vcov_auglag_diverges_from_active_when_constraint_binds(self):
+        """When a constraint binds, ``'auglag' != 'active'``.
+
+        ``'active'`` only augments on bare-inversion failure, so on an
+        invertible ``H`` it equals ``vcov(None)``.  ``'auglag'`` augments
+        unconditionally.  This test pins the divergence when there is
+        something to augment, and the equivalence to ``'active'`` when
+        there is nothing (so a regression that silently turns
+        ``'auglag'`` into a no-op would be caught).
+        """
+        v_auglag = self.m.vcov(regularize="auglag")
+        v_active = self.m.vcov(regularize="active")
+        mu = self.m.result_.mu_ineq if self.m.result_ is not None else None
+        any_active = mu is not None and bool((mu > self.m._ACTIVE_CONSTRAINT_TOL).any())
+        if any_active:
+            assert not np.allclose(v_auglag, v_active, rtol=1e-8, atol=1e-10)
+        else:
+            np.testing.assert_allclose(v_auglag, v_active, rtol=1e-12, atol=0)
+
+    def test_vcov_auglag_matches_bare_when_no_constraint_binds(self):
+        """Without active constraints, ``vcov('auglag') == vcov(None)``.
+
+        Penalty is zero when no row of ``A_ineq`` is active, so the
+        augmented Hessian equals ``H`` and the inverse is bare.  Skipped if
+        the fixture happens to land at an interior MLE (otherwise we'd be
+        testing a vacuous branch).
+        """
+        mu = self.m.result_.mu_ineq if self.m.result_ is not None else None
+        if mu is None or (mu > self.m._ACTIVE_CONSTRAINT_TOL).any():
+            pytest.skip("fixture has active constraints; covered by divergence test")
+        v_auglag = self.m.vcov(regularize="auglag")
+        v_none = self.m.vcov(regularize=None)
+        np.testing.assert_allclose(v_auglag, v_none, rtol=1e-12, atol=0)
+
+    def test_vcov_invalid_regularize_message_lists_auglag(self):
+        """The error message mentions all three legal values."""
+        with pytest.raises(ValueError, match=r"'active'.*'auglag'"):
+            self.m.vcov(regularize="unknown")
+
+    def test_sandwich_vcov_auglag_forwards_to_vcov(self):
+        """``sandwich_vcov(regularize='auglag')`` uses augmented bread."""
+        V = self.m.sandwich_vcov(regularize="auglag")
+        bread = self.m.vcov(regularize="auglag")
+        ef = self.m.estfun()
+        expected = bread @ (ef.T @ ef) @ bread
+        np.testing.assert_allclose(V, expected, atol=1e-12)
+
+    def test_wald_test_auglag_forwards_to_vcov(self):
+        """``wald_test(R, regularize='auglag')`` uses augmented vcov."""
+        k = self.m.theta_.size
+        R = np.zeros((1, k))
+        R[0, -1] = 1.0
+        result = self.m.wald_test(R, regularize="auglag")
+        V = self.m.vcov(regularize="auglag")
+        diff = R @ self.m.theta_
+        RVR = R @ V @ R.T
+        W_expected = float(diff @ np.linalg.inv(RVR) @ diff)
+        np.testing.assert_allclose(result.statistic, W_expected, rtol=1e-10)
+
+
+# ---------------------------------------------------------------------------
 # wald_test(regularize=...) — #84
 # ---------------------------------------------------------------------------
 
