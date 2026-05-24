@@ -42,6 +42,13 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
 
 .. toctree::
    :maxdepth: 1
+   :caption: Design decisions
+
+   adr/0001-tensor-product-interaction-basis
+   adr/0002-scaling-terms
+
+.. toctree::
+   :maxdepth: 1
    :caption: Project
 
    citation

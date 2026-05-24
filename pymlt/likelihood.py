@@ -6,7 +6,7 @@ Optional per-observation weights and fixed offset are supported.
 
 Mathematical convention
 -----------------------
-Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1):
+Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1)::
 
     h(y)  = B_k(y) @ theta_b  [+ X @ beta  if covariates are present]
               [+ offset         if offset is provided]

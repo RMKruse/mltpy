@@ -1530,17 +1530,6 @@ class Polr(ConditionalTransformationModel):
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
 
-    Attributes
-    ----------
-    cutpoints_ : NDArray[np.float64]
-        Estimated ``θ_1, ..., θ_{K-1}``.  Available after :meth:`fit`.
-    coef_ : NDArray[np.float64]
-        Estimated regression coefficients ``β`` (length equal to the number
-        of covariate columns).  Empty array when ``X`` is omitted at fit
-        time.  Negate to compare with R ``tram::Polr``.
-    levels_ : tuple
-        The resolved ordered category labels (length ``K``).
-
     Examples
     --------
     >>> import numpy as np
