@@ -1396,3 +1396,154 @@ class TestDistOpsDispatchIsIdentityFree:
             theta, basis, cd, None, CensoringType.LEFT, wrapped
         )
         np.testing.assert_allclose(got, ref, rtol=1e-12, atol=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Closed-form DistOps fast paths (issue #94)
+# ---------------------------------------------------------------------------
+
+
+class _RaisingScipy:
+    """scipy stand-in whose log/cdf/pdf methods raise.
+
+    Used to prove the closed-form ``DistOps`` methods never fall through to
+    ``self.scipy`` — if they did, these would explode instead of returning a
+    value.  Non-intercepted names (``ppf``, ``sf``, ...) still forward.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        if name in {"logpdf", "logcdf", "logsf", "cdf", "pdf"}:
+            raise AssertionError(f"closed-form path must not call scipy.{name}")
+        return getattr(self._inner, name)
+
+
+class TestDistOpsClosedForm:
+    """Closed-form ``logpdf``/``logcdf``/``logsf``/``cdf``/``pdf`` on DistOps."""
+
+    METHODS = ("logpdf", "logcdf", "logsf", "cdf", "pdf")
+
+    @staticmethod
+    def _scipy_for(kind):
+        from scipy.stats import (
+            cauchy,
+            expon,
+            gumbel_l,
+            gumbel_r,
+            laplace,
+            logistic,
+            norm,
+        )
+
+        return {
+            "normal": norm,
+            "logistic": logistic,
+            "min_extreme_value": gumbel_l,
+            "max_extreme_value": gumbel_r,
+            "exponential": expon,
+            "laplace": laplace,
+            "cauchy": cauchy,
+        }[kind]
+
+    @staticmethod
+    def _grid():
+        return np.concatenate(
+            [np.linspace(-40.0, 40.0, 4001), [-30.0, -1e-8, 0.0, 1e-8, 30.0]]
+        )
+
+    @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
+    @pytest.mark.parametrize("method", METHODS)
+    def test_matches_scipy_on_dense_grid(self, kind, method):
+        ops = _get_dist(kind)
+        scipy_dist = self._scipy_for(kind)
+        h = self._grid()
+        # exponential support is [0, inf); compare only there (logpdf below).
+        h = h[h >= 0.0] if kind == "exponential" else h
+        with np.errstate(divide="ignore", invalid="ignore"):
+            got = getattr(ops, method)(h)
+            ref = getattr(scipy_dist, method)(h)
+        np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-12)
+
+    @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
+    @pytest.mark.parametrize("method", METHODS)
+    def test_closed_form_does_not_touch_scipy(self, kind, method):
+        from pymlt.likelihood import DistOps
+
+        canonical = _get_dist(kind)
+        ops = DistOps(kind=canonical.kind, scipy=_RaisingScipy(canonical.scipy))
+        h = (
+            np.array([0.3, 0.7, 1.2])
+            if kind == "exponential"
+            else np.array([-1.3, -0.2, 0.0, 0.5, 2.1])
+        )
+        # Must not raise (closed form), and must match the real scipy values.
+        got = getattr(ops, method)(h)
+        ref = getattr(self._scipy_for(kind), method)(h)
+        np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-12)
+
+    def test_exponential_logpdf_full_domain(self):
+        from pymlt.likelihood import _EXPON_OPS
+
+        # Documented divergence from scipy: logpdf = -h on the whole line
+        # (scipy returns -inf for h < 0).  Load-bearing for the exact-data
+        # call sites that used the `-h if kind == "exponential"` override.
+        assert _EXPON_OPS.logpdf(-1.0) == 1.0
+        np.testing.assert_allclose(
+            _EXPON_OPS.logpdf(np.array([-2.0, 0.0, 3.0])),
+            np.array([2.0, 0.0, -3.0]),
+            rtol=0,
+            atol=0,
+        )
+
+    @pytest.mark.parametrize("h", [-40.0, -30.0, 30.0, 40.0])
+    def test_gumbel_l_logcdf_sharp_tail(self, h):
+        # log(-expm1(-exp(h))) form must stay finite and accurate in the
+        # lower tail where the naive log1p(-exp(-exp(h))) returns -inf.
+        from scipy.stats import gumbel_l
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            got = _get_dist("min_extreme_value").logcdf(h)
+        assert np.isfinite(got)
+        np.testing.assert_allclose(got, gumbel_l.logcdf(h), rtol=1e-10, atol=1e-12)
+
+    @pytest.mark.parametrize("h", [-40.0, -30.0, 30.0, 40.0])
+    def test_gumbel_r_logsf_sharp_tail(self, h):
+        from scipy.stats import gumbel_r
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            got = _get_dist("max_extreme_value").logsf(h)
+        assert np.isfinite(got)
+        np.testing.assert_allclose(got, gumbel_r.logsf(h), rtol=1e-10, atol=1e-12)
+
+    @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
+    def test_pdf_equals_exp_logpdf(self, kind):
+        ops = _get_dist(kind)
+        h = self._grid()
+        h = h[h >= 0.0] if kind == "exponential" else h
+        with np.errstate(divide="ignore", invalid="ignore"):
+            np.testing.assert_allclose(
+                ops.pdf(h), np.exp(ops.logpdf(h)), rtol=1e-10, atol=1e-12
+            )
+
+    @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
+    def test_cdf_in_unit_interval_and_monotone(self, kind):
+        ops = _get_dist(kind)
+        h = np.sort(self._grid())
+        h = h[h >= 0.0] if kind == "exponential" else h
+        c = ops.cdf(h)
+        assert np.all(c >= -1e-12)
+        assert np.all(c <= 1.0 + 1e-12)
+        assert np.all(np.diff(c) >= -1e-12)
+
+    @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
+    def test_getattr_fallback_not_shadowed(self, kind):
+        # ppf / sf are NOT among the closed-form names: they must still forward
+        # to the underlying scipy distribution via __getattr__.
+        ops = _get_dist(kind)
+        scipy_dist = self._scipy_for(kind)
+        p = np.array([0.1, 0.5, 0.9])
+        np.testing.assert_allclose(ops.ppf(p), scipy_dist.ppf(p), rtol=1e-10)
+        x = np.array([0.2, 1.1])
+        np.testing.assert_allclose(ops.sf(x), scipy_dist.sf(x), rtol=1e-10)
