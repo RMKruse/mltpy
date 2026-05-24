@@ -16,12 +16,13 @@ Covers:
 from __future__ import annotations
 
 import pathlib
+import warnings
 
 import numpy as np
 import pytest
 from scipy.stats import norm
 
-from pymlt import MLT, CensoredData, NotFittedError
+from pymlt import MLT, CensoredData, ConvergenceWarning, NotFittedError
 from pymlt.tram import BoxCox, Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
@@ -556,3 +557,347 @@ def test_confband_density_hazard_clip_extreme_h_warns(what):
     with pytest.warns(UserWarning, match="exceeds"):
         band = model.confband(grid, what=what, level=0.95)
     assert np.all(np.isfinite(band))
+
+
+# ---------------------------------------------------------------------------
+# Profile-CI robustness (issue #89): boundary semantics, bracket diagnostics,
+# inner-fit failure handling.
+#
+# The MVP from #87 raises RuntimeError on any of three failure modes.  Issue
+# #89 hardens this so that ``parm=None`` calls survive the failure of any
+# single parameter (warn + NaN/±inf endpoint), while explicit ``parm=[j]``
+# calls still raise so the caller can debug the one parameter they asked
+# for.  Tests below force each failure mode through the public interface.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def small_mlt_for_profile():
+    """A small BoxCox fit used as the host for monkey-patched profile-loglik
+    experiments.  BoxCox on lognormal data with N=120 converges interior
+    (Wald + profile both succeed without any boundary or KKT issues), so
+    the un-patched inner refits stay finite — letting the tests below
+    isolate the patched-index failure path from background noise.
+    Order-4 yields a 5-row theta_ vector before any covariate β.
+    """
+    rng = np.random.default_rng(8917)
+    y = rng.lognormal(size=120)
+    return BoxCox(
+        order=4,
+        support=(float(y.min() - 0.05), float(y.max() + 0.05)),
+    ).fit(y)
+
+
+def test_profile_ci_parm_none_warns_and_returns_inf_when_one_param_unbracketable(
+    small_mlt_for_profile, monkeypatch
+):
+    """parm=None with one un-bracketable parameter → warn + ±inf row;
+    finite endpoints in the other rows; call does not raise.
+
+    Manufactures the failure by patching ``_profile_loglik_at`` to return
+    the unrestricted MLE log-likelihood whenever ``j == 0`` (perfectly flat
+    profile → f(v) = -χ²_crit < 0 for every v → bracket-search exhausts).
+    The other indices use the genuine pinned refit and bracket normally.
+    """
+    model = small_mlt_for_profile
+    ll_hat = float(model.result_.log_likelihood)
+    real_loglik_at = model._profile_loglik_at
+
+    def patched(j, v):
+        if j == 0:
+            return ll_hat  # perfectly flat → never crosses the LR threshold
+        return real_loglik_at(j, v)
+
+    monkeypatch.setattr(model, "_profile_loglik_at", patched)
+
+    with pytest.warns(ConvergenceWarning, match=r"parameter 0\b"):
+        ci = model.confint(level=0.95, type="profile")
+
+    assert ci.shape == (model.theta_.size, 2)
+    # The flat-profile row should be unbounded on both sides; explicit ±inf
+    # (not NaN) per #89 because the failure mode is "no bracket", not
+    # "inner fit non-convergent".
+    assert ci[0, 0] == -np.inf
+    assert ci[0, 1] == np.inf
+    # Remaining rows finite — proves the call did not abort on the failure.
+    assert np.all(np.isfinite(ci[1:, :]))
+
+
+def test_profile_ci_parm_explicit_unbracketable_raises_with_diagnostic(
+    small_mlt_for_profile, monkeypatch
+):
+    """parm=[j] singleton + un-bracketable parameter → RuntimeError whose
+    message names j, the largest |f| observed, and the widest bracket
+    multiplier tried.  Matches #89 acceptance criterion 3: explicit
+    parm requests get the hard failure so the caller can debug.
+    """
+    model = small_mlt_for_profile
+    ll_hat = float(model.result_.log_likelihood)
+    real_loglik_at = model._profile_loglik_at
+
+    def patched(j, v):
+        if j == 0:
+            return ll_hat
+        return real_loglik_at(j, v)
+
+    monkeypatch.setattr(model, "_profile_loglik_at", patched)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        model.confint(level=0.95, type="profile", parm=[0])
+    msg = str(excinfo.value)
+    assert "parameter 0" in msg
+    # Largest |f| reported (already in the MVP message).
+    assert "largest |f|" in msg
+    # New per-#89: widest bracket multiplier surfaced for caller to widen.
+    assert "widest bracket multiplier" in msg
+
+
+@pytest.mark.parametrize("failing_index", [0, 2])
+def test_profile_ci_convergence_warning_names_parameter_index(
+    small_mlt_for_profile, monkeypatch, failing_index
+):
+    """Every ConvergenceWarning emitted on the parm=None path must include
+    the literal parameter index in its message — #89 acceptance criterion 5.
+
+    Captures all warnings and checks that for the chosen failing index
+    both the lower- and upper-side warnings name it.  Parametrized so the
+    assertion does not pass vacuously when ``failing_index == 0`` happens
+    to match an unrelated zero literal elsewhere in the text.
+    """
+    model = small_mlt_for_profile
+    ll_hat = float(model.result_.log_likelihood)
+    real_loglik_at = model._profile_loglik_at
+
+    def patched(j, v):
+        if j == failing_index:
+            return ll_hat
+        return real_loglik_at(j, v)
+
+    monkeypatch.setattr(model, "_profile_loglik_at", patched)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        model.confint(level=0.95, type="profile")
+
+    relevant = [w for w in caught if issubclass(w.category, ConvergenceWarning)]
+    # Two warnings (lower + upper) for the failing parameter; none for
+    # the others (otherwise the test would not isolate the assertion).
+    assert len(relevant) == 2, (
+        f"expected 2 warnings for parameter {failing_index}, got "
+        f"{[str(w.message) for w in relevant]}"
+    )
+    needle = f"parameter {failing_index}"
+    for w in relevant:
+        assert needle in str(w.message), (
+            f"warning did not name parameter {failing_index}: {w.message}"
+        )
+
+
+def test_profile_ci_boundary_failure_returns_signed_inf_under_parm_none(
+    small_mlt_for_profile, monkeypatch
+):
+    """A boundary failure inside the pinned refit (the equality theta[j]=v
+    can't co-exist with active monotonicity rows) maps to ±inf with a
+    side-correct sign under parm=None — #89 acceptance criterion 1.
+
+    Manufactures the failure by patching ``_profile_loglik_at`` to raise
+    the private ``_ProfileInnerFailure`` for ``j == 0`` regardless of v
+    (so both lower and upper sides hit the boundary path).  Asserts both
+    endpoints saturate to ±inf with a warning naming the parameter and
+    the failure kind, while other rows are finite.
+    """
+    from pymlt.model import _ProfileInnerFailure
+
+    model = small_mlt_for_profile
+    real_loglik_at = model._profile_loglik_at
+
+    def patched(j, v):
+        if j == 0:
+            raise _ProfileInnerFailure(
+                j=j,
+                kind="boundary",
+                diagnostic=(
+                    f"inner fit could not honour theta_[{j}]={v}: post-fit "
+                    "monotonicity active set is degenerate"
+                ),
+            )
+        return real_loglik_at(j, v)
+
+    monkeypatch.setattr(model, "_profile_loglik_at", patched)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        ci = model.confint(level=0.95, type="profile")
+
+    # Side-correct ±inf saturation.
+    assert ci[0, 0] == -np.inf
+    assert ci[0, 1] == np.inf
+    # Other rows intact.
+    assert np.all(np.isfinite(ci[1:, :]))
+    # Warnings name the parameter and the kind.
+    relevant = [w for w in caught if issubclass(w.category, ConvergenceWarning)]
+    assert len(relevant) >= 2  # one per side (more is OK if the search probed twice)
+    for w in relevant:
+        text = str(w.message)
+        assert "parameter 0" in text
+        assert "boundary" in text
+
+
+def test_profile_ci_boundary_failure_under_parm_explicit_raises(
+    small_mlt_for_profile, monkeypatch
+):
+    """The same boundary failure under parm=[j] re-raises RuntimeError
+    naming the parameter and the kind — #89 acceptance criterion 1, strict
+    side: explicit caller gets the hard failure to inspect.
+    """
+    from pymlt.model import _ProfileInnerFailure
+
+    model = small_mlt_for_profile
+    real_loglik_at = model._profile_loglik_at
+
+    def patched(j, v):
+        if j == 0:
+            raise _ProfileInnerFailure(
+                j=j,
+                kind="boundary",
+                diagnostic="inner fit hit monotonicity active set",
+            )
+        return real_loglik_at(j, v)
+
+    monkeypatch.setattr(model, "_profile_loglik_at", patched)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        model.confint(level=0.95, type="profile", parm=[0])
+    msg = str(excinfo.value)
+    assert "parameter 0" in msg
+    assert "boundary" in msg
+
+
+def _make_inner_optimize_patcher(real_optimize, target_j, *, mode, real_theta):
+    """Wrap ``optimize`` so the inner refit for ``fixed_params={target_j: v}``
+    returns a fabricated :class:`OptimizationResult` simulating either a
+    pure convergence failure (``mode="convergence"`` — kkt_residual above
+    threshold, theta honours the pin) or a boundary failure (``mode="boundary"``
+    — theta drifts from the pin).  All other ``optimize`` calls pass through
+    to the real implementation.
+    """
+    from pymlt.optimizer import OptimizationResult
+
+    def patched(*args, **kwargs):
+        cfg = kwargs.get("config")
+        fp = getattr(cfg, "fixed_params", None)
+        if fp is not None and target_j in fp:
+            v = float(fp[target_j])
+            theta = real_theta.copy()
+            if mode == "boundary":
+                # Equality theta[j] = v was not honoured — drift past tol.
+                theta[target_j] = v + 1.0
+                kkt = 1e-2  # below the convergence threshold (the drift is
+                # what triggers boundary classification, not the KKT)
+            else:  # convergence
+                theta[target_j] = v  # equality honoured
+                kkt = 1.0  # >> _PROFILE_INNER_KKT_THRESHOLD (0.1)
+            return OptimizationResult(
+                theta=theta,
+                log_likelihood=-1234.5,  # arbitrary; never compared
+                converged=False,
+                n_iter=10,
+                n_restarts=0,
+                solver_message="synthetic-failure",
+                n_outer_iter=5,
+                kkt_residual=kkt,
+            )
+        return real_optimize(*args, **kwargs)
+
+    return patched
+
+
+def test_profile_ci_convergence_failure_returns_nan_under_parm_none(
+    small_mlt_for_profile, monkeypatch
+):
+    """parm=None + inner-fit non-convergence (KKT residual >> 1e-3 with no
+    theta-pin drift) → warn + NaN endpoint — #89 acceptance criterion 4.
+
+    Patches ``pymlt.model.optimize`` to fabricate a non-convergent inner
+    result whenever ``fixed_params={0: v}`` is requested.  Asserts the
+    public surface translates this into NaN row-0 endpoints with the
+    other rows still finite and a ConvergenceWarning naming the index
+    and the kind.
+    """
+    import pymlt.model as pm
+
+    model = small_mlt_for_profile
+    patcher = _make_inner_optimize_patcher(
+        pm.optimize, target_j=0, mode="convergence", real_theta=model.theta_
+    )
+    monkeypatch.setattr(pm, "optimize", patcher)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        ci = model.confint(level=0.95, type="profile")
+
+    assert np.isnan(ci[0, 0])
+    assert np.isnan(ci[0, 1])
+    assert np.all(np.isfinite(ci[1:, :]))
+
+    relevant = [w for w in caught if issubclass(w.category, ConvergenceWarning)]
+    assert len(relevant) >= 2
+    for w in relevant:
+        text = str(w.message)
+        assert "parameter 0" in text
+        assert "convergence" in text
+
+
+def test_profile_ci_inner_loglik_detects_boundary_vs_convergence(
+    small_mlt_for_profile, monkeypatch
+):
+    """Detection-logic unit test: ``_profile_loglik_at`` raises
+    ``_ProfileInnerFailure`` with the right ``kind`` based on whether the
+    pinned refit returned ``theta[j]`` drifted from ``v`` (boundary) or
+    just non-convergent KKT (convergence).
+    """
+    import pymlt.model as pm
+    from pymlt.model import _ProfileInnerFailure
+
+    model = small_mlt_for_profile
+
+    # Boundary signal: theta drift.
+    patcher_b = _make_inner_optimize_patcher(
+        pm.optimize, target_j=0, mode="boundary", real_theta=model.theta_
+    )
+    monkeypatch.setattr(pm, "optimize", patcher_b)
+    with pytest.raises(_ProfileInnerFailure) as exc_b:
+        model._profile_loglik_at(0, 0.0)
+    assert exc_b.value.kind == "boundary"
+    assert exc_b.value.j == 0
+
+    # Convergence signal: no drift, just high KKT.
+    patcher_c = _make_inner_optimize_patcher(
+        pm.optimize, target_j=0, mode="convergence", real_theta=model.theta_
+    )
+    monkeypatch.setattr(pm, "optimize", patcher_c)
+    with pytest.raises(_ProfileInnerFailure) as exc_c:
+        model._profile_loglik_at(0, 0.0)
+    assert exc_c.value.kind == "convergence"
+    assert exc_c.value.j == 0
+
+
+def test_profile_ci_convergence_failure_under_parm_explicit_raises(
+    small_mlt_for_profile, monkeypatch
+):
+    """parm=[j] singleton + inner-fit non-convergence → RuntimeError naming
+    the parameter and the kind — #89 acceptance criterion 4, strict side.
+    """
+    import pymlt.model as pm
+
+    model = small_mlt_for_profile
+    patcher = _make_inner_optimize_patcher(
+        pm.optimize, target_j=0, mode="convergence", real_theta=model.theta_
+    )
+    monkeypatch.setattr(pm, "optimize", patcher)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        model.confint(level=0.95, type="profile", parm=[0])
+    msg = str(excinfo.value)
+    assert "parameter 0" in msg
+    assert "convergence" in msg

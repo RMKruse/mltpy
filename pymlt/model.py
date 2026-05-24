@@ -66,6 +66,36 @@ class ConvergenceWarning(UserWarning):
     """Raised when the optimiser fails to converge within the allowed restarts."""
 
 
+class _ProfileInnerFailure(Exception):
+    """Internal — signals that one inner refit inside profile-CI failed.
+
+    Raised by :meth:`ConditionalTransformationModel._profile_loglik_at`
+    when the pinned refit either lands on a degenerate monotonicity
+    active set (``kind="boundary"`` — the equality ``theta_[j]=v`` could
+    not be honoured while preserving the inequality constraints, detected
+    via ``theta[j]`` drift from the pin) or fails to converge within
+    tolerance (``kind="convergence"`` — non-negligible KKT residual with
+    no theta drift).
+
+    Caught in :meth:`_profile_root` and translated to the user-facing
+    behaviour documented on :meth:`confint` (``ConvergenceWarning`` +
+    ``±inf`` / ``NaN`` endpoint under ``parm=None``, or ``RuntimeError``
+    under explicit ``parm=[j]``).  Never reaches end users.
+    """
+
+    def __init__(
+        self,
+        *,
+        j: int,
+        kind: Literal["boundary", "convergence"],
+        diagnostic: str,
+    ) -> None:
+        self.j = j
+        self.kind = kind
+        self.diagnostic = diagnostic
+        super().__init__(diagnostic)
+
+
 # ---------------------------------------------------------------------------
 # Valid predict targets
 # ---------------------------------------------------------------------------
@@ -1859,6 +1889,21 @@ class ConditionalTransformationModel:
           parameter costs roughly ten constrained refits, so always pass
           ``parm=`` to restrict the work on larger models.
 
+          Robustness (issue #89): three inner-fit failure modes can occur
+          per parameter — (i) the adaptive bracket fails to span a sign
+          change, (ii) the pinned refit lands on a degenerate monotonicity
+          active set so the equality ``theta[j] = v`` cannot be honoured
+          ("boundary"), or (iii) the pinned refit does not converge to
+          tolerance ("convergence", KKT residual ≥
+          ``_PROFILE_INNER_KKT_THRESHOLD``).  When ``parm is None`` (you
+          asked for every parameter) each failure emits a
+          :class:`ConvergenceWarning` naming the parameter and writes
+          ``±np.inf`` (bracket / boundary) or ``np.nan`` (convergence) to
+          that row, so one un-identified parameter does not abort the
+          whole call.  When ``parm`` is an explicit sequence (you asked
+          for those parameters specifically) the same failures re-raise
+          as :class:`RuntimeError` so you can debug the request.
+
         Parameters
         ----------
         level:
@@ -1889,8 +1934,10 @@ class ConditionalTransformationModel:
             ``{"wald", "profile"}``.
         RuntimeError
             Propagated from :meth:`vcov` on singular Hessians (Wald), or
-            from the profile-CI bracket search when no sign change is
-            found within the widest bracket multiplier (profile).
+            from the profile-CI bracket search / inner-fit failure when
+            an explicit ``parm`` was provided (profile).  Under
+            ``parm=None`` the same failures become
+            :class:`ConvergenceWarning` instead.
 
         Examples
         --------
@@ -1922,7 +1969,7 @@ class ConditionalTransformationModel:
                 )
 
         if type == "profile":
-            return self._confint_profile(level=level, idx=idx)
+            return self._confint_profile(level=level, idx=idx, strict=parm is not None)
 
         se = self.standard_errors()
         z = float(norm.ppf(0.5 * (1.0 + level)))
@@ -1937,6 +1984,21 @@ class ConditionalTransformationModel:
     _PROFILE_BRACKET_INIT: float = 3.0
     _PROFILE_BRACKET_MAX_DOUBLINGS: int = 24
     _PROFILE_BRENTQ_XTOL: float = 1e-6
+    # Detection thresholds for inner-fit failure inside profile-CI; see
+    # :meth:`_profile_loglik_at` and #89.  ``_PROFILE_INNER_KKT_THRESHOLD``
+    # is intentionally four orders of magnitude above auglag's nominal
+    # 1e-5 KKT target — CLAUDE.md notes that pinned refits on
+    # stacked-active-set fixtures (BoxCox + small N, Coxph with
+    # neighbouring Bernstein boundary, etc.) routinely emit
+    # ``converged=False`` with KKT ~ 1e-3 yet still produce a meaningful
+    # ``log_likelihood`` that R agrees with.  Only flag as a true
+    # convergence failure when the residual is *clearly* off (≥ 0.1).
+    # ``_PROFILE_INNER_PIN_TOL`` is the equality-violation tolerance — a
+    # post-fit ``|theta[j] - v| > 1e-6`` means the pin couldn't be
+    # honoured under the constraints, which is the unambiguous
+    # boundary-conflict signal.
+    _PROFILE_INNER_KKT_THRESHOLD: float = 1e-1
+    _PROFILE_INNER_PIN_TOL: float = 1e-6
 
     def _profile_loglik_at(self, j: int, v: float) -> float:
         """Maximised log-likelihood with ``theta_[j]`` pinned to ``v``.
@@ -1997,12 +2059,50 @@ class ConditionalTransformationModel:
                 offset=self._offset_train_,
                 scaling=self.scaling,
             )
+
+        # Detect the two failure modes #89 distinguishes.  Theta drift past
+        # ``_PROFILE_INNER_PIN_TOL`` from the pin means the equality
+        # ``theta[j] = v`` could not be honoured under the active
+        # monotonicity constraints — flag as "boundary".  A high KKT
+        # residual with the pin still honoured means the inner auglag
+        # simply couldn't reach its tolerance budget — flag as
+        # "convergence".  A successful run with ``converged=True`` and a
+        # moderate KKT residual passes through unmodified.
+        pin_drift = float(abs(result.theta[int(j)] - float(v)))
+        kkt = result.kkt_residual
+        if pin_drift > self._PROFILE_INNER_PIN_TOL:
+            raise _ProfileInnerFailure(
+                j=int(j),
+                kind="boundary",
+                diagnostic=(
+                    f"pinned refit returned theta[{int(j)}]="
+                    f"{float(result.theta[int(j)]):.6g} but was pinned to "
+                    f"{float(v):.6g} (drift {pin_drift:.3g} > "
+                    f"{self._PROFILE_INNER_PIN_TOL:.0e}); the equality "
+                    "conflicts with the monotonicity active set"
+                ),
+            )
+        if (
+            not result.converged
+            and kkt is not None
+            and kkt > self._PROFILE_INNER_KKT_THRESHOLD
+        ):
+            raise _ProfileInnerFailure(
+                j=int(j),
+                kind="convergence",
+                diagnostic=(
+                    f"pinned refit did not converge (kkt_residual={kkt:.3g} "
+                    f"> {self._PROFILE_INNER_KKT_THRESHOLD:.0e}); solver "
+                    f"message: {result.solver_message!r}"
+                ),
+            )
         return float(result.log_likelihood)
 
     def _confint_profile(
         self,
         level: float,
         idx: NDArray[np.intp],
+        strict: bool = True,
     ) -> NDArray[np.float64]:
         """Profile-likelihood confidence intervals for ``self.theta_[idx]``.
 
@@ -2056,8 +2156,12 @@ class ConditionalTransformationModel:
             def f(v: float, _j: int = j) -> float:
                 return 2.0 * (ll_hat - self._profile_loglik_at(_j, v)) - crit
 
-            out[row, 0] = self._profile_root(f, anchor=th, step=s, j=j, side="lower")
-            out[row, 1] = self._profile_root(f, anchor=th, step=s, j=j, side="upper")
+            out[row, 0] = self._profile_root(
+                f, anchor=th, step=s, j=j, side="lower", strict=strict
+            )
+            out[row, 1] = self._profile_root(
+                f, anchor=th, step=s, j=j, side="upper", strict=strict
+            )
         return out
 
     def _profile_root(
@@ -2068,37 +2172,90 @@ class ConditionalTransformationModel:
         step: float,
         j: int,
         side: Literal["lower", "upper"],
+        strict: bool = True,
     ) -> float:
         """Adaptive bracket then ``brentq`` for one side of one parameter.
 
-        Returns the root ``v`` such that ``f(v) ≈ 0``.  Raises
-        :class:`RuntimeError` if no sign change is observed within the
-        widest bracket multiplier.
+        Returns the root ``v`` such that ``f(v) ≈ 0``.  If no sign change
+        is observed within the widest bracket multiplier the behaviour
+        splits on ``strict``:
+
+        * ``strict=True`` (caller passed ``parm=[j]``) — raise
+          :class:`RuntimeError` with the largest ``|f|`` observed and the
+          widest bracket multiplier tried, so the caller can decide
+          whether to widen further.
+        * ``strict=False`` (caller passed ``parm=None``) — emit a
+          :class:`ConvergenceWarning` naming the parameter and return
+          ``-np.inf`` (lower side) or ``np.inf`` (upper side), so a
+          single un-bracketable parameter does not abort the whole call.
         """
         sign = -1.0 if side == "lower" else 1.0
         best_abs_f = -np.inf
         endpoint = anchor
+        widest_mult = 0.0
         for k in range(1, self._PROFILE_BRACKET_MAX_DOUBLINGS + 1):
             mult = self._PROFILE_BRACKET_INIT * (2.0 ** (k - 1))
+            widest_mult = mult
             endpoint = anchor + sign * mult * step
-            f_end = f(endpoint)
+            try:
+                f_end = f(endpoint)
+            except _ProfileInnerFailure as exc:
+                return self._handle_inner_failure(exc, side=side, strict=strict)
             if abs(f_end) > best_abs_f:
                 best_abs_f = abs(f_end)
             if f_end > 0.0:
                 break
         else:
-            raise RuntimeError(
+            msg = (
                 f"Profile-CI bracket search for parameter {j} on the "
                 f"{side} side did not change sign after "
-                f"{self._PROFILE_BRACKET_MAX_DOUBLINGS} doublings; the "
-                f"largest |f| observed was {best_abs_f:.6g}. The Wald SE "
-                f"may be too small to span the LR critical value, or "
-                f"theta_[{j}] may lie on a constraint boundary — try "
-                f"checking model.standard_errors()[{j}] and "
+                f"{self._PROFILE_BRACKET_MAX_DOUBLINGS} doublings (widest "
+                f"bracket multiplier {widest_mult:.6g}·se); the largest "
+                f"|f| observed was {best_abs_f:.6g}. The Wald SE may be "
+                f"too small to span the LR critical value, or theta_[{j}] "
+                f"may lie on a constraint boundary — try checking "
+                f"model.standard_errors()[{j}] and "
                 f"model.confint(type='wald')."
             )
+            if strict:
+                raise RuntimeError(msg)
+            warnings.warn(msg, ConvergenceWarning, stacklevel=2)
+            return -np.inf if side == "lower" else np.inf
         lo, hi = (endpoint, anchor) if side == "lower" else (anchor, endpoint)
-        return float(brentq(f, lo, hi, xtol=self._PROFILE_BRENTQ_XTOL))
+        try:
+            return float(brentq(f, lo, hi, xtol=self._PROFILE_BRENTQ_XTOL))
+        except _ProfileInnerFailure as exc:
+            return self._handle_inner_failure(exc, side=side, strict=strict)
+
+    def _handle_inner_failure(
+        self,
+        exc: _ProfileInnerFailure,
+        *,
+        side: Literal["lower", "upper"],
+        strict: bool,
+    ) -> float:
+        """Translate a :class:`_ProfileInnerFailure` into the user-facing
+        return value (or ``RuntimeError``) for the current side.
+
+        The mapping per #89:
+
+        =====================  ===========================  =====================
+        ``kind``               ``strict=False`` (parm=None)  ``strict=True``
+        =====================  ===========================  =====================
+        ``"boundary"``         warn + ``±np.inf`` (signed)   ``RuntimeError``
+        ``"convergence"``      warn + ``np.nan``             ``RuntimeError``
+        =====================  ===========================  =====================
+        """
+        msg = (
+            f"Profile-CI {exc.kind} failure for parameter {exc.j} on the "
+            f"{side} side: {exc.diagnostic}"
+        )
+        if strict:
+            raise RuntimeError(msg) from exc
+        warnings.warn(msg, ConvergenceWarning, stacklevel=3)
+        if exc.kind == "boundary":
+            return -np.inf if side == "lower" else np.inf
+        return float("nan")
 
     def confband(
         self,
