@@ -36,9 +36,10 @@ Thumbs.db
 # --- Sensible Daten ---
 .env
 
-# --- Validation (generated from CSV, not committed) ---
-# validation/references/
-# validation/results/
+# --- Validation references ---
+# R (generate_all_references.R) writes CSV + metadata.json: ground truth, committed.
+# convert_references.py regenerates the .npy cache locally; not committed.
+validation/references/**/*.npy
 # --- Sphinx docs (generated) ---
 docs/_build/
 docs/**/.ipynb_checkpoints/
