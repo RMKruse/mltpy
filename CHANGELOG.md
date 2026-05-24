@@ -63,9 +63,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`'active'` default, also `'auglag'` or `None`). When the observed-information
   Hessian is singular — which happens whenever a monotonicity constraint is
   active at the MLE (`theta[i+1] == theta[i]`) — the default now recovers a
-  usable variance via a penalty-augmented Hessian (`H + ρ·Aᵀ_active·A_active`,
-  with a `pinv` fallback) instead of raising `RuntimeError`. Pass
-  `regularize=None` to restore the old raise-on-singular diagnostic (#82).
+  usable variance via the **active-set-constrained (bordered-KKT) covariance**
+  (the top-left block of `inv([[H, Aᵀ_active], [A_active, 0]])`, with a `pinv`
+  fallback) instead of raising `RuntimeError`. This is the exact ρ→∞ limit of a
+  penalty-augmented Hessian and is independent of the optimiser's final penalty
+  `ρ`. Pass `regularize=None` to restore the old raise-on-singular diagnostic
+  (#82).
+
+### Performance
+
+- Bernstein design-matrix caching — `basis._bernstein_matrix` is now memoised on
+  the byte content of the (normalised) evaluation points and the basis degree.
+  The matrix depends only on `y` and the order, never on the coefficients `θ`,
+  yet was previously recomputed on every one of the ~hundreds–thousands of
+  likelihood/gradient evaluations per fit (≈ 75 % of fit time in profiling).
+  Caching it once per fit — the Python analogue of R `mlt` precomputing the
+  model matrix — together with the augmented-Lagrangian changes below makes
+  `fit()` roughly **10–45× faster** across the benchmark grid; large-`n` cells
+  (n=5000) are now **faster than R `mlt`** (geometric-mean 0.90× R's speed
+  overall, up from ~30–50× slower). See `benchmarks/results/benchmark_report.md`.
+- Augmented Lagrangian now stops early once converged instead of always running
+  its full outer-iteration budget (typically ~8–15 outer iterations instead of
+  the 50-iteration cap on degenerate active sets).
+
+### Fixed
+
+- Augmented-Lagrangian penalty inflation — the PHR outer loop grew the penalty
+  `ρ` toward `rho_max` (1e8) even after the constraints were already satisfied,
+  because the shrink test fires on a tiny-vs-tinier residual. The resulting
+  ill-conditioning stalled the inner L-BFGS-B solve and *degraded* an
+  already-good iterate (KKT residual climbing back from ~1e-5 to ~1e-2). `ρ` is
+  now frozen once the iterate is feasible (`feasibility ≤ feas_tol`).
+- Spurious convergence failures on degenerate active sets — on stacked
+  monotonicity boundaries the augmented-Lagrangian stationarity floors at ~1e-5,
+  above `outer_tol`, so fits reported `converged=False` (and burned all 50 outer
+  iterations) even though `θ` had stopped moving and matched the reference fit to
+  many decimals. The solver now also accepts the `alabama`-style
+  feasible-and-stalled convergence point (feasible **and** `‖Δθ‖∞` below
+  tolerance between outer iterations), via new `AugLagOptions.feas_tol` /
+  `theta_tol`, and returns the best-KKT iterate seen. Every benchmark cell now
+  converges 10/10 (previously several at 2–9/10).
 
 ## [0.3.0] — 2026-05-17
 
