@@ -7,8 +7,10 @@ import warnings
 import numpy as np
 import pytest
 
+from pymlt._auglag import AugLagOptions
 from pymlt.basis import BernsteinBasis
 from pymlt.constraints import MonotonicityConstraint
+from pymlt.likelihood import negative_log_likelihood
 from pymlt.optimizer import (
     OptimizationResult,
     OptimizerConfig,
@@ -51,6 +53,12 @@ class TestOptimizerConfig:
         assert cfg.max_restarts == 3
         assert cfg.use_gradient is True
         assert cfg.verbose is False
+
+    def test_polish_defaults_true(self):
+        assert OptimizerConfig().polish is True
+
+    def test_polish_can_be_disabled(self):
+        assert OptimizerConfig(polish=False).polish is False
 
     def test_custom(self):
         cfg = OptimizerConfig(solver="trust-constr", max_iter=500, verbose=True)
@@ -96,6 +104,40 @@ class TestOptimizationResultFields:
     def test_solver_message_is_str(self):
         result = optimize(make_basis(), simple_data())
         assert isinstance(result.solver_message, str)
+
+    def test_auglag_multiplier_fields_present(self):
+        result = optimize(make_basis(), simple_data())
+        assert hasattr(result, "rho_final")
+        assert hasattr(result, "mu_ineq")
+        assert hasattr(result, "lambda_eq")
+
+    def test_auglag_multiplier_types(self):
+        result = optimize(make_basis(), simple_data())
+        assert isinstance(result.rho_final, float)
+        assert isinstance(result.mu_ineq, np.ndarray)
+        assert isinstance(result.lambda_eq, np.ndarray)
+
+    def test_auglag_mu_ineq_shape(self):
+        order = 4
+        result = optimize(make_basis(order=order), simple_data())
+        # one inequality per adjacent-pair difference → order constraints
+        assert result.mu_ineq.shape == (order,)
+
+    def test_auglag_lambda_eq_shape(self):
+        result = optimize(make_basis(order=3), simple_data())
+        # shift model has no equality constraints
+        assert result.lambda_eq.shape == (0,)
+
+    def test_auglag_mu_ineq_nonneg(self):
+        result = optimize(make_basis(), simple_data())
+        assert np.all(result.mu_ineq >= -1e-8)
+
+    def test_slsqp_multiplier_fields_are_none(self):
+        cfg = OptimizerConfig(solver="slsqp")
+        result = optimize(make_basis(), simple_data(), config=cfg)
+        assert result.rho_final is None
+        assert result.mu_ineq is None
+        assert result.lambda_eq is None
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +386,7 @@ class TestOptimizeReproducibility:
 class TestBaseDistributionValidation:
     def test_invalid_raises_value_error(self):
         with pytest.raises(ValueError, match="base_distribution"):
-            optimize(make_basis(), simple_data(), base_distribution="cauchy")
+            optimize(make_basis(), simple_data(), base_distribution="student-t")
 
     @pytest.mark.parametrize("bad", ["Normal", "LOGISTIC", "gauss", "", "t"])
     def test_case_sensitive_aliases_rejected(self, bad):
@@ -582,3 +624,383 @@ class TestOptimizeVerboseNonConvergence:
         cfg = OptimizerConfig(solver="slsqp", max_iter=1, max_restarts=3, verbose=True)
         with pytest.warns(RuntimeWarning, match="did not converge"):
             optimize(make_basis(order=3), simple_data(n=80), config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# Newton-CG polish step
+# ---------------------------------------------------------------------------
+
+
+class TestPolishStep:
+    """Newton-CG polish step applied after auglag for interior-MLE fits."""
+
+    @pytest.fixture
+    def interior_setup(self):
+        """Logistic data clipped to (-5, 5) — all monotonicity constraints inactive."""
+        rng = np.random.default_rng(42)
+        y_raw = rng.logistic(0.0, 1.0, 300)
+        y = np.clip(y_raw, -5.0, 5.0)
+        basis = BernsteinBasis(order=6, support=(-5.0, 5.0))
+        return basis, y
+
+    # Deliberately very loose: 1 outer iter, coarse inner solver — leaves
+    # gradient ~1.3, well above the trust-ncg convergence threshold.
+    _LOOSE = AugLagOptions(
+        outer_tol=1e-1,
+        max_outer_iter=1,
+        inner_options={"maxiter": 20, "gtol": 1e-2, "ftol": 1e-3},
+    )
+
+    def test_polish_does_not_regress_nll(self, interior_setup):
+        """polish=True returns NLL at least as good as polish=False."""
+        basis, y = interior_setup
+        r_no = optimize(basis, y, config=OptimizerConfig(solver="auglag", polish=False))
+        r_yes = optimize(basis, y, config=OptimizerConfig(solver="auglag", polish=True))
+        assert r_yes.log_likelihood >= r_no.log_likelihood - 1e-10
+
+    def test_polish_tightens_gradient_on_loose_auglag(self, interior_setup):
+        """Polish tightens the gradient by orders of magnitude on a coarse auglag."""
+        basis, y = interior_setup
+        r_no = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=False
+            ),
+        )
+        r_yes = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True
+            ),
+        )
+        _, g_no = negative_log_likelihood(r_no.theta, basis, y, gradient=True)
+        _, g_yes = negative_log_likelihood(r_yes.theta, basis, y, gradient=True)
+        assert np.linalg.norm(g_yes) < np.linalg.norm(g_no) * 1e-3
+
+    def test_polish_skipped_when_disabled(self, interior_setup):
+        """With the same seed, polish=False and polish=True start at the same auglag
+        theta; polish=True then reduces the gradient strictly."""
+        basis, y = interior_setup
+        r_no = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag",
+                auglag_options=self._LOOSE,
+                polish=False,
+                random_state=0,
+            ),
+        )
+        r_yes = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True, random_state=0
+            ),
+        )
+        _, g_no = negative_log_likelihood(r_no.theta, basis, y, gradient=True)
+        _, g_yes = negative_log_likelihood(r_yes.theta, basis, y, gradient=True)
+        assert np.linalg.norm(g_yes) < np.linalg.norm(g_no)
+
+    def test_polished_theta_feasible(self, interior_setup):
+        """Polish must not push theta_b outside the monotone cone."""
+        basis, y = interior_setup
+        result = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(
+                solver="auglag", auglag_options=self._LOOSE, polish=True
+            ),
+        )
+        n_params = basis.order + 1
+        theta_b = result.theta[:n_params]
+        assert np.all(np.diff(theta_b) >= -1e-8)
+
+    def test_polish_skipped_for_slsqp(self, interior_setup):
+        """polish flag has no effect on non-auglag solvers."""
+        basis, y = interior_setup
+        r_no = optimize(basis, y, config=OptimizerConfig(solver="slsqp", polish=False))
+        r_yes = optimize(basis, y, config=OptimizerConfig(solver="slsqp", polish=True))
+        np.testing.assert_array_equal(r_no.theta, r_yes.theta)
+
+    def test_polish_skipped_when_constraints_active(self):
+        """Coxph has active monotonicity constraints — polish must be skipped."""
+        import warnings
+
+        from pymlt.tram import Coxph
+
+        rng = np.random.default_rng(0)
+        t = rng.exponential(1.0, 100)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            m_no = Coxph(
+                order=5,
+                support=(0.0, 10.0),
+                optimizer_config=OptimizerConfig(
+                    solver="auglag", polish=False, random_state=7
+                ),
+            )
+            m_no.fit(t)
+            m_yes = Coxph(
+                order=5,
+                support=(0.0, 10.0),
+                optimizer_config=OptimizerConfig(
+                    solver="auglag", polish=True, random_state=7
+                ),
+            )
+            m_yes.fit(t)
+
+        # When constraints are active the polish condition fails → same theta
+        np.testing.assert_array_equal(m_no.theta_, m_yes.theta_)
+
+
+# ---------------------------------------------------------------------------
+# fixed_params support (auglag path) — issue #85
+# ---------------------------------------------------------------------------
+
+
+class TestFixedParamsAuglag:
+    """``OptimizerConfig.fixed_params`` pins arbitrary indices of the full
+    parameter vector ``[theta_b | beta | gamma]`` at user-supplied values
+    during optimisation.  Implemented as equality rows on ``C_eq``/``d_eq``,
+    so the constraint reuses the same scaffolding as ``lower``/``upper``
+    and is honoured by the auglag solver natively.
+
+    Scope (this iteration): ``solver="auglag"`` + shift basis only.
+    SLSQP / trust-constr and ``InteractionBasis`` are rejected with
+    ``NotImplementedError``.
+    """
+
+    def test_fixed_params_pins_theta_index_to_value(self):
+        """fixed_params={i: v} + auglag → result.theta[i] == v at feasibility tol."""
+        cfg = OptimizerConfig(solver="auglag", fixed_params={1: 0.3})
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        result = optimize(basis, y, config=cfg)
+        np.testing.assert_allclose(result.theta[1], 0.3, atol=1e-8)
+
+    def test_fixed_params_off_mle_reduces_log_likelihood(self):
+        """Pinning a parameter away from the unconstrained MLE must strictly
+        reduce the log-likelihood — proves the equality is a real constraint
+        seen by the inner solver, not a stub that the optimiser ignores."""
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        free = optimize(basis, y, config=OptimizerConfig(solver="auglag"))
+        # Pin theta[1] far from its free value
+        off = float(free.theta[1]) + 2.0
+        pinned = optimize(
+            basis,
+            y,
+            config=OptimizerConfig(solver="auglag", fixed_params={1: off}),
+        )
+        np.testing.assert_allclose(pinned.theta[1], off, atol=1e-8)
+        # A genuine constraint can only lower the log-likelihood.  Allow a
+        # tiny float-round slack so an exactly-at-the-MLE pin would still pass.
+        assert pinned.log_likelihood < free.log_likelihood - 1e-6
+
+    def test_fixed_params_adds_one_c_eq_row_per_pinned_index(self):
+        """constraint_C_eq grows by exactly len(fixed_params) rows when no
+        lower/upper are set.  Each row is a unit vector at the pinned index."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={0: 0.0, 2: 0.5})
+        result = optimize(basis, y, config=cfg)
+
+        assert result.constraint_C_eq is not None
+        # Two pinned indices → two equality rows over the full theta_ (length 4)
+        assert result.constraint_C_eq.shape == (2, basis.order + 1)
+        # Each row is a unit vector at the pinned index
+        expected = np.zeros((2, basis.order + 1))
+        expected[0, 0] = 1.0
+        expected[1, 2] = 1.0
+        np.testing.assert_array_equal(result.constraint_C_eq, expected)
+
+    def test_fixed_params_stacks_with_lower_upper(self):
+        """fixed_params rows are appended after the lower/upper rows; none
+        of the existing pins are clobbered."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(
+            solver="auglag", lower=0.0, upper=1.0, fixed_params={2: 0.4}
+        )
+        result = optimize(basis, y, config=cfg)
+
+        assert result.constraint_C_eq is not None
+        # 2 boundary rows (lower=theta[0], upper=theta[-1]) + 1 fixed_params row
+        assert result.constraint_C_eq.shape == (3, basis.order + 1)
+        # All three pins are honoured at the fitted theta.  Tolerance is the
+        # auglag KKT residual budget — three stacked equalities tighten the
+        # joint feasibility a touch beyond the single-side R-parity case.
+        np.testing.assert_allclose(result.theta[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[-1], 1.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[2], 0.4, atol=1e-6)
+
+    def test_fixed_params_out_of_range_index_raises(self):
+        """Indices outside [0, total_params) must be caught before auglag."""
+        basis = make_basis(order=3)  # total_params = 4 (no covariates)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={9: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    def test_fixed_params_empty_dict_is_treated_as_no_pin(self):
+        """``{}`` is falsy in Python — the auglag C_eq-row build short-circuits
+        on it.  Sibling check for the SLSQP / trust-constr reduction path
+        lives in :class:`TestFixedParamsScipy`."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={})
+        result = optimize(basis, y, config=cfg)
+        assert result.converged
+
+    def test_fixed_params_negative_index_raises(self):
+        """Negative indices are rejected — keeps the API non-ambiguous (we
+        do not silently wrap ``-1`` to ``total_params - 1``)."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver="auglag", fixed_params={-1: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    def test_fixed_params_rejected_with_interaction_basis(self):
+        """InteractionBasis uses a vec_C(Θ) layout — pinning by index needs
+        its own design decision (column/row indexing, Kronecker padding).
+        Deferred per issue #85 scope."""
+        from pymlt.basis import BernsteinBasis, InteractionBasis, OneHotBasis
+
+        rng = np.random.default_rng(0)
+        n = 40
+        y = rng.uniform(0.05, 0.95, n)
+        X = rng.integers(0, 2, size=(n, 1)).astype(float)
+        basis = InteractionBasis(
+            BernsteinBasis(order=2, support=(0.0, 1.0)),
+            OneHotBasis(K=2),
+        )
+        cfg = OptimizerConfig(solver="auglag", fixed_params={0: 0.0})
+        with pytest.raises(NotImplementedError, match="fixed_params"):
+            optimize(basis, y, X=X, config=cfg)
+
+
+# ---------------------------------------------------------------------------
+# fixed_params support (SLSQP / trust-constr paths) — issue #86
+# ---------------------------------------------------------------------------
+
+
+class TestFixedParamsScipy:
+    """``OptimizerConfig.fixed_params`` on the SLSQP and trust-constr paths.
+
+    Both paths reduce the problem to the free subvector (eliminating pinned
+    indices entirely) rather than adding equality constraints to scipy —
+    that guarantees ``θ[j] == v`` to machine precision regardless of solver
+    tolerance, and avoids SLSQP's known weakness with mixed equality +
+    inequality systems.  Scope: shift basis only (InteractionBasis stays
+    rejected, see :class:`TestFixedParamsAuglag`).
+    """
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_pins_theta_index_to_value_exactly(self, solver):
+        """Reduction approach: the pinned entry is never optimised over, so
+        the returned ``θ[j]`` equals ``v`` to machine precision (tighter than
+        the ``1e-8`` tolerance the auglag equality-row path achieves)."""
+        cfg = OptimizerConfig(solver=solver, fixed_params={1: 0.3})
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        result = optimize(basis, y, config=cfg)
+        assert result.theta[1] == 0.3
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_free_theta_matches_auglag(self, solver):
+        """Acceptance criterion #1b: with the same pin, the free entries of
+        the SLSQP / trust-constr fit agree with the auglag fit to ``rtol=1e-4``.
+
+        This is the substantive correctness check — it proves all three
+        solvers are solving the *same* constrained problem (pinned monotone
+        likelihood maximisation) rather than three subtly-different
+        approximations of it.
+        """
+        basis = make_basis(order=3)
+        y = simple_data(n=60)
+        pin = {1: 0.3}
+
+        ref = optimize(
+            basis, y, config=OptimizerConfig(solver="auglag", fixed_params=pin)
+        )
+        got = optimize(
+            basis, y, config=OptimizerConfig(solver=solver, fixed_params=pin)
+        )
+
+        # Compare on free entries only — pinned index is trivially equal.
+        free_mask = np.ones_like(ref.theta, dtype=bool)
+        free_mask[list(pin.keys())] = False
+        np.testing.assert_allclose(
+            got.theta[free_mask], ref.theta[free_mask], rtol=1e-4
+        )
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_multiple_indices(self, solver):
+        """Two pinned indices stress the multi-column slicing of the
+        constraint matrix.  Both pins must hold exactly and the constraint
+        Jacobian must remain consistent across indices (monotonicity still
+        applies to the unpinned θ_b entries via the sliced ``A_ineq``).
+        """
+        basis = make_basis(order=4)  # 5 Bernstein coefficients
+        y = simple_data(n=60)
+        cfg = OptimizerConfig(solver=solver, fixed_params={0: 0.0, 3: 0.7})
+        result = optimize(basis, y, config=cfg)
+
+        assert result.theta[0] == 0.0
+        assert result.theta[3] == 0.7
+        # Monotonicity must still hold across the full vector — reduction must
+        # not have dropped any inequality rows.
+        assert np.all(np.diff(result.theta) >= -1e-8), (
+            f"non-monotone fit: diffs={np.diff(result.theta)}"
+        )
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_stacks_with_lower_upper(self, solver):
+        """``lower`` / ``upper`` boundary pins are equality constraints
+        emitted by :class:`~pymlt.constraints.BoundaryConstraint`.  When the
+        SLSQP / trust-constr branch reduces away ``fixed_params`` indices,
+        the boundary equality rows must be sliced through the same shift so
+        the pins continue to hold on the reduced subvector."""
+        basis = make_basis(order=3)  # 4 Bernstein coefficients
+        y = simple_data(n=60)
+        cfg = OptimizerConfig(
+            solver=solver, lower=0.0, upper=1.0, fixed_params={2: 0.4}
+        )
+        result = optimize(basis, y, config=cfg)
+
+        # All three pins honoured.  lower/upper pass through scipy's equality
+        # constraint machinery (tolerance ~ftol/gtol = config.tol = 1e-8),
+        # fixed_params is exact by construction.
+        np.testing.assert_allclose(result.theta[0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(result.theta[-1], 1.0, atol=1e-6)
+        assert result.theta[2] == 0.4
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    @pytest.mark.parametrize("bad_index", [9, -1])
+    def test_fixed_params_out_of_range_index_raises(self, solver, bad_index):
+        """Index validation runs before scipy is invoked.  Same error text
+        (``"out-of-range"``) as the auglag path so user-facing diagnostics
+        do not depend on the solver choice."""
+        basis = make_basis(order=3)  # total_params = 4 (no covariates)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver=solver, fixed_params={bad_index: 0.0})
+        with pytest.raises(ValueError, match="out-of-range"):
+            optimize(basis, y, config=cfg)
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_fixed_params_empty_dict_is_treated_as_no_pin(self, solver):
+        """``{}`` is falsy in Python — the reduction branch short-circuits
+        on it and the run reduces to a plain unconstrained-pin scipy fit.
+        Verifies no spurious validation error from
+        :func:`_fixed_params_split` (which would reject because an empty
+        keys() iterable has no out-of-range indices, but should never run)."""
+        basis = make_basis(order=3)
+        y = simple_data(n=40)
+        cfg = OptimizerConfig(solver=solver, fixed_params={})
+        result = optimize(basis, y, config=cfg)
+        assert result.converged

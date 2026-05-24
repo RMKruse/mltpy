@@ -259,6 +259,150 @@ class BernsteinBasis:
 
 
 # ---------------------------------------------------------------------------
+# Log-scale Bernstein basis (for parametric survival on positive outcomes)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LogBernsteinBasis:
+    """Bernstein polynomial basis evaluated at log(y) for log-scale survival models.
+
+    Models the transformation h(y) = B_k(log(y)) · θ, where B_k is a standard
+    Bernstein basis on (log a, log b).  This parameterises Survreg models:
+    Weibull (min_extreme_value), log-normal (normal), and log-logistic (logistic).
+
+    The derivative on the original scale follows the chain rule:
+
+        dh/dy = (1/y) · dB_k(log y)/d(log y) · θ
+
+    Parameters
+    ----------
+    order:
+        Polynomial degree k.  The basis has k+1 functions.
+    support:
+        Closed interval (a, b) with 0 < a < b on the *original* positive scale.
+        Internally maps y → t = (log y − log a) / (log b − log a).
+    """
+
+    order: int
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if self.order < 0:
+            raise ValueError(f"order must be >= 0, got {self.order}")
+        a, b = self.support
+        if not (np.isfinite(a) and np.isfinite(b)):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if a <= 0.0:
+            raise ValueError(
+                f"support lower bound must be strictly positive for "
+                f"LogBernsteinBasis, got a={a}"
+            )
+        if a >= b:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+        self._log_basis = BernsteinBasis(
+            order=self.order, support=(float(np.log(a)), float(np.log(b)))
+        )
+
+    # ------------------------------------------------------------------
+    # Core methods (duck-type BernsteinBasis)
+    # ------------------------------------------------------------------
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Evaluate B_k(log y) at each observation.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in (support[0], support[1]).
+
+        Returns
+        -------
+        NDArray of shape (n, order+1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        if y_arr.ndim != 1:
+            raise ValueError(f"y must be 1-D, got shape {y_arr.shape}")
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        return self._log_basis.evaluate(np.log(y_arr))
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Analytical derivative d/dy [B_k(log y)] = (1/y) · dB_k/d(log y).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``support``.
+        order:
+            Derivative order: 1 (default).  Order 2 is not supported.
+
+        Returns
+        -------
+        NDArray of shape (n, self.order+1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1, or any observation lies outside ``support``.
+        """
+        if order != 1:
+            raise ValueError(
+                f"LogBernsteinBasis.derivative only supports order=1, got {order}"
+            )
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        dB_log = self._log_basis.derivative(np.log(y_arr), order=1)
+        return cast(NDArray[np.float64], dB_log / y_arr[:, None])
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return B_k(log y) and d/dy B_k(log y) in one pass.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``support``.
+
+        Returns
+        -------
+        B : NDArray of shape (n, order+1)
+        dB : NDArray of shape (n, order+1) — derivative w.r.t. y (includes 1/y)
+        """
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        B, dB_log = self._log_basis.evaluate_with_derivative(np.log(y_arr))
+        return B, cast(NDArray[np.float64], dB_log / y_arr[:, None])
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Not implemented for LogBernsteinBasis."""
+        raise NotImplementedError(
+            "LogBernsteinBasis.integrate() is not implemented. "
+            "Numerical integration should be performed on the log scale."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Ordinal cutpoint basis
 # ---------------------------------------------------------------------------
 
@@ -366,8 +510,926 @@ class OrdinalBasis:
         y_arr = np.atleast_1d(np.asarray(y, dtype=float))
         return np.zeros((y_arr.size, self.K - 1), dtype=np.float64)
 
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return evaluate(y) and derivative(y, order=1) in one pass."""
+        B = self.evaluate(y)
+        dB = self.derivative(y, order=1)
+        return B, dB
+
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Not defined for the ordinal basis — raises ``NotImplementedError``."""
         raise NotImplementedError(
             "OrdinalBasis has no continuous integral; use evaluate() instead."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Polynomial (monomial) basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PolynomialBasis:
+    """Power/monomial basis [1, t, t², …, tᵏ] on a compact support.
+
+    Normalises ``y`` to ``t = (y − a) / (b − a) ∈ [0, 1]`` and returns the
+    Vandermonde matrix ``[1, t, t², …, tᵏ]``.  Unlike Bernstein polynomials
+    these basis functions are not non-negative and the coefficient vector has
+    no built-in monotonicity; constraints must be imposed externally.
+
+    Parameters
+    ----------
+    order:
+        Polynomial degree k.  The basis has k+1 functions.
+    support:
+        Closed interval (a, b) with a < b.
+    """
+
+    order: int
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if self.order < 0:
+            raise ValueError(f"order must be >= 0, got {self.order}")
+        if not (np.isfinite(self.support[0]) and np.isfinite(self.support[1])):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if self.support[0] >= self.support[1]:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Vandermonde design matrix at observations y.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, order+1) with columns [1, t, t², …, tᵏ].
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        t = _normalize_and_validate_support(y, self.support)
+        if t.size == 0:
+            return np.zeros((0, self.order + 1), dtype=np.float64)
+        i = np.arange(self.order + 1, dtype=float)
+        return cast(NDArray[np.float64], t[:, None] ** i)
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Analytical derivative of the monomial design matrix.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+        order:
+            Derivative order: 1 or 2.
+
+        Returns
+        -------
+        NDArray of shape (n, self.order+1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1 or 2.
+        """
+        if order not in (1, 2):
+            raise ValueError(f"order must be 1 or 2, got {order}")
+        a, b = self.support
+        t = _normalize_and_validate_support(y, self.support)
+        k = self.order
+        n = t.size
+        i = np.arange(k + 1, dtype=float)
+
+        if order == 1:
+            # d/dy [t^i] = i * t^(i-1) / (b-a),  with 0^(-1) ≡ 0
+            if n == 0:
+                return np.zeros((0, k + 1), dtype=np.float64)
+            exponents = np.maximum(i - 1, 0.0)
+            dB = i[None, :] * t[:, None] ** exponents[None, :]
+            dB[:, 0] = 0.0
+            return cast(NDArray[np.float64], dB / (b - a))
+        else:  # order == 2
+            # d²/dy² [t^i] = i*(i-1) * t^(i-2) / (b-a)²
+            if n == 0:
+                return np.zeros((0, k + 1), dtype=np.float64)
+            exponents = np.maximum(i - 2, 0.0)
+            dB2 = i[None, :] * (i - 1)[None, :] * t[:, None] ** exponents[None, :]
+            dB2[:, 0] = 0.0
+            if k >= 1:
+                dB2[:, 1] = 0.0
+            return cast(NDArray[np.float64], dB2 / (b - a) ** 2)
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return design matrix and first derivative in one pass.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+
+        Returns
+        -------
+        B  : NDArray of shape (n, order+1)
+        dB : NDArray of shape (n, order+1)
+        """
+        return self.evaluate(y), self.derivative(y, order=1)
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Running integral ∫_a^y tⁱ · (b−a) dt for each basis function.
+
+        Uses the closed-form antiderivative: ∫_0^t sⁱ ds = tⁱ⁺¹/(i+1),
+        scaled by (b−a) to convert dt → dy.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, order+1).
+        """
+        a, b = self.support
+        t = _normalize_and_validate_support(y, self.support)
+        if t.size == 0:
+            return np.zeros((0, self.order + 1), dtype=np.float64)
+        i = np.arange(self.order + 1, dtype=float)
+        result = t[:, None] ** (i + 1) / (i + 1) * (b - a)
+        return cast(NDArray[np.float64], result)
+
+
+# ---------------------------------------------------------------------------
+# Legendre polynomial basis
+# ---------------------------------------------------------------------------
+
+
+def _legendre_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
+    """Evaluate Legendre polynomials P_0(t), …, P_k(t) via 3-term recurrence.
+
+    (n+1) P_{n+1}(t) = (2n+1) t P_n(t) − n P_{n-1}(t)
+
+    Parameters
+    ----------
+    t:
+        Evaluation points in [−1, 1], shape (n_obs,).
+    k:
+        Maximum degree.
+
+    Returns
+    -------
+    NDArray of shape (n_obs, k+1).
+    """
+    n_obs = t.shape[0]
+    P = np.zeros((n_obs, k + 1), dtype=np.float64)
+    if k >= 0:
+        P[:, 0] = 1.0
+    if k >= 1:
+        P[:, 1] = t
+    for m in range(1, k):
+        P[:, m + 1] = ((2 * m + 1) * t * P[:, m] - m * P[:, m - 1]) / (m + 1)
+    return P
+
+
+def _legendre_derivative_matrix(
+    t: NDArray[np.float64], k: int, P: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Derivatives P_0'(t), …, P_k'(t) using the recurrence.
+
+    P_0'(t) = 0,  P_1'(t) = 1,
+    P_n'(t) = P_{n-2}'(t) + (2n−1) P_{n-1}(t)  for n ≥ 2.
+
+    Parameters
+    ----------
+    t:
+        Evaluation points, shape (n_obs,).  Unused but accepted for symmetry.
+    k:
+        Maximum degree.
+    P:
+        Legendre matrix of shape (n_obs, k+1) from :func:`_legendre_matrix`.
+
+    Returns
+    -------
+    NDArray of shape (n_obs, k+1).
+    """
+    n_obs = P.shape[0]
+    dP = np.zeros((n_obs, k + 1), dtype=np.float64)
+    if k >= 1:
+        dP[:, 1] = 1.0
+    for m in range(2, k + 1):
+        dP[:, m] = dP[:, m - 2] + (2 * m - 1) * P[:, m - 1]
+    return dP
+
+
+@dataclass
+class LegendreBasis:
+    """Legendre polynomial basis P_0, P_1, …, P_k on a compact support.
+
+    Maps ``y`` to ``t = 2 · (y − a) / (b − a) − 1 ∈ [−1, 1]`` and evaluates
+    Legendre polynomials via the 3-term recurrence.  The basis is orthogonal
+    with respect to the uniform measure on ``[a, b]``:
+
+        ∫_a^b P_m(t(y)) P_n(t(y)) dy = (b−a) / (2n+1) · δ_{mn}
+
+    Parameters
+    ----------
+    order:
+        Maximum degree k.  The basis has k+1 functions.
+    support:
+        Closed interval (a, b) with a < b.
+    """
+
+    order: int
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if self.order < 0:
+            raise ValueError(f"order must be >= 0, got {self.order}")
+        if not (np.isfinite(self.support[0]) and np.isfinite(self.support[1])):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if self.support[0] >= self.support[1]:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+
+    def _normalize_to_legendre(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Validate support and map y → t ∈ [−1, 1]."""
+        t01 = _normalize_and_validate_support(y, self.support)
+        return 2.0 * t01 - 1.0
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Legendre design matrix at observations y.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, order+1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        t = self._normalize_to_legendre(y)
+        if t.size == 0:
+            return np.zeros((0, self.order + 1), dtype=np.float64)
+        return _legendre_matrix(t, self.order)
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Analytical first derivative of the Legendre design matrix.
+
+        Uses the chain rule: d/dy P_n(t(y)) = P_n'(t) · dt/dy
+        where dt/dy = 2/(b−a).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+        order:
+            Derivative order.  Only order=1 is supported.
+
+        Returns
+        -------
+        NDArray of shape (n, self.order+1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1.
+        """
+        if order != 1:
+            raise ValueError(
+                f"LegendreBasis.derivative only supports order=1, got {order}"
+            )
+        a, b = self.support
+        t = self._normalize_to_legendre(y)
+        if t.size == 0:
+            return np.zeros((0, self.order + 1), dtype=np.float64)
+        P = _legendre_matrix(t, self.order)
+        dP_dt = _legendre_derivative_matrix(t, self.order, P)
+        return dP_dt * (2.0 / (b - a))
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return Legendre design matrix and first derivative in one pass.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+
+        Returns
+        -------
+        B  : NDArray of shape (n, order+1)
+        dB : NDArray of shape (n, order+1)
+        """
+        a, b = self.support
+        t = self._normalize_to_legendre(y)
+        if t.size == 0:
+            empty = np.zeros((0, self.order + 1), dtype=np.float64)
+            return empty, empty
+        P = _legendre_matrix(t, self.order)
+        dP_dt = _legendre_derivative_matrix(t, self.order, P)
+        return P, dP_dt * (2.0 / (b - a))
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Running integral ∫_a^y P_n(t(s)) ds for each Legendre polynomial.
+
+        Uses the closed-form antiderivative:
+
+            ∫_a^y P_0(t) ds = y − a
+            ∫_a^y P_n(t) ds = (b−a)/2 · [P_{n+1}(t) − P_{n-1}(t)] / (2n+1)
+
+        where the constant of integration is fixed by F_n(−1) = 0 for n ≥ 1.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, order+1).
+        """
+        a, b = self.support
+        t = self._normalize_to_legendre(y)
+        if t.size == 0:
+            return np.zeros((0, self.order + 1), dtype=np.float64)
+        k = self.order
+        # Need P up to degree k+1 for the antiderivative formula
+        P_ext = _legendre_matrix(t, k + 1)  # shape (n, k+2)
+        result = np.zeros((t.size, k + 1), dtype=np.float64)
+        # n=0: ∫_{-1}^{t} 1 du = t+1 = 2(y-a)/(b-a), scaled: (b-a)/2 * (t+1) = y-a
+        result[:, 0] = (b - a) / 2.0 * (t + 1.0)
+        for n in range(1, k + 1):
+            # ∫_{-1}^{t} P_n(u) du = (P_{n+1}(t) - P_{n-1}(t)) / (2n+1)
+            antideriv = (P_ext[:, n + 1] - P_ext[:, n - 1]) / (2 * n + 1)
+            result[:, n] = (b - a) / 2.0 * antideriv
+        return cast(NDArray[np.float64], result)
+
+
+# ---------------------------------------------------------------------------
+# Log basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LogBasis:
+    """Single-function log basis: evaluate(y) = log(y), shape (n, 1).
+
+    Returns a one-column design matrix whose sole basis function is ``log(y)``.
+    Useful for log-linear transformations such as the Weibull model.
+
+    The support lower bound must be strictly positive.
+
+    Parameters
+    ----------
+    support:
+        Closed interval (a, b) with 0 < a < b.
+    """
+
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        a, b = self.support
+        if not (np.isfinite(a) and np.isfinite(b)):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if a <= 0.0:
+            raise ValueError(
+                f"support lower bound must be strictly positive for LogBasis, got a={a}"
+            )
+        if a >= b:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+
+    @property
+    def order(self) -> int:
+        """One basis function → ``order = 0``."""
+        return 0
+
+    def _validate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        return _normalize_and_validate_support(y, self.support)
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Return log(y) as a column, shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, 1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        self._validate(y)
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        return cast(NDArray[np.float64], np.log(y_arr)[:, None])
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Analytical derivative: d/dy log(y) = 1/y, shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+        order:
+            Derivative order.  Only order=1 is supported.
+
+        Returns
+        -------
+        NDArray of shape (n, 1).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1.
+        """
+        if order != 1:
+            raise ValueError(f"LogBasis.derivative only supports order=1, got {order}")
+        self._validate(y)
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        return (1.0 / y_arr)[:, None]
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return log(y) and 1/y in one pass, both shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+
+        Returns
+        -------
+        B  : NDArray of shape (n, 1)  — log(y)
+        dB : NDArray of shape (n, 1)  — 1/y
+        """
+        self._validate(y)
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        return np.log(y_arr)[:, None], (1.0 / y_arr)[:, None]
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Running integral ∫_a^y log(s) ds, shape (n, 1).
+
+        Closed form: ∫_a^y log(s) ds = y·log(y) − y − a·log(a) + a.
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, 1).
+        """
+        a, _ = self.support
+        self._validate(y)
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        result = y_arr * np.log(y_arr) - y_arr - (a * np.log(a) - a)
+        return cast(NDArray[np.float64], result[:, None])
+
+
+# ---------------------------------------------------------------------------
+# Intercept basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class InterceptBasis:
+    """Constant (intercept-only) basis: evaluate(y) = ones, shape (n, 1).
+
+    The single basis function is identically 1.  This gives a single free
+    parameter — an additive intercept — in the transformation h(y) = θ₀.
+
+    Parameters
+    ----------
+    support:
+        Closed interval (a, b) with a < b.  Used for support validation only.
+    """
+
+    support: tuple[float, float]
+
+    def __post_init__(self) -> None:
+        if not (np.isfinite(self.support[0]) and np.isfinite(self.support[1])):
+            raise ValueError(f"support bounds must be finite, got {self.support}")
+        if self.support[0] >= self.support[1]:
+            raise ValueError(f"support must satisfy a < b, got {self.support}")
+
+    @property
+    def order(self) -> int:
+        """One basis function → ``order = 0``."""
+        return 0
+
+    def evaluate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Return a column of ones, shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, 1).
+
+        Raises
+        ------
+        ValueError
+            If any observation lies outside ``support``.
+        """
+        t = _normalize_and_validate_support(y, self.support)
+        return cast(NDArray[np.float64], np.ones((t.size, 1), dtype=np.float64))
+
+    def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
+        """Derivative of the constant basis: always zero, shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+        order:
+            Derivative order: 1 or 2.
+
+        Returns
+        -------
+        NDArray of shape (n, 1) of zeros.
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1 or 2.
+        """
+        if order not in (1, 2):
+            raise ValueError(f"order must be 1 or 2, got {order}")
+        t = _normalize_and_validate_support(y, self.support)
+        return np.zeros((t.size, 1), dtype=np.float64)
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return ones and zeros, both shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).
+
+        Returns
+        -------
+        B  : NDArray of shape (n, 1)  — ones
+        dB : NDArray of shape (n, 1)  — zeros
+        """
+        t = _normalize_and_validate_support(y, self.support)
+        n = t.size
+        return (
+            np.ones((n, 1), dtype=np.float64),
+            np.zeros((n, 1), dtype=np.float64),
+        )
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Running integral ∫_a^y 1 ds = y − a, shape (n, 1).
+
+        Parameters
+        ----------
+        y:
+            Observations, shape (n,).  Must lie in ``[support[0], support[1]]``.
+
+        Returns
+        -------
+        NDArray of shape (n, 1).
+        """
+        a, _ = self.support
+        _normalize_and_validate_support(y, self.support)
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        return (y_arr - a)[:, None]
+
+
+# ---------------------------------------------------------------------------
+# One-hot categorical x-basis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OneHotBasis:
+    """One-hot encoding basis for K-level categorical covariates.
+
+    Each row of the design matrix is a standard basis vector ``e_k`` of
+    length ``K`` (1 in position ``k``, 0 elsewhere), where ``k`` is the
+    integer category label for that observation.
+
+    The basis is non-negative and a partition of unity (each row sums to 1),
+    making it compatible with the closed-form column-wise monotonicity
+    constraints in :class:`InteractionBasis`.  See ADR 0001, Decision 3.
+
+    Parameters
+    ----------
+    K:
+        Number of categories.  Labels must be integers in ``{0, …, K-1}``.
+        Must satisfy ``K >= 2``.
+    """
+
+    K: int  # noqa: N815
+
+    def __post_init__(self) -> None:
+        if self.K < 2:
+            raise ValueError(f"K must be >= 2, got {self.K}")
+
+    @property
+    def order(self) -> int:
+        """``K - 1`` so that ``order + 1 == K`` (K basis functions)."""
+        return self.K - 1
+
+    def evaluate(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
+        """One-hot design matrix for integer category labels.
+
+        Parameters
+        ----------
+        x:
+            Integer category labels, shape ``(n,)``.  Each value must be an
+            integer in ``{0, …, K-1}``.
+
+        Returns
+        -------
+        NDArray of shape ``(n, K)`` with row ``i`` equal to ``e_{int(x[i])}``.
+
+        Raises
+        ------
+        ValueError
+            If any element of ``x`` is not an integer in ``{0, …, K-1}``.
+        """
+        x_arr = np.atleast_1d(np.asarray(x, dtype=float))
+        if x_arr.ndim != 1:
+            raise ValueError(f"x must be 1-D, got shape {x_arr.shape}")
+        n = x_arr.size
+        if n == 0:
+            return np.zeros((0, self.K), dtype=np.float64)
+        codes = x_arr.astype(np.intp)
+        if not np.all(codes == x_arr):
+            raise ValueError(
+                "OneHotBasis.evaluate expects integer labels; "
+                "received non-integer values."
+            )
+        if codes.min() < 0 or codes.max() >= self.K:
+            raise ValueError(
+                f"OneHotBasis labels must be in [0, {self.K - 1}], got "
+                f"min={int(codes.min())}, max={int(codes.max())}."
+            )
+        out = np.zeros((n, self.K), dtype=np.float64)
+        out[np.arange(n), codes] = 1.0
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Tensor-product interaction basis (stub — implementation in slice 2)
+# ---------------------------------------------------------------------------
+
+# Supported x-basis types for closed-form column-wise monotonicity constraints.
+# See ADR 0001, Decision 3.
+_SUPPORTED_X_BASIS_TYPES: tuple[type, ...] = (
+    BernsteinBasis,
+    OrdinalBasis,
+    InterceptBasis,
+    OneHotBasis,
+)
+
+
+@dataclass
+class InteractionBasis:
+    """Tensor-product basis a(y) ⊗ b(x) for fully-interacting CTMs.
+
+    Models the transformation
+
+        h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)
+
+    where ``a`` is the *y-basis* (response) and ``b`` is the *x-basis*
+    (covariate), and ``Θ`` is a ``(p, q)`` coefficient matrix with
+    ``p = y_basis.order + 1`` and ``q = x_basis.order + 1``.
+
+    The parameter vector ``theta_`` stores ``vec_C(Θ)`` (row-major /
+    C-order flattening) of length ``p * q``.  See ADR 0001 for the full
+    design rationale.
+
+    **Supported x-basis types (initial release):**
+    :class:`BernsteinBasis`, :class:`OrdinalBasis`, :class:`InterceptBasis`.
+    Other x-basis types raise ``ValueError`` at constraint-building time
+    because the closed-form column-wise monotonicity guarantee requires the
+    x-basis to be non-negative and a partition of unity.
+
+    Parameters
+    ----------
+    y_basis:
+        Basis for the response variable ``y``.
+    x_basis:
+        Basis for the covariate(s) ``x``.  Must be one of the supported
+        types listed above.
+
+    Notes
+    -----
+    The ``evaluate`` and ``derivative`` signatures differ from the scalar
+    basis interface: they accept both ``y`` and ``X`` because the Kronecker
+    product requires both.  The model layer owns this two-argument call
+    convention.
+
+    References
+    ----------
+    See ``docs/adr/0001-tensor-product-interaction-basis.md``.
+    """
+
+    y_basis: (
+        BernsteinBasis
+        | LogBernsteinBasis
+        | PolynomialBasis
+        | LegendreBasis
+        | LogBasis
+        | InterceptBasis
+        | OrdinalBasis
+    )
+    x_basis: BernsteinBasis | OrdinalBasis | InterceptBasis
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.x_basis, _SUPPORTED_X_BASIS_TYPES):
+            raise ValueError(
+                f"InteractionBasis requires an x-basis that is non-negative and "
+                f"a partition of unity (BernsteinBasis, OrdinalBasis, or "
+                f"InterceptBasis). Got {type(self.x_basis).__name__}. "
+                f"See docs/adr/0001-tensor-product-interaction-basis.md, "
+                f"Decision 3."
+            )
+
+    @property
+    def order(self) -> int:
+        """``y_basis.order`` — used by model layer for param-count bookkeeping."""
+        return self.y_basis.order
+
+    @property
+    def support(self) -> tuple[float, float]:
+        """Support of the y-basis."""
+        return self.y_basis.support
+
+    @property
+    def n_y_params(self) -> int:
+        """Number of y-basis functions: ``y_basis.order + 1``."""
+        return self.y_basis.order + 1
+
+    @property
+    def n_x_params(self) -> int:
+        """Number of x-basis functions: ``x_basis.order + 1``."""
+        return self.x_basis.order + 1
+
+    @property
+    def n_params(self) -> int:
+        """Total number of free parameters: ``n_y_params * n_x_params``."""
+        return self.n_y_params * self.n_x_params
+
+    def _coerce_x(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Coerce X to 1-D if it has shape (n, 1), else leave as-is."""
+        x = np.asarray(X, dtype=float)
+        if x.ndim == 2 and x.shape[1] == 1:
+            x = x[:, 0]
+        return x
+
+    def evaluate(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Row-wise Kronecker product a(y_i) ⊗ b(x_i), shape (n, p*q).
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
+
+        Returns
+        -------
+        NDArray of shape (n, p*q) where row i is ``np.kron(a(y_i), b(x_i))``.
+        The parameter layout is row-major: ``theta[i*q + j] = Θ[i, j]``.
+        """
+        x = self._coerce_x(X)
+        A = self.y_basis.evaluate(y)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = A.shape
+        q = B.shape[1]
+        # Row-wise Kronecker: (n, p, 1) * (n, 1, q) → (n, p, q) → (n, p*q)
+        return cast(
+            NDArray[np.float64],
+            (A[:, :, None] * B[:, None, :]).reshape(n, p * q),
+        )
+
+    def derivative(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+        order: int = 1,
+    ) -> NDArray[np.float64]:
+        """Row-wise Kronecker product da(y_i)/dy ⊗ b(x_i), shape (n, p*q).
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
+        order:
+            Derivative order w.r.t. y.  Only order=1 is supported.
+
+        Returns
+        -------
+        NDArray of shape (n, p*q).
+
+        Raises
+        ------
+        ValueError
+            If ``order`` is not 1.
+        """
+        if order != 1:
+            raise ValueError(
+                f"InteractionBasis.derivative only supports order=1, got {order}"
+            )
+        x = self._coerce_x(X)
+        dA = self.y_basis.derivative(y, order=1)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = dA.shape
+        q = B.shape[1]
+        return cast(
+            NDArray[np.float64],
+            (dA[:, :, None] * B[:, None, :]).reshape(n, p * q),
+        )
+
+    def evaluate_with_derivative(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Return evaluate(y, X) and derivative(y, X) in one pass.
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
+
+        Returns
+        -------
+        design  : NDArray of shape (n, p*q)
+        d_design : NDArray of shape (n, p*q)
+        """
+        x = self._coerce_x(X)
+        A, dA = self.y_basis.evaluate_with_derivative(y)  # (n, p), (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = A.shape
+        q = B.shape[1]
+        design = (A[:, :, None] * B[:, None, :]).reshape(n, p * q)
+        d_design = (dA[:, :, None] * B[:, None, :]).reshape(n, p * q)
+        return cast(NDArray[np.float64], design), cast(NDArray[np.float64], d_design)
+
+    def integrate(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Running integral of a(y) ⊗ b(x) w.r.t. y, shape (n, p*q).
+
+        Returns ``kron(∫_a^y a(s) ds, b(x_i))`` for each row i.
+
+        Parameters
+        ----------
+        y:
+            Response observations, shape (n,).
+        X:
+            Covariate labels/values for the x-basis.  Shape (n,) or (n, 1).
+
+        Returns
+        -------
+        NDArray of shape (n, p*q).
+        """
+        x = self._coerce_x(X)
+        iA = self.y_basis.integrate(y)  # (n, p)
+        B = self.x_basis.evaluate(x)  # (n, q)
+        n, p = iA.shape
+        q = B.shape[1]
+        return cast(
+            NDArray[np.float64],
+            (iA[:, :, None] * B[:, None, :]).reshape(n, p * q),
         )

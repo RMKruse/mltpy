@@ -871,3 +871,829 @@ writeLines(format(flatten_row_major(X_polr), digits = 15),
 .write_polr_link("logistic", "logistic")
 .write_polr_link("probit",   "probit")
 .write_polr_link("cloglog",  "cloglog")
+
+# ---------------------------------------------------------------------------
+# Bernstein-y × Bernstein-x interacting CTM — issue #65
+#
+# Fits mlt::ctm(response = Bernstein_basis(y),
+#               interacting = Bernstein_basis(x),
+#               todistr = <distribution>)
+# for two base distributions (Normal, Logistic) on a small but well-mixed
+# synthetic dataset.  Writes:
+#
+#   reference/interaction_bs_bs_y_train.txt   — training y, length n
+#   reference/interaction_bs_bs_x_train.txt   — training x, length n
+#   reference/interaction_bs_bs_y_support.txt — "a b" on one line
+#   reference/interaction_bs_bs_y_grid.txt    — held-out y grid, length m_y
+#   reference/interaction_bs_bs_x_grid.txt    — held-out x grid, length m_x
+#
+# Per distribution (label ∈ {"normal", "logistic"}):
+#   reference/interaction_bs_bs_<label>_theta.txt   — coef(fit) in mlt's order
+#                                                     (column-major over Θ[i,j],
+#                                                     j varies slowest, i within;
+#                                                     length p*q)
+#   reference/interaction_bs_bs_<label>_loglik.txt  — scalar logLik
+#   reference/interaction_bs_bs_<label>_cdf.txt     — fitted CDF on
+#                                                     expand.grid(y_grid, x_grid),
+#                                                     length m_y*m_x
+#   reference/interaction_bs_bs_<label>_pdf.txt     — fitted PDF on same grid
+#
+# Coefficient-order note: mlt names coefficients "Bs<i>(y):Bs<j>(x)" with the
+# y-index ``i`` varying fastest as ``j`` cycles 1..q.  In the Python test we
+# reshape ``theta_R`` as ``Θ[i, j] = theta_R.reshape(q, p).T`` and compare to
+# ``model.Theta_`` directly.
+# ---------------------------------------------------------------------------
+
+set.seed(20260517)
+n_int <- 300
+p_int <- 3L  # number of Bernstein-y functions
+q_int <- 3L  # number of Bernstein-x functions
+x_int <- runif(n_int, 0, 1)
+# Mild conditional shift, low homoscedastic noise.  Keeps the MLE strictly in
+# the interior of the monotone cone — no stacked active constraints — so
+# alabama::auglag and pymlt's PHR solver converge to the same θ to within
+# their respective KKT tolerances.
+y_int <- 0.5 + 1.0 * x_int + rnorm(n_int, sd = 0.6)
+a_int <- min(y_int) - 0.2
+b_int <- max(y_int) + 0.2
+
+m_y_int <- numeric_var("y", support = c(a_int, b_int))
+m_x_int <- numeric_var("x", support = c(0, 1))
+b_y_int <- Bernstein_basis(m_y_int, order = p_int - 1L, ui = "increasing")
+b_x_int <- Bernstein_basis(m_x_int, order = q_int - 1L)
+
+y_grid_int <- seq(a_int + 0.05 * (b_int - a_int),
+                  b_int - 0.05 * (b_int - a_int),
+                  length.out = 7L)
+x_grid_int <- c(0.10, 0.30, 0.50, 0.70, 0.90)
+grid_int   <- expand.grid(y = y_grid_int, x = x_grid_int)  # y fastest
+
+writeLines(format(y_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_y_train.txt"))
+writeLines(format(x_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_x_train.txt"))
+writeLines(paste(format(a_int, digits = 15), format(b_int, digits = 15)),
+           con = file.path(out_dir, "interaction_bs_bs_y_support.txt"))
+writeLines(format(y_grid_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_y_grid.txt"))
+writeLines(format(x_grid_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_x_grid.txt"))
+
+# Probability grid for quantile predictions on interaction fixtures (issue #67).
+probs_int <- c(0.10, 0.25, 0.50, 0.75, 0.90)
+writeLines(format(probs_int, digits = 15),
+           con = file.path(out_dir, "interaction_bs_bs_probs.txt"))
+
+.write_interaction <- function(todistr, label) {
+  ctm_int <- ctm(response = b_y_int,
+                 interacting = b_x_int,
+                 todistr = todistr)
+  fit_int <- mlt(ctm_int, data = data.frame(y = y_int, x = x_int))
+  theta_int  <- coef(fit_int)
+  ll_int     <- as.numeric(logLik(fit_int))
+  cdf_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "distribution"))
+  pdf_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "density"))
+  surv_int   <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "survivor"))
+  haz_int    <- as.numeric(predict(fit_int, newdata = grid_int,
+                                   type = "hazard"))
+  # Quantile predictions: q[k, j] = inverse h(.|x_grid_int[j]) at probs_int[k]
+  q_mat      <- predict(fit_int,
+                        newdata = data.frame(x = x_grid_int),
+                        type = "quantile",
+                        prob = probs_int)
+  q_flat     <- as.numeric(q_mat)  # column-major: x varies slowest
+  writeLines(format(theta_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_theta.txt", label)))
+  writeLines(format(ll_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_loglik.txt", label)))
+  writeLines(format(cdf_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_cdf.txt", label)))
+  writeLines(format(pdf_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_pdf.txt", label)))
+  writeLines(format(surv_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_survivor.txt", label)))
+  writeLines(format(haz_int, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_hazard.txt", label)))
+  writeLines(format(q_flat, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("interaction_bs_bs_%s_quantile.txt", label)))
+  cat(sprintf("interaction_bs_bs %-8s ref: n=%d, p=%d, q=%d, ll=%.6f\n",
+              label, n_int, p_int, q_int, ll_int))
+}
+
+.write_interaction("Normal",   "normal")
+.write_interaction("Logistic", "logistic")
+
+# ---------------------------------------------------------------------------
+# Scaling-terms tracer (issue #70) — BoxCox + normal base, scale=~x_s.
+#
+# Heteroskedastic Box-Cox:  h(y | x_d, x_s) = h_0(y) * exp(x_s * gamma) - x_d * beta_R
+# (R / tram convention: shift enters with a minus; pymlt parameterises h + x_d * beta,
+# so pymlt.coef_ == -coef(fit)["x_d"].  Gamma is sign-aligned across R and pymlt; see
+# docs/adr/0002-scaling-terms.md, Decision 5.)
+#
+# Fixtures emitted:
+#   reference/scaling_boxcox_normal_y.txt        — response  (n values)
+#   reference/scaling_boxcox_normal_x_d.txt      — shift design column (n values)
+#   reference/scaling_boxcox_normal_x_s.txt      — scaling design column (n values)
+#   reference/scaling_boxcox_normal_support.txt  — "a b" (basis support)
+#   reference/scaling_boxcox_normal_theta.txt    — [theta_b | beta_tram | gamma]
+#                                                  flat vector from coef(as.mlt(fit))
+#   reference/scaling_boxcox_normal_loglik.txt   — logLik(fit)
+# ---------------------------------------------------------------------------
+set.seed(70)
+n_sc <- 100
+x_s_sc <- rnorm(n_sc)
+x_d_sc <- rnorm(n_sc)
+y_sc <- 1.0 + 0.5 * x_d_sc + rnorm(n_sc, sd = exp(0.3 * x_s_sc))
+a_sc <- min(y_sc) - 0.1
+b_sc <- max(y_sc) + 0.1
+df_sc <- data.frame(y = y_sc, x_d = x_d_sc, x_s = x_s_sc)
+fit_sc <- tram::BoxCox(y ~ x_d | x_s, data = df_sc,
+                       support = c(a_sc, b_sc), order = 5)
+theta_full_sc <- coef(as.mlt(fit_sc))
+ll_sc <- as.numeric(logLik(fit_sc))
+
+writeLines(format(y_sc,   digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_y.txt"))
+writeLines(format(x_d_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_x_d.txt"))
+writeLines(format(x_s_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_x_s.txt"))
+writeLines(paste(format(a_sc, digits = 15),
+                 format(b_sc, digits = 15)),
+           con = file.path(out_dir, "scaling_boxcox_normal_support.txt"))
+writeLines(format(theta_full_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_theta.txt"))
+writeLines(format(ll_sc, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_normal_loglik.txt"))
+
+cat(sprintf("scaling BoxCox normal ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_sc, length(theta_full_sc), ll_sc))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms censoring + base-distribution coverage (issue #71).
+#
+# Three new fixtures exercise the scaled-baseline likelihood under each
+# remaining censoring branch:
+#
+#   * Coxph(scale=~x_s)  — RIGHT-censored, min_extreme_value base
+#   * Colr(scale=~x_s)   — exact, logistic base (the shift-only Colr ships
+#                          a separate vcov fixture; this one adds γ)
+#   * BoxCox(scale=~x_s) — INTERVAL-censored, normal base
+#
+# In each case the parameter file ``scaling_*_theta.txt`` stores the *full*
+# parameter vector ``coef(as.mlt(fit))`` flattened as
+# ``[theta_b | beta_tram | gamma]``.  pymlt parametrises ``h + X_d·β`` (R
+# ``tram`` parametrises ``h − X_d·β``), so the Python parity test flips the
+# β block before comparing.  γ is sign-aligned across the two
+# parameterisations (ADR 0002, Decision 5).
+# ---------------------------------------------------------------------------
+library(survival)
+
+# ---- scaling_coxph_right (Coxph + scale=~x_s, RIGHT-censored) ------------
+set.seed(710)
+n_cxs <- 200
+x_s_cxs <- rnorm(n_cxs)
+x_d_cxs <- rnorm(n_cxs)
+# Heteroskedastic Weibull-flavoured event times: shape varies with x_s,
+# scale shifts with x_d.  Rate-1 exponential under exp(.) link.
+t_cxs <- rexp(n_cxs, rate = exp(0.4 * x_d_cxs - 0.3 * x_s_cxs))
+cens_cxs <- rexp(n_cxs, rate = 0.3)
+y_cxs <- pmin(t_cxs, cens_cxs)
+event_cxs <- as.integer(t_cxs <= cens_cxs)
+a_cxs <- 1e-3
+b_cxs <- max(y_cxs) + 0.1
+df_cxs <- data.frame(y = y_cxs, event = event_cxs,
+                     x_d = x_d_cxs, x_s = x_s_cxs)
+fit_cxs <- tram::Coxph(Surv(y, event) ~ x_d | x_s, data = df_cxs,
+                       support = c(a_cxs, b_cxs), order = 5)
+theta_cxs <- coef(as.mlt(fit_cxs))
+ll_cxs <- as.numeric(logLik(fit_cxs))
+
+writeLines(format(y_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_y.txt"))
+writeLines(as.character(event_cxs),
+           con = file.path(out_dir, "scaling_coxph_event.txt"))
+writeLines(format(x_d_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_x_d.txt"))
+writeLines(format(x_s_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_x_s.txt"))
+writeLines(paste(format(a_cxs, digits = 15),
+                 format(b_cxs, digits = 15)),
+           con = file.path(out_dir, "scaling_coxph_support.txt"))
+writeLines(format(theta_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_theta.txt"))
+writeLines(format(ll_cxs, digits = 15),
+           con = file.path(out_dir, "scaling_coxph_loglik.txt"))
+
+cat(sprintf("scaling Coxph right-censored ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_cxs, length(theta_cxs), ll_cxs))
+
+# ---- scaling_colr (Colr + scale=~x_s, exact, logistic) -------------------
+set.seed(711)
+n_co <- 150
+x_s_co <- rnorm(n_co)
+x_d_co <- rnorm(n_co)
+y_co <- rlogis(n_co, location = 0.5 * x_d_co,
+               scale = exp(0.25 * x_s_co))
+a_co <- min(y_co) - 0.1
+b_co <- max(y_co) + 0.1
+df_co <- data.frame(y = y_co, x_d = x_d_co, x_s = x_s_co)
+fit_co <- tram::Colr(y ~ x_d | x_s, data = df_co,
+                     support = c(a_co, b_co), order = 5)
+theta_co <- coef(as.mlt(fit_co))
+ll_co <- as.numeric(logLik(fit_co))
+
+writeLines(format(y_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_y.txt"))
+writeLines(format(x_d_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_x_d.txt"))
+writeLines(format(x_s_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_x_s.txt"))
+writeLines(paste(format(a_co, digits = 15),
+                 format(b_co, digits = 15)),
+           con = file.path(out_dir, "scaling_colr_support.txt"))
+writeLines(format(theta_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_theta.txt"))
+writeLines(format(ll_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_loglik.txt"))
+
+# --- predict(..., type="logodds") on a small (k × m) grid -----------------
+# Heteroskedastic logistic regression: with `scale=~x_s`, log F/S is no
+# longer linear in x_s across the q-axis, so a grid that varies both x_d
+# (shift) and x_s (scale) at several response points exercises the
+# scaled-predict path (#72) end-to-end.  Fixture layout mirrors
+# scaling_predict_* — k response points along rows, m newdata rows along
+# columns, flattened row-major.
+x_d_new_co <- c(-1.0, 0.0, 0.5, 1.5)
+x_s_new_co <- c(-0.5, 0.0, 1.0, 2.0)
+stopifnot(length(x_d_new_co) == length(x_s_new_co))
+m_co <- length(x_d_new_co)
+span_co <- b_co - a_co
+q_grid_co <- seq(a_co + 0.1 * span_co, b_co - 0.1 * span_co, length.out = 5)
+newdata_co <- data.frame(x_d = x_d_new_co, x_s = x_s_new_co)
+logodds_co <- predict(fit_co, newdata = newdata_co,
+                      q = q_grid_co, type = "logodds")
+stopifnot(is.matrix(logodds_co) && nrow(logodds_co) == length(q_grid_co) &&
+          ncol(logodds_co) == m_co)
+writeLines(format(x_d_new_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_x_d_new.txt"))
+writeLines(format(x_s_new_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_x_s_new.txt"))
+writeLines(format(q_grid_co, digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds_q_grid.txt"))
+writeLines(format(flatten_row_major(logodds_co), digits = 15),
+           con = file.path(out_dir, "scaling_colr_logodds.txt"))
+
+cat(sprintf("scaling Colr exact ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_co, length(theta_co), ll_co))
+
+# ---- scaling_boxcox_interval (BoxCox + scale=~x_s, interval-censored) ----
+set.seed(712)
+n_iv <- 150
+x_s_iv <- rnorm(n_iv)
+x_d_iv <- rnorm(n_iv)
+y_true_iv <- 1.0 + 0.5 * x_d_iv + rnorm(n_iv, sd = exp(0.3 * x_s_iv))
+# Symmetric ±0.25 window around the latent value → interval-censored
+# rows of width 0.5 covering the truth.
+lo_iv <- y_true_iv - 0.25
+hi_iv <- y_true_iv + 0.25
+a_iv <- min(lo_iv) - 1.0
+b_iv <- max(hi_iv) + 1.0
+df_iv <- data.frame(y_lo = lo_iv, y_hi = hi_iv,
+                    x_d = x_d_iv, x_s = x_s_iv)
+fit_iv <- tram::BoxCox(Surv(y_lo, y_hi, type = "interval2") ~ x_d | x_s,
+                       data = df_iv,
+                       support = c(a_iv, b_iv), order = 5,
+                       bounds = c(a_iv, b_iv))
+theta_iv <- coef(as.mlt(fit_iv))
+ll_iv <- as.numeric(logLik(fit_iv))
+
+writeLines(format(lo_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_lo.txt"))
+writeLines(format(hi_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_hi.txt"))
+writeLines(format(x_d_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_x_d.txt"))
+writeLines(format(x_s_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_x_s.txt"))
+writeLines(paste(format(a_iv, digits = 15),
+                 format(b_iv, digits = 15)),
+           con = file.path(out_dir, "scaling_boxcox_interval_support.txt"))
+writeLines(format(theta_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_theta.txt"))
+writeLines(format(ll_iv, digits = 15),
+           con = file.path(out_dir, "scaling_boxcox_interval_loglik.txt"))
+
+cat(sprintf("scaling BoxCox interval ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_iv, length(theta_iv), ll_iv))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms predict path (issue #72) — distribution / density / hazard /
+# survivor / quantile under scaling, evaluated on a small (x_d, x_s) × (q|p)
+# grid against the BoxCox + scale=~x_s normal fit from #70.
+#
+# For each ``what`` value the saved expected matrix is shape ``(k, m)`` with
+# ``k`` y-values (or probabilities) along the rows and ``m`` newdata rows
+# along the columns, flattened row-major.  The Python test reshapes back to
+# ``(k, m)`` and asserts element-wise parity at rtol=1e-6.
+#
+# Fixtures emitted (re-using fit_sc):
+#   scaling_predict_x_d_new.txt   — m newdata shift covariates (length m)
+#   scaling_predict_x_s_new.txt   — m newdata scaling covariates (length m)
+#   scaling_predict_q_grid.txt    — k response evaluation points (length k)
+#   scaling_predict_prob_grid.txt — k_q probability targets (length k_q)
+#   scaling_predict_<what>.txt    — flatten_row_major of (k, m) matrix
+#                                   for what in {distribution, density,
+#                                   hazard, survivor, quantile (size k_q × m)}
+# ---------------------------------------------------------------------------
+x_d_new_sp <- c(-1.0, 0.0, 0.5, 1.5)
+x_s_new_sp <- c(-0.5, 0.0, 1.0, 2.0)
+stopifnot(length(x_d_new_sp) == length(x_s_new_sp))
+m_sp <- length(x_d_new_sp)
+
+# Five interior evaluation points strictly inside the basis support.
+span_sp <- b_sc - a_sc
+q_grid_sp <- seq(a_sc + 0.1 * span_sp, b_sc - 0.1 * span_sp, length.out = 5)
+prob_grid_sp <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+
+newdata_sp <- data.frame(x_d = x_d_new_sp, x_s = x_s_new_sp)
+
+.write_sp_what <- function(what_name) {
+  mat <- predict(fit_sc, newdata = newdata_sp,
+                 q = q_grid_sp, type = what_name)
+  stopifnot(is.matrix(mat) && nrow(mat) == length(q_grid_sp) &&
+            ncol(mat) == m_sp)
+  writeLines(format(flatten_row_major(mat), digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_predict_%s.txt", what_name)))
+}
+
+writeLines(format(x_d_new_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_x_d_new.txt"))
+writeLines(format(x_s_new_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_x_s_new.txt"))
+writeLines(format(q_grid_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_q_grid.txt"))
+writeLines(format(prob_grid_sp, digits = 15),
+           con = file.path(out_dir, "scaling_predict_prob_grid.txt"))
+
+for (wname in c("distribution", "density", "hazard", "survivor")) {
+  .write_sp_what(wname)
+}
+
+# Quantile fixture: rows = prob_grid_sp, cols = newdata rows.
+q_mat_sp <- predict(fit_sc, newdata = newdata_sp,
+                    prob = prob_grid_sp, type = "quantile")
+stopifnot(is.matrix(q_mat_sp) && nrow(q_mat_sp) == length(prob_grid_sp) &&
+          ncol(q_mat_sp) == m_sp)
+writeLines(format(flatten_row_major(q_mat_sp), digits = 15),
+           con = file.path(out_dir, "scaling_predict_quantile.txt"))
+
+cat(sprintf("scaling predict ref: m=%d × k=%d (k_q=%d)\n",
+            m_sp, length(q_grid_sp), length(prob_grid_sp)))
+
+# ---------------------------------------------------------------------------
+# Scaling-terms tracer for tram::Lm and tram::Survreg (issue #76).
+#
+# Both subclasses share the underlying scaled-baseline + scaled-predict
+# machinery wired up in #71/#72 — these fixtures pin per-class R parity for
+# θ_b, β, γ and the log-likelihood under the convenience surface.
+#
+# tram::Lm uses ``order = 1`` Bernstein on a normal base; ``negative = TRUE``
+# (so ``h − X_d·β``), so the pymlt β block is sign-flipped at compare time.
+# tram::Survreg fits a transformation on log-time (LogBernsteinBasis in
+# pymlt); we cover all three distributions (``weibull``, ``lognormal``,
+# ``loglogistic``) at right-censored time scales.  γ is sign-aligned with R
+# (ADR 0002, Decision 5) for both.
+#
+# Fixtures written:
+#   scaling_lm_*           — y, x_d, x_s, support, theta_full, loglik
+#   scaling_survreg_<d>_*  — y, event, x_d, x_s, support, theta_full, loglik
+#                            for d ∈ {weibull, lognormal, loglogistic}
+# ---------------------------------------------------------------------------
+
+# ---- scaling_lm (Lm + scale=~x_s, exact, normal, order=1) ----------------
+set.seed(760)
+n_lm_sc <- 200
+x_s_lm <- rnorm(n_lm_sc)
+x_d_lm <- rnorm(n_lm_sc)
+y_lm_sc <- 1.0 + 0.5 * x_d_lm + rnorm(n_lm_sc, sd = exp(0.25 * x_s_lm))
+a_lm_sc <- min(y_lm_sc) - 0.1
+b_lm_sc <- max(y_lm_sc) + 0.1
+df_lm_sc <- data.frame(y = y_lm_sc, x_d = x_d_lm, x_s = x_s_lm)
+fit_lm_sc <- tram::Lm(y ~ x_d | x_s, data = df_lm_sc,
+                      support = c(a_lm_sc, b_lm_sc))
+theta_lm_sc <- coef(as.mlt(fit_lm_sc))
+ll_lm_sc <- as.numeric(logLik(fit_lm_sc))
+
+writeLines(format(y_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_y.txt"))
+writeLines(format(x_d_lm, digits = 15),
+           con = file.path(out_dir, "scaling_lm_x_d.txt"))
+writeLines(format(x_s_lm, digits = 15),
+           con = file.path(out_dir, "scaling_lm_x_s.txt"))
+writeLines(paste(format(a_lm_sc, digits = 15),
+                 format(b_lm_sc, digits = 15)),
+           con = file.path(out_dir, "scaling_lm_support.txt"))
+writeLines(format(theta_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_theta.txt"))
+writeLines(format(ll_lm_sc, digits = 15),
+           con = file.path(out_dir, "scaling_lm_loglik.txt"))
+
+cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+            n_lm_sc, length(theta_lm_sc), ll_lm_sc))
+
+# ---- scaling_survreg_<dist> (Survreg + scale=~x_s, right-censored) -------
+# tram::Survreg uses log-time with order=6 Bernstein on the log scale and
+# the chosen parametric link (Weibull / log-normal / log-logistic).  We
+# cover all three to match the convenience surface in pymlt.tram.Survreg.
+.write_survreg_scaling <- function(dist_name, seed) {
+  set.seed(seed)
+  n <- 200
+  x_s <- rnorm(n)
+  x_d <- rnorm(n)
+  # Heteroskedastic log-time: mean shifts with x_d, sd shifts with x_s.
+  log_t <- 0.5 + 0.4 * x_d + rnorm(n, sd = exp(0.25 * x_s))
+  t_obs <- exp(log_t)
+  cens  <- rexp(n, rate = 0.25)
+  y     <- pmin(t_obs, cens)
+  event <- as.integer(t_obs <= cens)
+  a <- max(min(y) * 0.9, 1e-3)
+  b <- max(y) * 1.1
+  df <- data.frame(y = y, event = event, x_d = x_d, x_s = x_s)
+  # tram::Survreg uses a 2-parameter parametric baseline on log(t)
+  # (h(log t) = (log t − α) / σ) regardless of ``order``.  A
+  # ``LogBernsteinBasis(order=1)`` on the pymlt side is affine in
+  # log(t) and yields an equivalent two-parameter reparameterisation
+  # (matching θ exactly after the basis transformation).  We therefore
+  # request ``order = 1`` on the R side as a matching cue, knowing the
+  # baseline is two-parameter in either parameterisation.
+  fit <- tram::Survreg(Surv(y, event) ~ x_d | x_s, data = df,
+                       support = c(a, b), order = 1,
+                       dist = dist_name)
+  theta <- coef(as.mlt(fit))
+  ll <- as.numeric(logLik(fit))
+  tag <- sprintf("scaling_survreg_%s", dist_name)
+  writeLines(format(y, digits = 15),
+             con = file.path(out_dir, sprintf("%s_y.txt", tag)))
+  writeLines(as.character(event),
+             con = file.path(out_dir, sprintf("%s_event.txt", tag)))
+  writeLines(format(x_d, digits = 15),
+             con = file.path(out_dir, sprintf("%s_x_d.txt", tag)))
+  writeLines(format(x_s, digits = 15),
+             con = file.path(out_dir, sprintf("%s_x_s.txt", tag)))
+  writeLines(paste(format(a, digits = 15),
+                   format(b, digits = 15)),
+             con = file.path(out_dir, sprintf("%s_support.txt", tag)))
+  writeLines(format(theta, digits = 15),
+             con = file.path(out_dir, sprintf("%s_theta.txt", tag)))
+  writeLines(format(ll, digits = 15),
+             con = file.path(out_dir, sprintf("%s_loglik.txt", tag)))
+  cat(sprintf("scaling Survreg %s ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
+              dist_name, n, length(theta), ll))
+}
+
+.write_survreg_scaling("weibull",     761)
+.write_survreg_scaling("lognormal",   762)
+.write_survreg_scaling("loglogistic", 763)
+
+# ---------------------------------------------------------------------------
+# Scaling-terms inference (issue #77) — vcov, sandwich (HC0), and a Wald
+# test for the γ block, for BoxCox + Coxph + Colr scaled fits.
+#
+# Re-uses the fits ``fit_sc`` (BoxCox + normal, exact),
+# ``fit_cxs`` (Coxph, right-censored), ``fit_co`` (Colr + logistic, exact)
+# generated above.  For each fit the saved fixtures are the
+# ``(k × k)`` inverse-information vcov and the ``(k × k)`` HC0 sandwich,
+# both flattened row-major (k = p + q_d + q_s).  An additional one-line
+# Wald-test fixture pins the statistic and p-value for the contrast that
+# picks out γ_1 (H0: γ_1 = 0).
+#
+# Sign conventions (ADR 0002, Decision 5):
+#
+# * BoxCox uses ``negative = TRUE`` so β_R = −β_pymlt.  Both rows and
+#   columns indexed by β therefore flip sign in the vcov; the Python test
+#   applies the diagonal signing matrix ``diag([1]*p + [-1]*q_d + [1]*q_s)``
+#   before comparing.
+# * Coxph / Colr use ``negative = FALSE`` (default) — β block is sign-
+#   aligned, so no signing diagonal is required.
+# * γ is sign-aligned across all three classes.
+#
+# Files written per model in {"boxcox", "coxph", "colr"}:
+#   reference/scaling_vcov_<model>.txt          — flatten_row_major(V)
+#   reference/scaling_vcov_<model>_HC0.txt      — flatten_row_major(V_HC0)
+#   reference/scaling_vcov_<model>_dim.txt      — "p q_d q_s" (one line)
+#   reference/scaling_vcov_<model>_wald_gamma.txt
+#                                               — "W df pvalue" (one line)
+# ---------------------------------------------------------------------------
+.write_scaled_vcov <- function(fit, tag, p, q_d, q_s,
+                               y, x_d, x_s, support, event = NULL) {
+  mlt_fit <- as.mlt(fit)
+  V_info <- vcov(mlt_fit)
+  # HC0 sandwich = V_info %*% (U'U) %*% V_info, computed directly from the
+  # pieces because ``sandwich::vcovHC`` calls ``model.frame`` which fails for
+  # multi-formula scaled mlt fits.  The closed form matches HC0 exactly.
+  U      <- sandwich::estfun(mlt_fit)
+  V_HC0  <- V_info %*% (t(U) %*% U) %*% V_info
+  k <- p + q_d + q_s
+  stopifnot(nrow(V_info) == k && ncol(V_info) == k)
+  stopifnot(nrow(V_HC0)  == k && ncol(V_HC0)  == k)
+  # Wald test: pick out γ_1 (first γ column, column p + q_d + 1 in R).
+  # H0: γ_1 = 0, info vcov, df = 1.
+  theta_full <- coef(mlt_fit)
+  Rmat <- matrix(0, nrow = 1, ncol = k)
+  Rmat[1, p + q_d + 1L] <- 1.0
+  Rtheta <- as.numeric(Rmat %*% theta_full)
+  RVRt   <- as.numeric(Rmat %*% V_info %*% t(Rmat))
+  W      <- Rtheta * (1 / RVRt) * Rtheta
+  pval   <- 1 - pchisq(W, df = 1)
+  # Self-contained dataset fixtures so each parity test can rebuild the
+  # exact same fit without depending on shared upstream blocks.
+  writeLines(format(y, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_y.txt", tag)))
+  if (!is.null(event)) {
+    writeLines(as.character(event),
+               con = file.path(out_dir,
+                               sprintf("scaling_vcov_%s_event.txt", tag)))
+  }
+  writeLines(format(x_d, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_x_d.txt", tag)))
+  writeLines(format(x_s, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_x_s.txt", tag)))
+  writeLines(paste(format(support[1], digits = 15),
+                   format(support[2], digits = 15)),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_support.txt", tag)))
+  writeLines(format(theta_full, digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_theta.txt", tag)))
+  writeLines(format(flatten_row_major(V_info), digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s.txt", tag)))
+  writeLines(format(flatten_row_major(V_HC0),  digits = 15),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_HC0.txt", tag)))
+  writeLines(sprintf("%d %d %d", p, q_d, q_s),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_dim.txt", tag)))
+  writeLines(sprintf("%.15g %d %.15g", W, 1L, pval),
+             con = file.path(out_dir,
+                             sprintf("scaling_vcov_%s_wald_gamma.txt", tag)))
+  cat(sprintf("scaling %s vcov ref: k=%d, W(gamma)=%.4f, p=%.4g\n",
+              tag, k, W, pval))
+}
+
+# Dedicated BoxCox vcov fit — n=200, order=4, seed=770 gives an interior
+# MLE (no active monotonicity constraints), so the full 8×8 vcov is
+# numerically well-conditioned and matches pymlt's ``inv(H)`` element-wise.
+set.seed(770)
+n_v_bc <- 200
+x_s_v_bc <- rnorm(n_v_bc)
+x_d_v_bc <- rnorm(n_v_bc)
+y_v_bc   <- 1.0 + 0.5 * x_d_v_bc + rnorm(n_v_bc, sd = exp(0.25 * x_s_v_bc))
+a_v_bc <- min(y_v_bc) - 0.1
+b_v_bc <- max(y_v_bc) + 0.1
+df_v_bc <- data.frame(y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc)
+fit_v_bc <- tram::BoxCox(y ~ x_d | x_s, data = df_v_bc,
+                         support = c(a_v_bc, b_v_bc), order = 4)
+.write_scaled_vcov(fit_v_bc, "boxcox",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc,
+                   support = c(a_v_bc, b_v_bc))
+
+# Dedicated Colr vcov fit — n=200, order=4, seed=770 gives an interior MLE.
+set.seed(770)
+n_v_co <- 200
+x_s_v_co <- rnorm(n_v_co)
+x_d_v_co <- rnorm(n_v_co)
+y_v_co   <- rlogis(n_v_co, location = 0.5 * x_d_v_co,
+                   scale = exp(0.25 * x_s_v_co))
+a_v_co <- min(y_v_co) - 0.1
+b_v_co <- max(y_v_co) + 0.1
+df_v_co <- data.frame(y = y_v_co, x_d = x_d_v_co, x_s = x_s_v_co)
+fit_v_co <- tram::Colr(y ~ x_d | x_s, data = df_v_co,
+                       support = c(a_v_co, b_v_co), order = 4)
+.write_scaled_vcov(fit_v_co, "colr",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_co, x_d = x_d_v_co, x_s = x_s_v_co,
+                   support = c(a_v_co, b_v_co))
+
+# Coxph + scale=~x_s, right-censored.  Coxph fits are structurally
+# constraint-binding on the baseline (the tail of the baseline hazard is
+# under-determined), so the θ_b block of the vcov reflects R's
+# active-constraint penalty and does not match pymlt's bare ``inv(H)``.
+# The β / γ sub-block is the practically meaningful block for covariate
+# inference and matches at the same tolerance as BoxCox / Colr.
+set.seed(770)
+n_v_cx <- 300
+x_s_v_cx <- rnorm(n_v_cx)
+x_d_v_cx <- rnorm(n_v_cx)
+t_v_cx <- rexp(n_v_cx, rate = exp(0.5 + 0.4 * x_d_v_cx + 0.25 * x_s_v_cx))
+cens_v_cx <- rexp(n_v_cx, rate = 0.10)
+y_v_cx   <- pmin(t_v_cx, cens_v_cx)
+event_v_cx <- as.integer(t_v_cx <= cens_v_cx)
+a_v_cx <- min(y_v_cx) * 0.5
+b_v_cx <- max(y_v_cx) * 1.1
+df_v_cx <- data.frame(y = y_v_cx, event = event_v_cx,
+                      x_d = x_d_v_cx, x_s = x_s_v_cx)
+fit_v_cx <- tram::Coxph(Surv(y, event) ~ x_d | x_s, data = df_v_cx,
+                        support = c(a_v_cx, b_v_cx), order = 4)
+.write_scaled_vcov(fit_v_cx, "coxph",
+                   p = 5, q_d = 1, q_s = 1,
+                   y = y_v_cx, x_d = x_d_v_cx, x_s = x_s_v_cx,
+                   support = c(a_v_cx, b_v_cx), event = event_v_cx)
+
+# ---------------------------------------------------------------------------
+# Scaling-terms vignette (issue #78) — heteroskedastic-regression LR test.
+#
+# The vignette in ``docs/examples/05_scaling_terms.ipynb`` reuses the
+# ``scaling_boxcox_normal_*`` dataset (n=100, seed=70, BoxCox normal) and
+# fits the constant-variance baseline ``tram::BoxCox(y ~ x_d)`` against the
+# heteroskedastic ``tram::BoxCox(y ~ x_d | x_s)`` on the *same* data and
+# *same* support / basis order.  The likelihood-ratio statistic on γ is
+# what the notebook reproduces with pymlt; this fixture pins it.
+#
+# Reference is the LR test on γ from ``tram::BoxCox(..., scale=~x_s)`` vs.
+# ``tram::BoxCox(...)`` (the issue spec asks for ``tram::Lm`` parity, but
+# the vignette example uses ``BoxCox`` — the conceptual LR check matches
+# either model, and BoxCox lets the notebook reuse the existing
+# ``scaling_boxcox_normal_*`` dataset without a second fit-data file).
+#
+# Fixture: "scaling_vignette_boxcox_lr.txt" — single line "chi2 df pvalue".
+# ---------------------------------------------------------------------------
+fit_bc_null_vig <- tram::BoxCox(y ~ x_d, data = df_sc,
+                                support = c(a_sc, b_sc), order = 5)
+ll_bc_null_vig <- as.numeric(logLik(fit_bc_null_vig))
+df_bc_null_vig <- attr(logLik(fit_bc_null_vig), "df")
+df_bc_full_vig <- attr(logLik(fit_sc),            "df")
+chisq_bc_vig   <- 2 * (ll_sc - ll_bc_null_vig)
+df_lr_vig      <- df_bc_full_vig - df_bc_null_vig
+pval_lr_vig    <- pchisq(chisq_bc_vig, df = df_lr_vig, lower.tail = FALSE)
+writeLines(sprintf("%.15g %d %.15g",
+                   chisq_bc_vig, df_lr_vig, pval_lr_vig),
+           con = file.path(out_dir, "scaling_vignette_boxcox_lr.txt"))
+cat(sprintf("scaling vignette BoxCox LR: chi^2=%.4f df=%d p=%.4g\n",
+            chisq_bc_vig, df_lr_vig, pval_lr_vig))
+
+# ---------------------------------------------------------------------------
+# Profile-likelihood confidence intervals (issue #87, parent #60).
+#
+# Reuses the top-of-file no-covariate fit (`fit`, order-4 Bernstein on
+# uniform(0.02, 0.98)) — same object that backs the `confband_baseline_*`
+# fixtures.  R `mlt` does not provide a public `confint(type="profile")`
+# entry point, so we invert the χ²_1 likelihood-ratio test by hand:
+#   for each parameter j, find the two roots v ∈ ℝ of
+#       f(v) = 2·(ℓ̂ − ℓ_p(v)) − χ²_{1, 1-α},
+#   where ℓ_p(v) is the profile log-likelihood with θ_j pinned to v and
+#   the remaining parameters re-optimised under the monotonicity
+#   constraints.  Refit is via `mlt(..., fixed = c("Bs(y)5" = v))`-style
+#   parameter pinning through `update(fit, fixed = ...)` — `mlt`'s public
+#   `fixed=` argument injects equality constraints into the auglag /
+#   alabama path used internally.
+#
+# Reference layout — `profile_ci_baseline.txt`: `(p, 2)` flattened
+# row-major with columns `[lower, upper]`, matching the existing
+# `confint_<model>.txt` files.
+# ---------------------------------------------------------------------------
+
+profile_ci <- function(fit, level = 0.95) {
+  theta_hat <- coef(as.mlt(fit), with_baseline = TRUE)
+  p         <- length(theta_hat)
+  V         <- vcov(as.mlt(fit))
+  se        <- sqrt(diag(V))
+  ll_hat    <- as.numeric(logLik(fit))
+  crit      <- qchisq(level, df = 1)
+
+  # `mlt::mlt` accepts a named `fixed = c(name = value)` argument that
+  # pins one coefficient to `value` and re-runs the constrained MLE.
+  # The names come from `names(theta_hat)`.
+  param_names <- names(theta_hat)
+
+  # Profile log-lik at θ_j = v: refit with that one coordinate pinned.
+  profile_ll <- function(j, v) {
+    pin           <- setNames(v, param_names[j])
+    fit_pin       <- mlt(ctm, data = data.frame(y = y), fixed = pin)
+    as.numeric(logLik(fit_pin))
+  }
+
+  # f(v) = 2·(ll_hat − ll_p(v)) − crit.  Root-find on each side of θ̂_j.
+  f_one <- function(j, v) 2 * (ll_hat - profile_ll(j, v)) - crit
+
+  ci <- matrix(NA_real_, nrow = p, ncol = 2,
+               dimnames = list(param_names, c("lower", "upper")))
+
+  for (j in seq_len(p)) {
+    # Adaptive bracket: start at θ̂_j ± 3·se_j, double on no sign change.
+    th <- theta_hat[j]
+    s  <- se[j]
+    # Lower root: bracket [lo, th].
+    for (k in 1:24) {
+      lo <- th - (3 * 2^(k - 1)) * s
+      if (f_one(j, lo) > 0) break
+    }
+    ci[j, 1] <- uniroot(function(v) f_one(j, v),
+                        interval = c(lo, th),
+                        tol = 1e-6)$root
+    # Upper root: bracket [th, hi].
+    for (k in 1:24) {
+      hi <- th + (3 * 2^(k - 1)) * s
+      if (f_one(j, hi) > 0) break
+    }
+    ci[j, 2] <- uniroot(function(v) f_one(j, v),
+                        interval = c(th, hi),
+                        tol = 1e-6)$root
+  }
+  ci
+}
+
+profile_ci_baseline <- profile_ci(fit, level = 0.95)
+
+writeLines(format(flatten_row_major(profile_ci_baseline), digits = 15),
+           con = file.path(out_dir, "profile_ci_baseline.txt"))
+
+cat(sprintf("profile_ci_baseline: p=%d rows written\n",
+            nrow(profile_ci_baseline)))
+
+# ---------------------------------------------------------------------------
+# Profile-CI references for the three tram convenience fits (issue #88).
+#
+# Same χ²_1 LR inversion as the baseline above, but generic over any tram /
+# mlt fit object: we refit via `update(fit, fixed = pin)` instead of
+# re-creating the `mlt(ctm, data, fixed=pin)` call by hand.  This lets the
+# helper handle BoxCox (negative=TRUE — β sign-flipped vs pymlt), Colr, and
+# Coxph (right-censored) uniformly.  The Python side flips BoxCox β rows
+# before comparing — see `_apply_pymlt_sign` in tests/test_confidence.py.
+#
+# Output layout — `profile_ci_<model>.txt`: `(k, 2)` flattened row-major
+# with columns `[lower, upper]`, identical contract to the Wald fixtures
+# `confint_<model>.txt`.
+# ---------------------------------------------------------------------------
+
+.profile_ci_update <- function(fit, level = 0.95) {
+  m           <- as.mlt(fit)
+  theta_hat   <- coef(m, with_baseline = TRUE)
+  p           <- length(theta_hat)
+  V           <- vcov(m)
+  se          <- sqrt(diag(V))
+  ll_hat      <- as.numeric(logLik(fit))
+  crit        <- qchisq(level, df = 1)
+  param_names <- names(theta_hat)
+
+  profile_ll <- function(j, v) {
+    pin     <- setNames(v, param_names[j])
+    fit_pin <- suppressWarnings(update(fit, fixed = pin))
+    as.numeric(logLik(fit_pin))
+  }
+  f_one <- function(j, v) 2 * (ll_hat - profile_ll(j, v)) - crit
+
+  ci <- matrix(NA_real_, nrow = p, ncol = 2,
+               dimnames = list(param_names, c("lower", "upper")))
+
+  for (j in seq_len(p)) {
+    th <- theta_hat[j]
+    s  <- se[j]
+    # Lower root: bracket [lo, th].
+    for (k in 1:24) {
+      lo <- th - (3 * 2^(k - 1)) * s
+      if (f_one(j, lo) > 0) break
+    }
+    ci[j, 1] <- uniroot(function(v) f_one(j, v),
+                        interval = c(lo, th),
+                        tol = 1e-6)$root
+    # Upper root: bracket [th, hi].
+    for (k in 1:24) {
+      hi <- th + (3 * 2^(k - 1)) * s
+      if (f_one(j, hi) > 0) break
+    }
+    ci[j, 2] <- uniroot(function(v) f_one(j, v),
+                        interval = c(th, hi),
+                        tol = 1e-6)$root
+  }
+  ci
+}
+
+.write_profile_ci_ref <- function(fit, filename, level = 0.95) {
+  ci <- .profile_ci_update(fit, level = level)
+  writeLines(format(flatten_row_major(ci), digits = 15),
+             con = file.path(out_dir, filename))
+  cat(sprintf("%s: k=%d rows written\n", filename, nrow(ci)))
+  invisible(ci)
+}
+
+.write_profile_ci_ref(fit_bc,   "profile_ci_boxcox.txt")
+.write_profile_ci_ref(fit_colr, "profile_ci_colr.txt")
+.write_profile_ci_ref(fit_cx,   "profile_ci_coxph.txt")

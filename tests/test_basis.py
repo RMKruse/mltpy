@@ -7,7 +7,13 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pymlt.basis import BernsteinBasis
+from pymlt.basis import (
+    BernsteinBasis,
+    InterceptBasis,
+    LegendreBasis,
+    LogBasis,
+    PolynomialBasis,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -370,3 +376,441 @@ def test_reference_npy(tmp_path):
     b = BernsteinBasis(order=ref.shape[1] - 1, support=(0.0, 1.0))
     M = b.evaluate(y)
     np.testing.assert_allclose(M, ref, atol=1e-10)
+
+
+# ===========================================================================
+# PolynomialBasis
+# ===========================================================================
+
+
+class TestPolynomialBasisConstruction:
+    def test_valid(self):
+        b = PolynomialBasis(order=3, support=(0.0, 2.0))
+        assert b.order == 3
+        assert b.support == (0.0, 2.0)
+
+    def test_negative_order_raises(self):
+        with pytest.raises(ValueError, match="order"):
+            PolynomialBasis(order=-1, support=(0.0, 1.0))
+
+    def test_zero_order_ok(self):
+        b = PolynomialBasis(order=0, support=(0.0, 1.0))
+        assert b.order == 0
+
+    def test_support_reversed_raises(self):
+        with pytest.raises(ValueError, match="support"):
+            PolynomialBasis(order=3, support=(1.0, 0.0))
+
+    def test_non_finite_support_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            PolynomialBasis(order=3, support=(0.0, np.inf))
+
+
+class TestPolynomialBasisEvaluate:
+    def test_shape(self):
+        b = PolynomialBasis(order=4, support=(0.0, 1.0))
+        y = np.linspace(0, 1, 20)
+        assert b.evaluate(y).shape == (20, 5)
+
+    def test_boundary_left_is_unit_vector(self):
+        b = PolynomialBasis(order=4, support=(0.0, 2.0))
+        M = b.evaluate(np.array([0.0]))
+        expected = np.zeros(5)
+        expected[0] = 1.0  # t=0: [1, 0, 0, 0, 0]
+        np.testing.assert_allclose(M[0], expected, atol=1e-12)
+
+    def test_boundary_right_is_all_ones(self):
+        b = PolynomialBasis(order=3, support=(0.0, 2.0))
+        M = b.evaluate(np.array([2.0]))
+        np.testing.assert_allclose(M[0], [1.0, 1.0, 1.0, 1.0], atol=1e-12)
+
+    def test_midpoint(self):
+        b = PolynomialBasis(order=3, support=(0.0, 2.0))
+        M = b.evaluate(np.array([1.0]))  # t = 0.5
+        np.testing.assert_allclose(M[0], [1.0, 0.5, 0.25, 0.125], atol=1e-12)
+
+    def test_empty_input(self):
+        b = PolynomialBasis(order=2, support=(0.0, 1.0))
+        assert b.evaluate(np.array([])).shape == (0, 3)
+
+    def test_out_of_support_raises(self):
+        b = PolynomialBasis(order=2, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(np.array([1.5]))
+
+    def test_order_zero_returns_ones(self):
+        b = PolynomialBasis(order=0, support=(0.0, 1.0))
+        M = b.evaluate(np.linspace(0, 1, 10))
+        np.testing.assert_allclose(M, 1.0, atol=1e-12)
+
+
+class TestPolynomialBasisDerivative:
+    def test_shape(self):
+        b = PolynomialBasis(order=4, support=(0.0, 1.0))
+        D = b.derivative(np.linspace(0, 1, 20), order=1)
+        assert D.shape == (20, 5)
+
+    def test_first_column_zero(self):
+        b = PolynomialBasis(order=4, support=(0.0, 3.0))
+        D = b.derivative(np.linspace(0, 3, 20), order=1)
+        np.testing.assert_allclose(D[:, 0], 0.0, atol=1e-12)
+
+    def test_second_column_is_scale(self):
+        # d/dy [y/(b-a)] = 1/(b-a)
+        b = PolynomialBasis(order=2, support=(0.0, 4.0))
+        D = b.derivative(np.linspace(0, 4, 20), order=1)
+        np.testing.assert_allclose(D[:, 1], 1.0 / 4.0, atol=1e-12)
+
+    def test_derivative_vs_finite_difference(self):
+        b = PolynomialBasis(order=5, support=(0.0, 3.0))
+        y = np.linspace(0.1, 2.9, 40)
+        h = 1e-5
+        fd = (b.evaluate(y + h) - b.evaluate(y - h)) / (2 * h)
+        np.testing.assert_allclose(b.derivative(y, order=1), fd, atol=1e-5)
+
+    def test_second_derivative_vs_finite_difference(self):
+        b = PolynomialBasis(order=5, support=(0.0, 3.0))
+        y = np.linspace(0.1, 2.9, 30)
+        h = 1e-4
+        fd2 = (b.evaluate(y + h) - 2 * b.evaluate(y) + b.evaluate(y - h)) / h**2
+        np.testing.assert_allclose(b.derivative(y, order=2), fd2, atol=1e-4)
+
+    def test_invalid_order_raises(self):
+        b = PolynomialBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="order"):
+            b.derivative(np.array([0.5]), order=0)
+
+
+class TestPolynomialBasisIntegrate:
+    def test_shape(self):
+        b = PolynomialBasis(order=3, support=(0.0, 2.0))
+        assert b.integrate(np.linspace(0, 2, 10)).shape == (10, 4)
+
+    def test_zero_at_lower_bound(self):
+        b = PolynomialBasis(order=3, support=(1.0, 3.0))
+        np.testing.assert_allclose(b.integrate(np.array([1.0])), 0.0, atol=1e-12)
+
+    def test_constant_basis_integral_equals_width(self):
+        # ∫_0^b 1 dy = b
+        b = PolynomialBasis(order=0, support=(0.0, 5.0))
+        result = b.integrate(np.array([5.0]))
+        np.testing.assert_allclose(result[0, 0], 5.0, atol=1e-12)
+
+    def test_linear_basis_integral(self):
+        # ∫_0^2 (y/2) dy = [y²/4]_0^2 = 1; result is (b-a)*t²/2 = 2*(1/2)=1
+        b = PolynomialBasis(order=1, support=(0.0, 2.0))
+        result = b.integrate(np.array([2.0]))  # t=1
+        np.testing.assert_allclose(result[0], [2.0, 1.0], atol=1e-12)
+
+    def test_integrate_vs_numerical(self):
+        from scipy.integrate import quad
+
+        b = PolynomialBasis(order=4, support=(0.0, 3.0))
+        y_target = 2.0
+        B_y = b.integrate(np.array([y_target]))[0]
+        for col in range(5):
+            numerical, _ = quad(
+                lambda y: b.evaluate(np.array([y]))[0, col], 0.0, y_target
+            )
+            np.testing.assert_allclose(B_y[col], numerical, rtol=1e-6, atol=1e-10)
+
+
+# ===========================================================================
+# LegendreBasis
+# ===========================================================================
+
+
+class TestLegendreBasisConstruction:
+    def test_valid(self):
+        b = LegendreBasis(order=3, support=(-1.0, 1.0))
+        assert b.order == 3
+
+    def test_negative_order_raises(self):
+        with pytest.raises(ValueError, match="order"):
+            LegendreBasis(order=-1, support=(0.0, 1.0))
+
+    def test_support_reversed_raises(self):
+        with pytest.raises(ValueError, match="support"):
+            LegendreBasis(order=2, support=(1.0, 0.0))
+
+    def test_non_finite_support_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            LegendreBasis(order=2, support=(-np.inf, 1.0))
+
+
+class TestLegendreBasisEvaluate:
+    def test_shape(self):
+        b = LegendreBasis(order=4, support=(0.0, 2.0))
+        assert b.evaluate(np.linspace(0, 2, 15)).shape == (15, 5)
+
+    def test_p0_is_one(self):
+        b = LegendreBasis(order=0, support=(0.0, 1.0))
+        M = b.evaluate(np.linspace(0, 1, 10))
+        np.testing.assert_allclose(M[:, 0], 1.0, atol=1e-12)
+
+    def test_p1_is_linear(self):
+        # P_1(t) = t where t = 2*(y-a)/(b-a) - 1
+        b = LegendreBasis(order=1, support=(0.0, 2.0))
+        y = np.linspace(0, 2, 11)
+        t = 2 * y / 2 - 1  # t ∈ [-1, 1]
+        M = b.evaluate(y)
+        np.testing.assert_allclose(M[:, 1], t, atol=1e-12)
+
+    def test_p2_is_quadratic(self):
+        # P_2(t) = (3t² − 1)/2
+        b = LegendreBasis(order=2, support=(-1.0, 1.0))
+        y = np.linspace(-1, 1, 11)
+        t = y  # support is [-1,1] so t = y
+        M = b.evaluate(y)
+        expected = (3 * t**2 - 1) / 2
+        np.testing.assert_allclose(M[:, 2], expected, atol=1e-12)
+
+    def test_orthogonality(self):
+        """∫_{-1}^{1} P_m(t) P_n(t) dt ≈ 2/(2n+1) δ_{mn}."""
+        b = LegendreBasis(order=4, support=(-1.0, 1.0))
+        y = np.linspace(-1, 1, 2000)
+        M = b.evaluate(y)
+        dy = y[1] - y[0]
+        gram = M.T @ M * dy
+        expected = np.diag([2 / (2 * n + 1) for n in range(5)])
+        np.testing.assert_allclose(gram, expected, atol=5e-3)
+
+    def test_empty_input(self):
+        b = LegendreBasis(order=3, support=(0.0, 1.0))
+        assert b.evaluate(np.array([])).shape == (0, 4)
+
+    def test_out_of_support_raises(self):
+        b = LegendreBasis(order=2, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(np.array([1.5]))
+
+
+class TestLegendreBasisDerivative:
+    def test_shape(self):
+        b = LegendreBasis(order=3, support=(0.0, 2.0))
+        assert b.derivative(np.linspace(0, 2, 20)).shape == (20, 4)
+
+    def test_p0_derivative_is_zero(self):
+        b = LegendreBasis(order=0, support=(0.0, 1.0))
+        D = b.derivative(np.linspace(0, 1, 10))
+        np.testing.assert_allclose(D[:, 0], 0.0, atol=1e-12)
+
+    def test_p1_derivative_is_constant(self):
+        # P_1(t) = t, d/dy P_1(t) = dt/dy = 2/(b-a)
+        b = LegendreBasis(order=1, support=(0.0, 4.0))
+        D = b.derivative(np.linspace(0, 4, 20))
+        np.testing.assert_allclose(D[:, 1], 2 / 4, atol=1e-12)
+
+    def test_derivative_vs_finite_difference(self):
+        b = LegendreBasis(order=5, support=(0.0, 3.0))
+        y = np.linspace(0.1, 2.9, 40)
+        h = 1e-5
+        fd = (b.evaluate(y + h) - b.evaluate(y - h)) / (2 * h)
+        np.testing.assert_allclose(b.derivative(y, order=1), fd, atol=1e-5)
+
+    def test_invalid_order_raises(self):
+        b = LegendreBasis(order=3, support=(0.0, 1.0))
+        with pytest.raises(ValueError, match="order"):
+            b.derivative(np.array([0.5]), order=3)
+
+
+class TestLegendreBasisIntegrate:
+    def test_shape(self):
+        b = LegendreBasis(order=3, support=(0.0, 2.0))
+        assert b.integrate(np.linspace(0, 2, 10)).shape == (10, 4)
+
+    def test_zero_at_lower_bound(self):
+        b = LegendreBasis(order=3, support=(1.0, 3.0))
+        np.testing.assert_allclose(b.integrate(np.array([1.0])), 0.0, atol=1e-12)
+
+    def test_p0_integral_equals_width(self):
+        # ∫_0^b P_0 dy = b - 0 = b
+        b = LegendreBasis(order=0, support=(0.0, 3.0))
+        result = b.integrate(np.array([3.0]))
+        np.testing.assert_allclose(result[0, 0], 3.0, atol=1e-12)
+
+    def test_integrate_vs_numerical(self):
+        from scipy.integrate import quad
+
+        b = LegendreBasis(order=4, support=(0.0, 3.0))
+        y_target = 2.0
+        B_y = b.integrate(np.array([y_target]))[0]
+        for col in range(5):
+            numerical, _ = quad(
+                lambda y: b.evaluate(np.array([y]))[0, col], 0.0, y_target
+            )
+            np.testing.assert_allclose(B_y[col], numerical, rtol=1e-6, atol=1e-10)
+
+
+# ===========================================================================
+# LogBasis
+# ===========================================================================
+
+
+class TestLogBasisConstruction:
+    def test_valid(self):
+        b = LogBasis(support=(0.5, 5.0))
+        assert b.order == 0
+        assert b.support == (0.5, 5.0)
+
+    def test_non_positive_lower_bound_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            LogBasis(support=(0.0, 5.0))
+
+    def test_negative_lower_bound_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            LogBasis(support=(-1.0, 5.0))
+
+    def test_support_reversed_raises(self):
+        with pytest.raises(ValueError, match="support"):
+            LogBasis(support=(5.0, 1.0))
+
+    def test_non_finite_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            LogBasis(support=(1.0, np.inf))
+
+
+class TestLogBasisEvaluate:
+    def test_shape(self):
+        b = LogBasis(support=(0.5, 5.0))
+        assert b.evaluate(np.array([1.0, 2.0, 3.0])).shape == (3, 1)
+
+    def test_log_one_is_zero(self):
+        b = LogBasis(support=(0.5, 5.0))
+        np.testing.assert_allclose(b.evaluate(np.array([1.0])), [[0.0]], atol=1e-12)
+
+    def test_log_e_is_one(self):
+        b = LogBasis(support=(0.5, 5.0))
+        np.testing.assert_allclose(b.evaluate(np.array([np.e])), [[1.0]], atol=1e-12)
+
+    def test_empty_input(self):
+        b = LogBasis(support=(0.5, 5.0))
+        assert b.evaluate(np.array([])).shape == (0, 1)
+
+    def test_out_of_support_raises(self):
+        b = LogBasis(support=(1.0, 5.0))
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(np.array([6.0]))
+
+
+class TestLogBasisDerivative:
+    def test_shape(self):
+        b = LogBasis(support=(0.5, 5.0))
+        assert b.derivative(np.array([1.0, 2.0])).shape == (2, 1)
+
+    def test_derivative_at_one(self):
+        b = LogBasis(support=(0.5, 5.0))
+        # d/dy log(y) = 1/y; at y=1 → 1
+        np.testing.assert_allclose(b.derivative(np.array([1.0])), [[1.0]], atol=1e-12)
+
+    def test_derivative_vs_finite_difference(self):
+        b = LogBasis(support=(0.5, 5.0))
+        y = np.linspace(0.6, 4.9, 30)
+        h = 1e-6
+        fd = (b.evaluate(y + h) - b.evaluate(y - h)) / (2 * h)
+        np.testing.assert_allclose(b.derivative(y, order=1), fd, atol=1e-5)
+
+    def test_invalid_order_raises(self):
+        b = LogBasis(support=(0.5, 5.0))
+        with pytest.raises(ValueError, match="order"):
+            b.derivative(np.array([1.0]), order=2)
+
+
+class TestLogBasisIntegrate:
+    def test_shape(self):
+        b = LogBasis(support=(0.5, 5.0))
+        assert b.integrate(np.array([1.0, 2.0])).shape == (2, 1)
+
+    def test_zero_at_lower_bound(self):
+        b = LogBasis(support=(1.0, 5.0))
+        np.testing.assert_allclose(b.integrate(np.array([1.0])), [[0.0]], atol=1e-12)
+
+    def test_integrate_vs_numerical(self):
+        from scipy.integrate import quad
+
+        b = LogBasis(support=(1.0, 5.0))
+        y_target = 3.0
+        result = b.integrate(np.array([y_target]))[0, 0]
+        numerical, _ = quad(lambda y: np.log(y), 1.0, y_target)
+        np.testing.assert_allclose(result, numerical, rtol=1e-8, atol=1e-12)
+
+
+# ===========================================================================
+# InterceptBasis
+# ===========================================================================
+
+
+class TestInterceptBasisConstruction:
+    def test_valid(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        assert b.order == 0
+        assert b.support == (0.0, 5.0)
+
+    def test_support_reversed_raises(self):
+        with pytest.raises(ValueError, match="support"):
+            InterceptBasis(support=(5.0, 0.0))
+
+    def test_non_finite_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            InterceptBasis(support=(0.0, np.inf))
+
+
+class TestInterceptBasisEvaluate:
+    def test_shape(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        assert b.evaluate(np.array([1.0, 2.0, 3.0])).shape == (3, 1)
+
+    def test_all_ones(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        M = b.evaluate(np.linspace(0, 5, 20))
+        np.testing.assert_allclose(M, 1.0, atol=1e-12)
+
+    def test_empty_input(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        assert b.evaluate(np.array([])).shape == (0, 1)
+
+    def test_out_of_support_raises(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        with pytest.raises(ValueError, match="outside support"):
+            b.evaluate(np.array([6.0]))
+
+
+class TestInterceptBasisDerivative:
+    def test_all_zeros(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        D = b.derivative(np.linspace(0, 5, 20))
+        np.testing.assert_allclose(D, 0.0, atol=1e-12)
+
+    def test_shape(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        assert b.derivative(np.array([1.0, 2.0])).shape == (2, 1)
+
+    def test_invalid_order_raises(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        with pytest.raises(ValueError, match="order"):
+            b.derivative(np.array([1.0]), order=3)
+
+
+class TestInterceptBasisIntegrate:
+    def test_shape(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        assert b.integrate(np.array([1.0, 2.0])).shape == (2, 1)
+
+    def test_zero_at_lower_bound(self):
+        b = InterceptBasis(support=(0.0, 5.0))
+        np.testing.assert_allclose(b.integrate(np.array([0.0])), [[0.0]], atol=1e-12)
+
+    def test_integral_equals_y_minus_a(self):
+        b = InterceptBasis(support=(1.0, 5.0))
+        y = np.array([1.5, 2.0, 3.0, 5.0])
+        result = b.integrate(y)
+        np.testing.assert_allclose(result[:, 0], y - 1.0, atol=1e-12)
+
+    def test_integrate_vs_numerical(self):
+        from scipy.integrate import quad
+
+        b = InterceptBasis(support=(0.0, 5.0))
+        y_target = 3.0
+        result = b.integrate(np.array([y_target]))[0, 0]
+        numerical, _ = quad(lambda _: 1.0, 0.0, y_target)
+        np.testing.assert_allclose(result, numerical, rtol=1e-8)

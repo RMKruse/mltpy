@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint
+
+if TYPE_CHECKING:
+    from pymlt.basis import InteractionBasis
 
 # ---------------------------------------------------------------------------
 # Monotonicity constraint
@@ -217,6 +220,63 @@ class ConstraintMatrices:
     b_ineq: NDArray[np.float64]
     C_eq: NDArray[np.float64]
     d_eq: NDArray[np.float64]
+
+
+def build_constraint_matrices_interaction(
+    basis: "InteractionBasis",
+) -> ConstraintMatrices:
+    """Build constraint matrices for an :class:`~pymlt.basis.InteractionBasis`.
+
+    Constructs the Kronecker inequality ``(D ⊗ I_q) @ vec(Θ) ≥ 0`` that
+    enforces column-wise monotonicity: ``D @ Θ[:, j] ≥ 0`` for every
+    column ``j = 0, …, q-1``.
+
+    Parameters
+    ----------
+    basis:
+        The :class:`~pymlt.basis.InteractionBasis` to build constraints for.
+
+    Returns
+    -------
+    ConstraintMatrices
+        ``A_ineq`` has shape ``((p-1)*q, p*q)``.  ``b_ineq`` is all-zeros.
+        ``C_eq`` is a zero-row matrix (no equality constraints).  ``d_eq``
+        is a zero-length array.
+
+    Raises
+    ------
+    ValueError
+        If the x-basis type is not supported for closed-form constraints.
+        (This is already checked at :class:`~pymlt.basis.InteractionBasis`
+        construction time, so this branch is a safety net.)
+    """
+    from pymlt.basis import _SUPPORTED_X_BASIS_TYPES
+
+    if not isinstance(basis.x_basis, _SUPPORTED_X_BASIS_TYPES):
+        raise ValueError(
+            f"InteractionBasis requires an x-basis that is non-negative and "
+            f"a partition of unity (BernsteinBasis, OrdinalBasis, "
+            f"InterceptBasis, or OneHotBasis). Got "
+            f"{type(basis.x_basis).__name__}. "
+            f"See docs/adr/0001-tensor-product-interaction-basis.md, Decision 3."
+        )
+    p = basis.n_y_params
+    q = basis.n_x_params
+    total = p * q
+
+    if p >= 2:
+        D = np.diff(np.eye(p), axis=0)  # (p-1, p)
+        A_ineq = np.kron(D, np.eye(q)).astype(np.float64)  # ((p-1)*q, p*q)
+    else:
+        A_ineq = np.zeros((0, total), dtype=np.float64)
+
+    m_ineq = A_ineq.shape[0]
+    return ConstraintMatrices(
+        A_ineq=A_ineq,
+        b_ineq=np.zeros(m_ineq, dtype=np.float64),
+        C_eq=np.zeros((0, total), dtype=np.float64),
+        d_eq=np.zeros(0, dtype=np.float64),
+    )
 
 
 def build_constraint_matrices(

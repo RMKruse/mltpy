@@ -1,7 +1,15 @@
 """pymlt — Conditional Transformation Models in Python."""
 
 from pymlt._auglag import AugLagOptions, AugLagResult
-from pymlt.basis import OrdinalBasis
+from pymlt.basis import (
+    InteractionBasis,
+    InterceptBasis,
+    LegendreBasis,
+    LogBasis,
+    OneHotBasis,
+    OrdinalBasis,
+    PolynomialBasis,
+)
 from pymlt.likelihood import (
     InfeasibleParameterError,
     hessian,
@@ -15,10 +23,11 @@ from pymlt.model import (
     ConditionalTransformationModel,
     ConvergenceWarning,
     NotFittedError,
+    WaldTestResult,
     anova,
 )
 from pymlt.optimizer import OptimizerConfig
-from pymlt.tram import BoxCox, Colr, Coxph, Lm, Polr
+from pymlt.tram import BoxCox, Colr, Coxph, Lehmann, Lm, Polr, Survreg
 from pymlt.variables import CensoredData, CensoringType, OrderedVariable
 
 __version__ = "0.3.0"
@@ -30,12 +39,15 @@ __all__ = [
     # Tram convenience models
     "BoxCox",
     "Coxph",
+    "Lehmann",
     "Colr",
     "Lm",
     "Polr",
+    "Survreg",
     # Inference
     "anova",
     "AnovaResult",
+    "WaldTestResult",
     # Likelihood primitives
     "log_likelihood",
     "negative_log_likelihood",
@@ -50,6 +62,12 @@ __all__ = [
     "CensoringType",
     "OrderedVariable",
     "OrdinalBasis",
+    "OneHotBasis",
+    "PolynomialBasis",
+    "LegendreBasis",
+    "LogBasis",
+    "InterceptBasis",
+    "InteractionBasis",
     # Config
     "OptimizerConfig",
     "AugLagOptions",
