@@ -32,6 +32,27 @@ from scipy.special import betainc, comb
 _BERNSTEIN_CACHE_MAXSIZE = 64
 _bernstein_cache: OrderedDict[tuple[int, bytes], NDArray[np.float64]] = OrderedDict()
 
+# Content-keyed cache for the *assembled* Bernstein result ``(B, dB)``.  The
+# inner :data:`_bernstein_cache` above memoises the raw power op, but the
+# optimiser's hot path (:meth:`BernsteinBasis.evaluate_with_derivative`, called
+# ~130×/fit at a fixed ``y``) still re-runs the support scan in
+# ``_normalize_and_validate_support`` and rebuilds ``dB`` via ``np.pad`` +
+# subtract on *every* call — even though both ``B`` and ``dB`` depend only on
+# ``y`` and the basis, never on the coefficients ``θ``.  Caching the assembled
+# pair collapses normalise + B + dB into a single dict lookup on a hit.
+#
+# The key is ``(order, support, y.tobytes())`` — full content, collision-free.
+# Content keying (not ``id``) is required because the censored paths slice
+# ``cd.exact[mask]`` into fresh arrays each call with stable *content*.  Both
+# stored matrices are read-only so an accidental in-place write fails loudly.
+# ``maxsize`` is smaller than the inner cache because each entry holds two
+# matrices (≈ 2× ``B``); realistic fits touch only a handful of distinct ``y``.
+_BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE = 32
+_bernstein_assembled_cache: OrderedDict[
+    tuple[int, tuple[float, float], bytes],
+    tuple[NDArray[np.float64], NDArray[np.float64]],
+] = OrderedDict()
+
 
 def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
     """Evaluate the (n, k+1) Bernstein basis matrix at normalised t ∈ [0, 1].
@@ -150,14 +171,22 @@ class BernsteinBasis:
         Returns
         -------
         NDArray of shape (n, order+1).  Row i is [B_{0,k}(y_i), …, B_{k,k}(y_i)].
+        Read-only (do not mutate in place).
 
         Raises
         ------
         ValueError
             If any observation lies outside ``support``.
+
+        Notes
+        -----
+        Shares the assembled ``(B, dB)`` cache with
+        :meth:`evaluate_with_derivative` (see :data:`_bernstein_assembled_cache`):
+        the returned ``B`` is memoised on ``y`` content, and this call warms the
+        paired ``dB`` so a later derivative evaluation is a single dict lookup.
         """
-        t = _normalize_and_validate_support(y, self.support)
-        return _bernstein_matrix(t, self.order)
+        B, _ = self.evaluate_with_derivative(y)
+        return B
 
     def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
         """Analytical derivative of the Bernstein design matrix.
@@ -241,21 +270,51 @@ class BernsteinBasis:
         Returns
         -------
         B : NDArray of shape (n, order+1)
-            Same as ``evaluate(y)``.
+            Same as ``evaluate(y)``.  Read-only (do not mutate in place).
         dB : NDArray of shape (n, order+1)
-            Same as ``derivative(y, order=1)``.
+            Same as ``derivative(y, order=1)``.  Read-only.
+
+        Notes
+        -----
+        The assembled ``(B, dB)`` pair is memoised on ``(order, support,
+        y.tobytes())`` (see :data:`_bernstein_assembled_cache`); a repeated call
+        with the same ``y`` content is a single dict lookup that skips the
+        support scan and the ``dB`` rebuild entirely.
         """
+        key = (
+            self.order,
+            self.support,
+            np.ascontiguousarray(y, dtype=float).tobytes(),
+        )
+        cached = _bernstein_assembled_cache.get(key)
+        if cached is not None:
+            # Refresh LRU recency, guarding the (non-atomic) get-then-move
+            # against a concurrent eviction by another thread (see
+            # :func:`_bernstein_matrix`).
+            try:
+                _bernstein_assembled_cache.move_to_end(key)
+            except KeyError:
+                pass
+            return cached
+
         k = self.order
         a, b = self.support
         t = _normalize_and_validate_support(y, self.support)
         n = len(t)
         B = _bernstein_matrix(t, k)
         if k == 0:
-            return B, np.zeros((n, 1))
-        B_low = _bernstein_matrix(t, k - 1)
-        B_pad = np.pad(B_low, ((0, 0), (1, 1)))
-        dB = k * (B_pad[:, :-1] - B_pad[:, 1:]) / (b - a)
-        return B, dB
+            dB = np.zeros((n, 1))
+        else:
+            B_low = _bernstein_matrix(t, k - 1)
+            B_pad = np.pad(B_low, ((0, 0), (1, 1)))
+            dB = k * (B_pad[:, :-1] - B_pad[:, 1:]) / (b - a)
+        # B is already read-only (from _bernstein_matrix); dB is freshly built.
+        dB.flags.writeable = False
+        result = (B, dB)
+        _bernstein_assembled_cache[key] = result
+        if len(_bernstein_assembled_cache) > _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE:
+            _bernstein_assembled_cache.popitem(last=False)
+        return result
 
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Running integral of each basis function from a to y.

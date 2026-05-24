@@ -840,6 +840,19 @@ class TestVcovAuglag:
             support=(float(self.y.min() - 0.1), float(self.y.max() + 0.1)),
         ).fit(self.y, X=self.X)
 
+        # A second fit that lands at an *interior* MLE (no monotonicity
+        # constraint active).  The seed-0 fixture above always binds one
+        # increment, so it can only exercise the active-set branch; this one
+        # exercises the empty-active-set branch, where 'auglag' must collapse
+        # to bare inv(H).  (seed 1 / order 5 → 0 of 5 constraints active.)
+        rng_i = np.random.default_rng(1)
+        Xi = rng_i.normal(0, 1, (200, 2))
+        yi = 0.5 * Xi[:, 0] - 0.3 * Xi[:, 1] + rng_i.normal(0, 1, 200)
+        self.m_interior = MLT(
+            order=5,
+            support=(float(yi.min() - 0.1), float(yi.max() + 0.1)),
+        ).fit(yi, X=Xi)
+
     def test_vcov_auglag_callable(self):
         """``vcov(regularize='auglag')`` returns a finite symmetric matrix."""
         V = self.m.vcov(regularize="auglag")
@@ -896,18 +909,22 @@ class TestVcovAuglag:
             np.testing.assert_allclose(v_auglag, v_active, rtol=1e-12, atol=0)
 
     def test_vcov_auglag_matches_bare_when_no_constraint_binds(self):
-        """Without active constraints, ``vcov('auglag') == vcov(None)``.
+        """With an empty active set, ``vcov('auglag') == vcov(None)``.
 
-        Penalty is zero when no row of ``A_ineq`` is active, so the
-        augmented Hessian equals ``H`` and the inverse is bare.  Skipped if
-        the fixture happens to land at an interior MLE (otherwise we'd be
-        testing a vacuous branch).
+        ``'auglag'`` augments unconditionally using the *active* constraint
+        set; when no row of ``A_ineq`` binds the penalty is zero, so the
+        augmented Hessian equals ``H`` and the inverse is bare.  This pins
+        that the augmentation collapses to a no-op on an interior MLE — a
+        regression that augmented spuriously (or mis-detected the active set)
+        would be caught here.  Uses ``self.m_interior`` because the seed-0
+        ``self.m`` always binds a constraint.
         """
-        mu = self.m.result_.mu_ineq if self.m.result_ is not None else None
-        if mu is None or (mu > self.m._ACTIVE_CONSTRAINT_TOL).any():
-            pytest.skip("fixture has active constraints; covered by divergence test")
-        v_auglag = self.m.vcov(regularize="auglag")
-        v_none = self.m.vcov(regularize=None)
+        m = self.m_interior
+        assert m.result_ is not None and m.result_.mu_ineq is not None
+        # Guard the premise: this fixture must genuinely have no active row.
+        assert not (m.result_.mu_ineq > m._ACTIVE_CONSTRAINT_TOL).any()
+        v_auglag = m.vcov(regularize="auglag")
+        v_none = m.vcov(regularize=None)
         np.testing.assert_allclose(v_auglag, v_none, rtol=1e-12, atol=0)
 
     def test_vcov_invalid_regularize_message_lists_auglag(self):

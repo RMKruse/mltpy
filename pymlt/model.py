@@ -752,27 +752,24 @@ class ConditionalTransformationModel:
                 )
             h_c = np.clip(h, -_H_CLIP, _H_CLIP)
             if what == "distribution":
-                return cast(NDArray[np.float64], dist.cdf(h_c))
+                return dist.cdf(h_c)
             if what == "logdistribution":
                 return cast(NDArray[np.float64], _logcdf(h_c))
             if what == "survivor":
                 return cast(NDArray[np.float64], dist.sf(h_c))
             if what == "logsurvivor":
-                return cast(NDArray[np.float64], dist.logsf(h_c))
+                return dist.logsf(h_c)
             if what == "density":
-                return cast(NDArray[np.float64], dist.pdf(h_c) * hp)
+                return dist.pdf(h_c) * hp
             if what == "logdensity":
                 with np.errstate(divide="ignore"):
-                    return cast(NDArray[np.float64], dist.logpdf(h_c) + np.log(hp))
+                    return dist.logpdf(h_c) + np.log(hp)
             if what == "hazard":
                 return cast(NDArray[np.float64], dist.pdf(h_c) * hp / dist.sf(h_c))
             if what == "loghazard":
-                return cast(
-                    NDArray[np.float64],
-                    dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c),
-                )
+                return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
             if what == "cumhazard":
-                return cast(NDArray[np.float64], -dist.logsf(h_c))
+                return -dist.logsf(h_c)
             if what == "logcumhazard":
                 return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
             if what == "odds":
@@ -883,29 +880,26 @@ class ConditionalTransformationModel:
         h_c = np.clip(h, -_H_CLIP, _H_CLIP)
 
         if what == "distribution":
-            return cast(NDArray[np.float64], dist.cdf(h_c))
+            return dist.cdf(h_c)
         if what == "logdistribution":
             return cast(NDArray[np.float64], _logcdf(h_c))
         if what == "survivor":
             return cast(NDArray[np.float64], dist.sf(h_c))
         if what == "logsurvivor":
-            return cast(NDArray[np.float64], dist.logsf(h_c))
+            return dist.logsf(h_c)
         if what == "density":
-            return cast(NDArray[np.float64], dist.pdf(h_c) * hp)
+            return dist.pdf(h_c) * hp
         if what == "logdensity":
-            return cast(NDArray[np.float64], dist.logpdf(h_c) + np.log(hp))
+            return dist.logpdf(h_c) + np.log(hp)
         if what == "hazard":
             return cast(
                 NDArray[np.float64],
                 np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
             )
         if what == "loghazard":
-            return cast(
-                NDArray[np.float64],
-                dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c),
-            )
+            return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
         if what == "cumhazard":
-            return cast(NDArray[np.float64], -dist.logsf(h_c))
+            return -dist.logsf(h_c)
         if what == "logcumhazard":
             return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
         if what == "odds":
@@ -985,7 +979,7 @@ class ConditionalTransformationModel:
             saturated = False
 
             for i, p in enumerate(probs_arr):
-                cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+                cdf_grid = dist.cdf(h_base_grid + shift[i])
                 # For survival-time responses, R's grid starts at 0 and the
                 # CDF at time zero is treated as zero.
                 cdf_grid[0] = 0.0
@@ -1650,7 +1644,7 @@ class ConditionalTransformationModel:
         r = -dist.logsf(h_c)
 
         if type == "cox-snell":
-            return cast(NDArray[np.float64], r)
+            return r
 
         # deviance
         r_safe = np.clip(r, np.finfo(float).tiny, None)

@@ -1414,7 +1414,7 @@ class Survreg(_TramModel):
         saturated = False
 
         for i, p in enumerate(probs_arr):
-            cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+            cdf_grid = dist.cdf(h_base_grid + shift[i])
 
             finite = np.isfinite(cdf_grid)
             if not np.any(finite):
