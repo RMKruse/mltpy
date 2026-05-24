@@ -806,3 +806,86 @@ class TestCoxphPredictQuantileReference:
         # We mirror that workflow; small residuals remain due spline backend
         # differences between R's hyman spline and SciPy's cubic implementation.
         np.testing.assert_allclose(got, expected, rtol=1e-3, atol=7e-4)
+
+
+# ---------------------------------------------------------------------------
+# Coxph(interacting=...) — non-proportional Cox via tensor-product basis (#66)
+# ---------------------------------------------------------------------------
+
+
+class TestCoxphInteracting:
+    """``Coxph(interacting=BernsteinBasis(...))`` wires the tensor-product path."""
+
+    @staticmethod
+    def _exact_data(n: int = 80, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(0.0, 1.0, n)
+        y = rng.uniform(0.05, 0.95, n)
+        return y, x
+
+    def test_matches_mlt_with_interaction_basis(self):
+        """Coxph(interacting=...) reproduces MLT(InteractionBasis(...))."""
+        from pymlt import (
+            ConditionalTransformationModel,
+            InteractionBasis,
+            OptimizerConfig,
+        )
+        from pymlt.basis import BernsteinBasis
+
+        y, x = self._exact_data()
+        y_basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
+        ib = InteractionBasis(y_basis=y_basis, x_basis=x_basis)
+
+        ref = ConditionalTransformationModel(
+            basis=ib,
+            censoring=CensoringType.RIGHT,
+            optimizer_config=OptimizerConfig(random_state=0),
+            base_distribution="min_extreme_value",
+        )
+        ref.fit(y, X=x)
+
+        model = Coxph(
+            support=(0.0, 1.0),
+            order=3,
+            optimizer_config=OptimizerConfig(random_state=0),
+            interacting=x_basis,
+        ).fit(y, X=x)
+
+        assert model.theta_ is not None
+        np.testing.assert_allclose(model.theta_, ref.theta_, rtol=1e-6, atol=1e-8)
+
+    def test_survival_and_hazard_monotone_on_grid(self):
+        """survival(y) is monotone non-increasing and hazard(y) is non-negative."""
+        from pymlt import OptimizerConfig
+        from pymlt.basis import BernsteinBasis
+
+        y, x = self._exact_data(seed=1)
+        x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
+        model = Coxph(
+            support=(0.0, 1.0),
+            order=3,
+            optimizer_config=OptimizerConfig(random_state=0),
+            interacting=x_basis,
+        ).fit(y, X=x)
+
+        y_grid = np.linspace(0.05, 0.95, 30)
+        x_grid = np.full_like(y_grid, 0.5)
+        s = model.survival(y_grid, X=x_grid)
+        h = model.hazard(y_grid, X=x_grid)
+        assert s.shape == (30,)
+        assert np.all(s >= 0.0) and np.all(s <= 1.0)
+        assert np.all(np.diff(s) <= 1e-6), (
+            f"survival not monotone: max diff={np.diff(s).max():.2e}"
+        )
+        assert np.all(h >= 0.0)
+
+    def test_stores_interaction_basis_on_self(self):
+        """The model's basis attribute is the constructed InteractionBasis."""
+        from pymlt import InteractionBasis
+        from pymlt.basis import BernsteinBasis
+
+        x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
+        model = Coxph(support=(0.0, 1.0), order=3, interacting=x_basis)
+        assert isinstance(model.basis, InteractionBasis)
+        assert model.basis.x_basis is x_basis

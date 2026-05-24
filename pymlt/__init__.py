@@ -1,7 +1,15 @@
 """pymlt — Conditional Transformation Models in Python."""
 
 from pymlt._auglag import AugLagOptions, AugLagResult
-from pymlt.basis import OrdinalBasis
+from pymlt.basis import (
+    InteractionBasis,
+    InterceptBasis,
+    LegendreBasis,
+    LogBasis,
+    OneHotBasis,
+    OrdinalBasis,
+    PolynomialBasis,
+)
 from pymlt.likelihood import (
     InfeasibleParameterError,
     hessian,
@@ -54,6 +62,12 @@ __all__ = [
     "CensoringType",
     "OrderedVariable",
     "OrdinalBasis",
+    "OneHotBasis",
+    "PolynomialBasis",
+    "LegendreBasis",
+    "LogBasis",
+    "InterceptBasis",
+    "InteractionBasis",
     # Config
     "OptimizerConfig",
     "AugLagOptions",

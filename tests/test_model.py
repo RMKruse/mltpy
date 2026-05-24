@@ -1657,3 +1657,51 @@ class TestResidualsIntervalCensoring:
         assert r_score.shape == (n,)
         assert np.all(np.isfinite(r_score))
         assert np.all(np.isfinite(r_cs))
+
+
+class TestScalingStub:
+    """ADR 0002 surface: scaling= kwarg behaviour on supported / unsupported
+    paths.  After #71 closes the censoring + base-distribution coverage,
+    every censoring type and every link except ``"exponential"`` accepts
+    ``scaling=`` (InteractionBasis combinations remain out of scope and
+    raise at construction).
+    """
+
+    def test_scaling_none_is_default_and_byte_identical(self):
+        m1 = MLT(order=3, support=(0.0, 1.0))
+        m2 = MLT(order=3, support=(0.0, 1.0), scaling=None)
+        assert m1.scaling is None
+        assert m2.scaling is None
+
+    def test_scaling_ndarray_accepted_on_supported_path(self):
+        X_s = np.ones((20, 1), dtype=float)
+        model = MLT(order=3, support=(0.0, 1.0), scaling=X_s)
+        assert model.scaling is not None
+        assert model.scaling.shape == (20, 1)
+
+    def test_scaling_rejected_for_exponential_base(self):
+        X_s = np.ones((20, 1), dtype=float)
+        with pytest.raises(ValueError, match="0002-scaling-terms"):
+            MLT(
+                order=3,
+                support=(0.0, 1.0),
+                scaling=X_s,
+                base_distribution="exponential",
+            )
+
+    def test_scaling_accepted_for_each_censoring_type(self):
+        """Issue #71: every censoring type now accepts scaling= at __init__.
+
+        Construction succeeds for RIGHT / LEFT / INTERVAL just as it does
+        for NONE; fitting parity is exercised in tests/test_scaling_censoring.py.
+        """
+        X_s = np.ones((20, 1), dtype=float)
+        for cens in (
+            CensoringType.NONE,
+            CensoringType.RIGHT,
+            CensoringType.LEFT,
+            CensoringType.INTERVAL,
+        ):
+            model = MLT(order=3, support=(0.0, 1.0), scaling=X_s, censoring=cens)
+            assert model.scaling is not None
+            assert model.censoring is cens

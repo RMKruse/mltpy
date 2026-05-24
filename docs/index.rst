@@ -24,6 +24,9 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
    examples/01_boxcox_regression
    examples/02_survival_analysis
    examples/03_regression_covariates
+   examples/04_interacting_terms
+   examples/05_scaling_terms
+   examples/06_profile_likelihood
 
 .. toctree::
    :maxdepth: 1
