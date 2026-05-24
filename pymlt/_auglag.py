@@ -64,6 +64,21 @@ class AugLagOptions:
         repeatedly fail the shrink test and inflate ρ until ``ρ·g`` swamps
         ``μ`` in the multiplier update, zeroing the dual estimate.
         Default ``1e8``.
+    feas_tol:
+        Feasibility tolerance used by the stall-based convergence test.  An
+        iterate counts as *feasible* when ``max(‖h‖∞, ‖max(0, −g)‖∞) <
+        feas_tol``.  Default ``1e-7`` (matches ``outer_tol``).
+    theta_tol:
+        Relative parameter-change tolerance for the stall-based convergence
+        test.  The outer loop also declares convergence when the iterate is
+        feasible *and* the inter-outer-iteration step has stalled,
+        ``‖θ⁺ − θ‖∞ ≤ theta_tol · (1 + ‖θ⁺‖∞)``.  This mirrors
+        ``alabama::auglag`` (which R ``mlt`` uses), whose outer loop stops on a
+        small parameter change rather than on the raw KKT residual.  It matters
+        on degenerate active sets (stacked monotonicity boundaries) where the
+        augmented-Lagrangian stationarity floors at ~1e-5 even though θ has
+        stopped moving and matches the reference fit to many decimals.  Default
+        ``1e-8``.
     inner_method:
         ``scipy.optimize.minimize`` method used for each unconstrained inner
         solve.  Default ``"L-BFGS-B"`` matches alabama's inner solver.
@@ -82,6 +97,8 @@ class AugLagOptions:
     outer_tol: float = 1e-7
     max_outer_iter: int = 50
     rho_max: float = 1e8
+    feas_tol: float = 1e-7
+    theta_tol: float = 1e-8
     inner_method: str = "L-BFGS-B"
     inner_options: dict[str, object] = field(
         default_factory=lambda: {"gtol": 1e-8, "ftol": 1e-15, "maxiter": 500}
@@ -269,6 +286,15 @@ def auglag_minimize(
     kkt_residual = np.inf
     message = "Maximum outer iterations reached without convergence."
 
+    # Track the best (lowest-KKT) feasible iterate seen.  On degenerate active
+    # sets the per-outer-iteration KKT residual can bounce around its floor; we
+    # return the best iterate rather than whichever one the loop happened to
+    # exit on.  Seeded with the starting point so this is never ``None``.
+    best_theta = theta.copy()
+    best_kkt = np.inf
+    best_lambda_eq = lambda_eq.copy()
+    best_mu_ineq = mu_ineq.copy()
+
     for outer_iter in range(options.max_outer_iter):
         n_outer_iter = outer_iter + 1
 
@@ -285,8 +311,11 @@ def auglag_minimize(
             )
         except LinAlgError:
             break
-        theta = np.asarray(result.x, dtype=np.float64)
+        theta_new = np.asarray(result.x, dtype=np.float64)
         n_inner_iter += int(getattr(result, "nit", 0))
+        # Step taken by this outer iteration, used by the stall test below.
+        theta_step = float(np.max(np.abs(theta_new - theta))) if theta.size else 0.0
+        theta = theta_new
 
         # Constraint residuals at new θ
         h = C_ @ theta - d_ if m_eq > 0 else np.zeros(0, dtype=np.float64)
@@ -301,17 +330,52 @@ def auglag_minimize(
             phi = np.maximum(0.0, mu_ineq - rho * g)
             grad_L_A = grad_L_A - A_.T @ phi
 
-        # KKT residual
+        # KKT residual: equality violation, inequality complementarity, and
+        # stationarity.  ``feasibility`` is the raw primal constraint violation
+        # (no complementarity), used by the penalty update and the stall test.
         eq_viol = float(np.max(np.abs(h))) if m_eq > 0 else 0.0
         ineq_kkt = (
             float(np.max(np.abs(np.minimum(g, mu_ineq / rho)))) if m_ineq > 0 else 0.0
         )
+        ineq_viol = float(np.max(np.maximum(0.0, -g))) if m_ineq > 0 else 0.0
         stationarity = float(np.max(np.abs(grad_L_A)))
         kkt_residual = max(eq_viol, ineq_kkt, stationarity)
+        feasibility = max(eq_viol, ineq_viol)
+
+        if kkt_residual < best_kkt:
+            best_kkt = kkt_residual
+            best_theta = theta.copy()
+            best_lambda_eq = lambda_eq.copy()
+            best_mu_ineq = mu_ineq.copy()
 
         if kkt_residual < options.outer_tol:
             converged = True
             message = "KKT conditions satisfied."
+            break
+
+        # Stall-based convergence (alabama parity): a feasible iterate whose
+        # parameters have stopped moving between outer iterations is accepted
+        # even when the augmented-Lagrangian stationarity has floored above
+        # ``outer_tol``.  This is the documented degenerate-active-set regime
+        # (stacked monotonicity boundaries) — further outer iterations only
+        # perturb θ within noise while inflating wasted work.  Guard with
+        # ``outer_iter >= 1`` so the very first (often large) inner step never
+        # short-circuits the loop.
+        if (
+            outer_iter >= 1
+            and feasibility < options.feas_tol
+            and theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
+        ):
+            converged = True
+            message = (
+                "Converged: feasible and parameter change below tolerance "
+                f"(KKT residual {kkt_residual:.2e} floored on an active set)."
+            )
+            # The current θ is the converged point; record it as best.
+            best_kkt = kkt_residual
+            best_theta = theta.copy()
+            best_lambda_eq = lambda_eq.copy()
+            best_mu_ineq = mu_ineq.copy()
             break
 
         # Multiplier updates
@@ -320,19 +384,30 @@ def auglag_minimize(
         if m_ineq > 0:
             mu_ineq = np.maximum(0.0, mu_ineq - rho * g)
 
-        # Penalty update: grow ρ only when violation failed to shrink enough
-        # AND we have not yet hit ``rho_max``.  The cap matters because once ρ
-        # is so large that ``ρ·g`` exceeds ``μ`` for residuals near machine
-        # precision, the multiplier update collapses to zero — see the
-        # ``rho_max`` docstring on :class:`AugLagOptions`.
-        current_max_violation = max(eq_viol, ineq_kkt)
-        if (
+        # Penalty update: grow ρ only when the iterate is still infeasible AND
+        # the violation failed to shrink by the required factor AND ρ is below
+        # its cap.  Gating on ``feasibility > feas_tol`` is essential: once the
+        # constraints are satisfied, continuing to grow ρ (as the bare
+        # shrink-test would, since a tiny residual still "fails" relative to an
+        # even tinier previous one) drives ρ to ``rho_max``, wrecks the inner
+        # problem's conditioning, and *degrades* an already-good iterate
+        # (stationarity climbing back from ~1e-5 to ~1e-2).
+        current_max_violation = feasibility
+        insufficient_decrease = (
             current_max_violation > options.violation_shrink_factor * prev_max_violation
+        )
+        if (
+            current_max_violation > options.feas_tol
+            and insufficient_decrease
             and rho < options.rho_max
         ):
             rho = min(options.rho_growth * rho, options.rho_max)
         prev_max_violation = current_max_violation
 
+    theta = best_theta
+    lambda_eq = best_lambda_eq
+    mu_ineq = best_mu_ineq
+    kkt_residual = best_kkt
     f_final = float(fun(theta)[0])
 
     return AugLagResult(

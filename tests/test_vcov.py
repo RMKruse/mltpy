@@ -848,28 +848,33 @@ class TestVcovAuglag:
         np.testing.assert_allclose(V, V.T, atol=1e-10)
         assert np.all(np.isfinite(V))
 
-    def test_vcov_auglag_inverts_augmented_hessian(self):
-        """``vcov('auglag') == inv(H + ρ·Aᵀ_active·A_active)`` to round-off.
+    def test_vcov_auglag_equals_constrained_covariance(self):
+        """``vcov('auglag')`` equals the active-set-constrained covariance.
 
-        Defining property of the mode.  Compared element-wise against a
-        hand-rolled augmentation built from the same auglag artefacts
-        (``_A_ineq_``, ``mu_ineq``, ``rho_final``) the implementation
-        consumes — the two paths must agree exactly (no algorithmic
-        divergence permitted).
+        Defining property of the mode.  The constrained covariance is the
+        ρ→∞ limit of the old penalty form ``(H + ρ·Aᵀ_active·A_active)⁻¹``;
+        for an invertible ``H`` it has the closed form
+        ``H⁻¹ − H⁻¹Aᵀ(AH⁻¹Aᵀ)⁻¹AH⁻¹`` (the standard projection).  Compared
+        element-wise against that hand-rolled projection — the two paths must
+        agree exactly.  This is *independent* of the optimiser's final
+        penalty ``rho_final`` (the previous implementation's ρ-dependence was
+        a latent bug, masked only because the augmented Lagrangian used to
+        inflate ρ to ~1e8; see ``test_scaling_inference.py`` for the R-parity
+        check that this restores).
         """
         V = self.m.vcov(regularize="auglag")
-        H_reg = self.m.hessian_.copy()
-        if (
-            self.m._A_ineq_ is not None
-            and self.m.result_ is not None
-            and self.m.result_.mu_ineq is not None
-            and self.m.result_.rho_final is not None
-        ):
-            active = self.m.result_.mu_ineq > self.m._ACTIVE_CONSTRAINT_TOL
-            if active.any():
-                A_act = self.m._A_ineq_[active, :]
-                H_reg = H_reg + self.m.result_.rho_final * (A_act.T @ A_act)
-        np.testing.assert_allclose(V, np.linalg.inv(H_reg), atol=1e-14)
+        assert self.m._A_ineq_ is not None and self.m.result_ is not None
+        assert self.m.result_.mu_ineq is not None
+        active = self.m.result_.mu_ineq > self.m._ACTIVE_CONSTRAINT_TOL
+        H = self.m.hessian_
+        if active.any():
+            A_act = self.m._A_ineq_[active, :]
+            H_inv = np.linalg.inv(H)
+            M = A_act @ H_inv @ A_act.T
+            V_expected = H_inv - H_inv @ A_act.T @ np.linalg.solve(M, A_act @ H_inv)
+        else:
+            V_expected = np.linalg.inv(H)
+        np.testing.assert_allclose(V, V_expected, atol=1e-10)
 
     def test_vcov_auglag_diverges_from_active_when_constraint_binds(self):
         """When a constraint binds, ``'auglag' != 'active'``.
