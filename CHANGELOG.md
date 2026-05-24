@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-25
+
 ### Performance
 
 - Assembled Bernstein `(B, dB)` caching — `BernsteinBasis.evaluate_with_derivative`
