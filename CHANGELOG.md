@@ -4,7 +4,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.4.0] — 2026-05-24
+## [Unreleased]
+
+### Performance
+
+- Assembled Bernstein `(B, dB)` caching — `BernsteinBasis.evaluate_with_derivative`
+  (and `evaluate`) now memoise the *assembled* design-and-derivative pair on
+  `(order, support, y.tobytes())`, alongside the existing `_bernstein_matrix`
+  cache. The inner cache already covered the raw power op, but the optimiser's
+  hot path still re-ran the support scan and rebuilt `dB` via `np.pad` + subtract
+  on every one of the ~130 likelihood evaluations per fit — even though both
+  matrices depend only on `y`, never on `θ`. A cache hit now collapses
+  normalise + B + dB into a single dict lookup (≈ **12 µs → ≈ 0.2 µs** per call
+  at n=50/order=6). Content keying (not `id`) makes the censored `cd.exact[mask]`
+  slice pattern — fresh arrays with stable content — hit the cache. Cached
+  matrices are read-only; the cache is a bounded LRU (`maxsize=32`) with the same
+  thread-safe `move_to_end` hit-path guard. (#95)
 
 ### Added
 

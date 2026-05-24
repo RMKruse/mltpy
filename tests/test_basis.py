@@ -276,6 +276,118 @@ class TestEvaluateWithDerivative:
 
 
 # ---------------------------------------------------------------------------
+# Assembled (B, dB) content-keyed cache (#95)
+# ---------------------------------------------------------------------------
+
+
+class TestAssembledCache:
+    def test_repeated_equal_content_y_returns_same_objects(self):
+        """evaluate_with_derivative memoizes the assembled (B, dB) on y content:
+        a fresh-but-equal array (the censored ``cd.exact[mask]`` slice pattern)
+        hits the cache and returns the *identical* B and dB objects."""
+        b = make_basis(order=4)
+        y1 = np.linspace(0.1, 0.9, 20)
+        y2 = y1.copy()  # distinct object, identical content
+        assert y1 is not y2
+        B1, dB1 = b.evaluate_with_derivative(y1)
+        B2, dB2 = b.evaluate_with_derivative(y2)
+        assert B2 is B1
+        assert dB2 is dB1
+
+    def test_returned_arrays_are_read_only(self):
+        """Cached (B, dB) are read-only so an errant in-place write — which
+        would corrupt every later cache consumer — fails loudly."""
+        b = make_basis(order=5)
+        y = np.linspace(0.0, 1.0, 15)
+        B, dB = b.evaluate_with_derivative(y)
+        assert not B.flags.writeable
+        assert not dB.flags.writeable
+        with pytest.raises(ValueError):
+            B[0, 0] = 1.0
+        with pytest.raises(ValueError):
+            dB[0, 0] = 1.0
+
+    def test_order0_derivative_is_read_only(self):
+        """The k=0 branch builds dB from np.zeros; it must be read-only too."""
+        b = BernsteinBasis(order=0, support=(0.0, 1.0))
+        _, dB = b.evaluate_with_derivative(np.array([0.2, 0.5, 0.8]))
+        assert not dB.flags.writeable
+
+    def test_evaluate_warms_shared_assembled_cache(self):
+        """evaluate participates in the same assembled cache: calling it warms
+        the (B, dB) entry so a subsequent evaluate_with_derivative is a full
+        hit (no dB rebuild)."""
+        from pymlt.basis import _bernstein_assembled_cache
+
+        b = make_basis(order=4)
+        y = np.linspace(0.1, 0.9, 18)
+        key = (b.order, b.support, np.ascontiguousarray(y, dtype=float).tobytes())
+        _bernstein_assembled_cache.pop(key, None)
+        B_eval = b.evaluate(y)
+        assert key in _bernstein_assembled_cache
+        # And the warmed entry is what evaluate_with_derivative returns.
+        B_pair, _ = b.evaluate_with_derivative(y.copy())
+        assert B_pair is B_eval
+
+    def test_evaluate_returns_read_only(self):
+        b = make_basis(order=4)
+        B = b.evaluate(np.linspace(0.0, 1.0, 10))
+        assert not B.flags.writeable
+
+    def test_cache_is_bounded(self):
+        """Distinct y across many fits cannot grow the cache without limit."""
+        from pymlt.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
+        from pymlt.basis import _bernstein_assembled_cache as cache
+
+        cache.clear()
+        b = make_basis(order=3)
+        for i in range(maxsize + 5):
+            # Distinct length → distinct content, all within [0, 1].
+            b.evaluate_with_derivative(np.linspace(0.0, 1.0, 10 + i))
+        assert len(cache) == maxsize
+
+    def test_lru_recency_protects_accessed_entry(self):
+        """A cache hit refreshes recency (move_to_end), so a recently-touched
+        old entry survives eviction while the next-oldest is dropped."""
+        from pymlt.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
+        from pymlt.basis import _bernstein_assembled_cache as cache
+
+        cache.clear()
+        b = make_basis(order=3)
+
+        def key_for(y: np.ndarray) -> tuple:
+            return (b.order, b.support, np.ascontiguousarray(y, dtype=float).tobytes())
+
+        ys = [np.linspace(0.0, 1.0, 10 + i) for i in range(maxsize)]
+        for y in ys:
+            b.evaluate_with_derivative(y)
+        # Cache is full.  Touch the oldest entry → moves it to most-recent.
+        b.evaluate_with_derivative(ys[0].copy())
+        # Insert one fresh entry → eviction drops the now-oldest (ys[1]).
+        b.evaluate_with_derivative(np.linspace(0.0, 1.0, 10 + maxsize))
+        assert key_for(ys[0]) in cache  # protected by the refresh
+        assert key_for(ys[1]) not in cache  # evicted instead
+
+    def test_keys_distinguish_content_order_support(self):
+        """No false hits: differing y content, order, or support never collide."""
+        y = np.linspace(0.1, 0.9, 12)
+        # Different content → different cached object.
+        b = make_basis(order=4)
+        B1, _ = b.evaluate_with_derivative(y)
+        B2, _ = b.evaluate_with_derivative(np.linspace(0.1, 0.9, 13))
+        assert B1 is not B2
+        # Different order at equal y/support → distinct shapes, no collision.
+        b5 = BernsteinBasis(order=5, support=(0.0, 1.0))
+        B5, _ = b5.evaluate_with_derivative(y.copy())
+        assert B1.shape[1] == 5 and B5.shape[1] == 6
+        # Different support at equal y/order → distinct normalisation & scale.
+        b_wide = BernsteinBasis(order=4, support=(-1.0, 2.0))
+        _, dB_unit = b.evaluate_with_derivative(y.copy())
+        _, dB_wide = b_wide.evaluate_with_derivative(y.copy())
+        assert not np.allclose(dB_unit, dB_wide)
+
+
+# ---------------------------------------------------------------------------
 # integrate() — shape, value at full domain, monotonicity
 # ---------------------------------------------------------------------------
 
