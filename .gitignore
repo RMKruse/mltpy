@@ -52,3 +52,5 @@ benchmarks/data/
 .claude/
 Claude.md
 pymlt.egg-info/
+
+.coverage
