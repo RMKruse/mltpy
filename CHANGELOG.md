@@ -4,6 +4,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-05-24
+
+### Added
+
+- Tensor-product interaction basis — `InteractionBasis(y_basis, x_basis)`
+  enables fully-interacting CTMs `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)`. Wire it
+  into any model via `ConditionalTransformationModel(basis=InteractionBasis(...))`
+  or via `Coxph(..., interacting=...)` for the non-proportional / stratified
+  survival flavour (crossing survival curves). The shaped coefficient matrix
+  is exposed as `model.Theta_`; `coef_` returns it as 2-D. Monotonicity is
+  enforced column-wise, `(D ⊗ I_q) @ vec(Θ) ≥ 0`, requiring a non-negative
+  partition-of-unity x-basis. Exact (non-censored) data only in this release.
+  Design recorded in `docs/adr/0001-tensor-product-interaction-basis.md`;
+  worked notebook at `docs/examples/04_interacting_terms.ipynb`.
+- Scaling terms (heteroskedastic / scaled-baseline) — `scaling=` kwarg on
+  `BoxCox`, `Coxph`, `Colr`, `Lm`, and `Survreg` mirroring R
+  `tram::*(scale = ~x_s)`. The transformation becomes
+  `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`; the fitted vector gains a `γ`
+  block exposed as `model.gamma_` / `feature_names_scaling_`, and `summary()`
+  adds a *Scaling coefficients* block with Wald SEs. Predict-side methods take
+  a parallel `X_scale_new=` (or `X_scale=` on `survival`/`hazard`). `γ` is
+  sign- and magnitude-aligned with R (no flip). Design recorded in
+  `docs/adr/0002-scaling-terms.md`; worked notebook at
+  `docs/examples/05_scaling_terms.ipynb`.
+- `Survreg` — parametric survival model on the log-time scale (R
+  `tram::Survreg`). Fits `h(log t)` under the `"weibull"` (default),
+  `"lognormal"`, or `"loglogistic"` family. Re-exported via `pymlt.Survreg`
+  and R-validated against `tram::Survreg`.
+- `Lehmann` — proportional reverse-time hazards model for right-censored data
+  (the dual of `Coxph`), using the new `"max_extreme_value"` base distribution
+  (standard Gumbel) to realise `-log F(t|x) = h(t) + x'β`. Re-exported via
+  `pymlt.Lehmann`.
+- `"max_extreme_value"` base distribution (standard / right Gumbel) — the
+  reverse-time-hazards link used by `Lehmann`.
+- Additional basis families: `OneHotBasis`, `InterceptBasis` (non-negative
+  partition-of-unity x-bases for stratified / interaction terms),
+  `PolynomialBasis`, `LegendreBasis`, and `LogBasis`. All re-exported from
+  `pymlt`.
+- Profile-likelihood confidence intervals — `confint(level, parm, type="profile")`
+  inverts the χ²₁ likelihood-ratio test by refitting under
+  `OptimizerConfig.fixed_params` and brent-q'ing the bracket. The appropriate
+  diagnostic when a Bernstein coefficient sits on the monotonicity boundary,
+  where Wald widths can be 3–5× too wide. Worked comparison (all three CI
+  flavours) at `docs/examples/06_profile_likelihood.ipynb`.
+- `wald_test(R, r, vcov, regularize)` for linear restrictions `Rθ = r`,
+  returning a `WaldTestResult` dataclass (`statistic`, `df`, `p_value`,
+  `vcov_type`). Uses either the inverse-information or the HC0 sandwich
+  variance. Re-exported via `pymlt.WaldTestResult`.
+- HC0 sandwich standard errors — `sandwich_se()` and `sandwich_vcov()` on
+  `ConditionalTransformationModel`.
+- `OptimizerConfig.fixed_params` — pin a subset of parameters to fixed values
+  during the fit (the mechanism behind profile-likelihood CIs).
+
+### Changed
+
+- `vcov()` and `standard_errors()` gained a `regularize` parameter
+  (`'active'` default, also `'auglag'` or `None`). When the observed-information
+  Hessian is singular — which happens whenever a monotonicity constraint is
+  active at the MLE (`theta[i+1] == theta[i]`) — the default now recovers a
+  usable variance via the **active-set-constrained (bordered-KKT) covariance**
+  (the top-left block of `inv([[H, Aᵀ_active], [A_active, 0]])`, with a `pinv`
+  fallback) instead of raising `RuntimeError`. This is the exact ρ→∞ limit of a
+  penalty-augmented Hessian and is independent of the optimiser's final penalty
+  `ρ`. Pass `regularize=None` to restore the old raise-on-singular diagnostic
+  (#82).
+
+### Performance
+
+- Bernstein design-matrix caching — `basis._bernstein_matrix` is now memoised on
+  the byte content of the (normalised) evaluation points and the basis degree.
+  The matrix depends only on `y` and the order, never on the coefficients `θ`,
+  yet was previously recomputed on every one of the ~hundreds–thousands of
+  likelihood/gradient evaluations per fit (≈ 75 % of fit time in profiling).
+  Caching it once per fit — the Python analogue of R `mlt` precomputing the
+  model matrix — together with the augmented-Lagrangian changes below makes
+  `fit()` roughly **10–45× faster** across the benchmark grid; large-`n` cells
+  (n=5000) are now **faster than R `mlt`** (geometric-mean 0.90× R's speed
+  overall, up from ~30–50× slower). See `benchmarks/results/benchmark_report.md`.
+- Augmented Lagrangian now stops early once converged instead of always running
+  its full outer-iteration budget (typically ~8–15 outer iterations instead of
+  the 50-iteration cap on degenerate active sets).
+
+### Fixed
+
+- Augmented-Lagrangian penalty inflation — the PHR outer loop grew the penalty
+  `ρ` toward `rho_max` (1e8) even after the constraints were already satisfied,
+  because the shrink test fires on a tiny-vs-tinier residual. The resulting
+  ill-conditioning stalled the inner L-BFGS-B solve and *degraded* an
+  already-good iterate (KKT residual climbing back from ~1e-5 to ~1e-2). `ρ` is
+  now frozen once the iterate is feasible (`feasibility ≤ feas_tol`).
+- Spurious convergence failures on degenerate active sets — on stacked
+  monotonicity boundaries the augmented-Lagrangian stationarity floors at ~1e-5,
+  above `outer_tol`, so fits reported `converged=False` (and burned all 50 outer
+  iterations) even though `θ` had stopped moving and matched the reference fit to
+  many decimals. The solver now also accepts the `alabama`-style
+  feasible-and-stalled convergence point (feasible **and** `‖Δθ‖∞` below
+  tolerance between outer iterations), via new `AugLagOptions.feas_tol` /
+  `theta_tol`, and returns the best-KKT iterate seen. Every benchmark cell now
+  converges 10/10 (previously several at 2–9/10).
+
 ## [0.3.0] — 2026-05-17
 
 ### Added

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "pymlt"
 author = "René-Marcel Kruse"
 copyright = "2026, René-Marcel Kruse"
-release = "0.3.0"
+release = "0.4.0"
 
 # ---------------------------------------------------------------------------
 # Extensions

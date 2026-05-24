@@ -63,6 +63,15 @@ print(f"Estimated median: {median:.1f}")
 - Fourteen prediction types from one fitted model: transformation, CDF, PDF, survivor, hazard, cumulative hazard, odds, quantile, and log-scale variants of each
 - Full censoring support: exact, right-, left-, and interval-censored observations
 - Conditional distributions via optional covariate matrix `X`
+- Ready-made `tram` regression models mirroring R's `tram` package:
+  - `BoxCox` — Box-Cox transformation for continuous outcomes
+  - `Lm` — normal linear regression expressed as a CTM
+  - `Coxph` — Cox proportional hazards for right-censored survival data
+  - `Lehmann` — Lehmann / proportional reverse-time hazards (dual of `Coxph`)
+  - `Colr` — continuous outcome logistic regression
+  - `Polr` — proportional-odds ordinal regression
+  - `Survreg` — parametric survival on the log-time scale (Weibull / log-normal / log-logistic)
+- Seven selectable base distributions: `normal`, `logistic`, `min_extreme_value` (Cox link), `max_extreme_value` (Lehmann link), `exponential`, `laplace` (median regression), and `cauchy`
 - Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](docs/examples/04_interacting_terms.ipynb)
 - Heteroskedastic / scaled-baseline models via `scaling=X_s` on `BoxCox`, `Coxph`, `Colr`, `Lm`, `Survreg` — `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`, mirroring R `tram::*(scale=~x_s)`; see the [scaling-terms vignette](docs/examples/05_scaling_terms.ipynb)
 - Profile-likelihood confidence intervals via `confint(type="profile")` — inverts the χ²₁ LR test for asymmetric / boundary-bound parameters where the Wald approximation breaks down; see the [profile-likelihood vignette](docs/examples/06_profile_likelihood.ipynb)
