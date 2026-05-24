@@ -34,7 +34,7 @@ pip install "pymlt[examples]"   # lifelines, jupyter, matplotlib — run the vig
 pip install "pymlt[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
 ```
 
-**Requirements:** Python ≥ 3.11, numpy ≥ 1.24, scipy ≥ 1.10.
+**Requirements:** Python ≥ 3.12, numpy ≥ 1.24, scipy ≥ 1.10.
 
 ---
 

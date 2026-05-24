@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python >= 3.10
+- Python >= 3.12
 - git
 
 Optional (only needed to regenerate R reference files):

@@ -74,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Minimum Python version raised from 3.11 to 3.12. `requires-python`,
+  the package classifiers, the CI test matrix, the mypy target, and the
+  README/CONTRIBUTING requirement statements are now all consistently on
+  3.12 (previously the project mixed 3.10/3.11/3.12 across these files).
 - `vcov()` and `standard_errors()` gained a `regularize` parameter
   (`'active'` default, also `'auglag'` or `None`). When the observed-information
   Hessian is singular — which happens whenever a monotonicity constraint is
