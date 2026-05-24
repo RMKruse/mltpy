@@ -160,6 +160,98 @@ def test_confint_coxph_matches_R():
 
 
 # ---------------------------------------------------------------------------
+# R parity: profile-likelihood confint for tram fits (BoxCox, Colr, Coxph)
+#
+# Issue #88 — extends the Wald-CI parity block above by inverting the χ²_1
+# LR test in both R and pymlt and comparing the resulting (k, 2) tables on
+# the same three tram fixtures.  R-side reference is emitted by
+# ``.write_profile_ci_ref`` in ``reference/generate_reference.R``; the
+# pymlt side calls ``confint(level=0.95, type="profile")`` from #87.
+#
+# Tolerance is looser than the Wald block (rtol=1e-3, atol=1e-6 vs 1e-3)
+# because each side runs its own root finder over an iteratively-refit
+# constrained likelihood — bracket choice and the inner auglag's tolerance
+# combine into ~1e-5 noise on log-likelihood-flat coordinates.  Coxph's
+# Bernstein MLE sits on the monotonicity boundary (Bs2=Bs3=Bs4); both
+# implementations land on the same constrained-refit fallback there, so
+# parity still holds.
+# ---------------------------------------------------------------------------
+
+
+def _load_profile_ci_reference(model_name: str):
+    """Return y, x, support, theta_R, profile_CI_R for one tram model.
+
+    Parallels ``_load_confint_reference`` but loads
+    ``profile_ci_<model>.txt`` instead of ``confint_<model>.txt``.
+    """
+    required = [
+        REF_DIR / f"vcov_{model_name}_y.txt",
+        REF_DIR / f"vcov_{model_name}_x.txt",
+        REF_DIR / f"vcov_{model_name}_support.txt",
+        REF_DIR / f"vcov_{model_name}_theta.txt",
+        REF_DIR / f"profile_ci_{model_name}.txt",
+    ]
+    if not all(p.exists() for p in required):
+        pytest.skip(
+            f"profile_ci_{model_name}.txt / vcov_{model_name}_* not yet "
+            "generated — run Rscript reference/generate_reference.R"
+        )
+    theta = np.loadtxt(required[3])
+    k = len(theta)
+    data = {
+        "y": np.loadtxt(required[0]),
+        "x": np.loadtxt(required[1]).reshape(-1, 1),
+        "support": tuple(np.loadtxt(required[2])),
+        "theta_R": theta,
+        "ci_R": np.loadtxt(required[4]).reshape(k, 2),
+    }
+    event_path = REF_DIR / f"vcov_{model_name}_event.txt"
+    if event_path.exists():
+        data["event"] = np.loadtxt(event_path).astype(int)
+    return data
+
+
+def test_confint_profile_boxcox_matches_R():
+    """Profile CI on BoxCox(y ~ x) matches R after the β sign flip.
+
+    pymlt parameterises ``h + x'β``; tram's ``BoxCox(negative=TRUE)`` uses
+    ``h - x'β``, so its β is the negative of pymlt's.  ``_apply_pymlt_sign``
+    flips the β row (here row p=5, the single covariate) before comparing.
+    """
+    ref = _load_profile_ci_reference("boxcox")
+    a, b = ref["support"]
+    m = BoxCox(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
+    ci_pymlt = m.confint(level=0.95, type="profile")
+    ci_expected = _apply_pymlt_sign(ref["ci_R"], p=5, beta_sign=-1.0)
+    np.testing.assert_allclose(ci_pymlt, ci_expected, rtol=1e-3, atol=1e-6)
+
+
+def test_confint_profile_colr_matches_R():
+    """Profile CI on Colr(y ~ x) matches R (no sign flip — β is aligned)."""
+    ref = _load_profile_ci_reference("colr")
+    a, b = ref["support"]
+    m = Colr(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
+    ci_pymlt = m.confint(level=0.95, type="profile")
+    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-6)
+
+
+def test_confint_profile_coxph_matches_R():
+    """Profile CI on Coxph(Surv(y, event) ~ x) matches R.
+
+    Right-censored fit, no sign flip.  The Bernstein MLE has Bs2=Bs3=Bs4
+    stacked on the monotonicity boundary — both R and pymlt land on the
+    same constrained-refit fallback there, so parity still holds at the
+    standard tolerance.
+    """
+    ref = _load_profile_ci_reference("coxph")
+    a, b = ref["support"]
+    cd = CensoredData.right_censored(ref["y"], censored=ref["event"] == 0)
+    m = Coxph(support=(float(a), float(b)), order=4).fit(cd, X=ref["x"])
+    ci_pymlt = m.confint(level=0.95, type="profile")
+    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Algebraic self-consistency
 # ---------------------------------------------------------------------------
 

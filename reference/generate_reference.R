@@ -1627,3 +1627,73 @@ writeLines(format(flatten_row_major(profile_ci_baseline), digits = 15),
 
 cat(sprintf("profile_ci_baseline: p=%d rows written\n",
             nrow(profile_ci_baseline)))
+
+# ---------------------------------------------------------------------------
+# Profile-CI references for the three tram convenience fits (issue #88).
+#
+# Same χ²_1 LR inversion as the baseline above, but generic over any tram /
+# mlt fit object: we refit via `update(fit, fixed = pin)` instead of
+# re-creating the `mlt(ctm, data, fixed=pin)` call by hand.  This lets the
+# helper handle BoxCox (negative=TRUE — β sign-flipped vs pymlt), Colr, and
+# Coxph (right-censored) uniformly.  The Python side flips BoxCox β rows
+# before comparing — see `_apply_pymlt_sign` in tests/test_confidence.py.
+#
+# Output layout — `profile_ci_<model>.txt`: `(k, 2)` flattened row-major
+# with columns `[lower, upper]`, identical contract to the Wald fixtures
+# `confint_<model>.txt`.
+# ---------------------------------------------------------------------------
+
+.profile_ci_update <- function(fit, level = 0.95) {
+  m           <- as.mlt(fit)
+  theta_hat   <- coef(m, with_baseline = TRUE)
+  p           <- length(theta_hat)
+  V           <- vcov(m)
+  se          <- sqrt(diag(V))
+  ll_hat      <- as.numeric(logLik(fit))
+  crit        <- qchisq(level, df = 1)
+  param_names <- names(theta_hat)
+
+  profile_ll <- function(j, v) {
+    pin     <- setNames(v, param_names[j])
+    fit_pin <- suppressWarnings(update(fit, fixed = pin))
+    as.numeric(logLik(fit_pin))
+  }
+  f_one <- function(j, v) 2 * (ll_hat - profile_ll(j, v)) - crit
+
+  ci <- matrix(NA_real_, nrow = p, ncol = 2,
+               dimnames = list(param_names, c("lower", "upper")))
+
+  for (j in seq_len(p)) {
+    th <- theta_hat[j]
+    s  <- se[j]
+    # Lower root: bracket [lo, th].
+    for (k in 1:24) {
+      lo <- th - (3 * 2^(k - 1)) * s
+      if (f_one(j, lo) > 0) break
+    }
+    ci[j, 1] <- uniroot(function(v) f_one(j, v),
+                        interval = c(lo, th),
+                        tol = 1e-6)$root
+    # Upper root: bracket [th, hi].
+    for (k in 1:24) {
+      hi <- th + (3 * 2^(k - 1)) * s
+      if (f_one(j, hi) > 0) break
+    }
+    ci[j, 2] <- uniroot(function(v) f_one(j, v),
+                        interval = c(th, hi),
+                        tol = 1e-6)$root
+  }
+  ci
+}
+
+.write_profile_ci_ref <- function(fit, filename, level = 0.95) {
+  ci <- .profile_ci_update(fit, level = level)
+  writeLines(format(flatten_row_major(ci), digits = 15),
+             con = file.path(out_dir, filename))
+  cat(sprintf("%s: k=%d rows written\n", filename, nrow(ci)))
+  invisible(ci)
+}
+
+.write_profile_ci_ref(fit_bc,   "profile_ci_boxcox.txt")
+.write_profile_ci_ref(fit_colr, "profile_ci_colr.txt")
+.write_profile_ci_ref(fit_cx,   "profile_ci_coxph.txt")
