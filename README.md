@@ -65,6 +65,7 @@ print(f"Estimated median: {median:.1f}")
 - Conditional distributions via optional covariate matrix `X`
 - Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](docs/examples/04_interacting_terms.ipynb)
 - Heteroskedastic / scaled-baseline models via `scaling=X_s` on `BoxCox`, `Coxph`, `Colr`, `Lm`, `Survreg` — `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`, mirroring R `tram::*(scale=~x_s)`; see the [scaling-terms vignette](docs/examples/05_scaling_terms.ipynb)
+- Profile-likelihood confidence intervals via `confint(type="profile")` — inverts the χ²₁ LR test for asymmetric / boundary-bound parameters where the Wald approximation breaks down; see the [profile-likelihood vignette](docs/examples/06_profile_likelihood.ipynb)
 - Analytical gradients for fast, stable MLE with automatic restarts on non-convergence
 - scikit-learn-compatible API: `fit` / `predict` / `score` / `simulate`
 - Lightweight: only numpy and scipy required
