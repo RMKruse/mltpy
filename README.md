@@ -291,7 +291,7 @@ the methodological papers above:
   title   = {pymlt: Conditional Transformation Models in Python},
   year    = {2026},
   url     = {https://github.com/RMKruse/pymlt},
-  version = {0.1.0}
+  version = {0.4.0}
 }
 ```
 
