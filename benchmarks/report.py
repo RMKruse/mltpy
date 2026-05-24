@@ -333,12 +333,21 @@ def _interpret(
         "share the outer multiplier-update loop and the inner BFGS sub-problem, "
         "so iteration counts at the same precision land in the same ballpark "
         "and the divergent-basin caveat that applied under SLSQP no longer "
-        "holds.  The remaining per-fit gap reflects per-iteration cost: every "
-        "outer step in pymlt re-enters ``scipy.optimize.minimize``, whereas "
-        "`alabama` keeps the inner solver state in Fortran across updates.  "
-        "Absolute per-fit times of a few milliseconds at small `n` mean "
-        "timing noise can shift individual cells by 10–30%, so treat "
-        "small-`n` ratios as indicative rather than precise.",
+        "holds.  The two regimes split by `n`: at small `n` R is faster because "
+        "every outer step in pymlt re-enters ``scipy.optimize.minimize`` "
+        "(Python/SciPy call overhead) whereas `alabama` keeps the inner solver "
+        "state in Fortran across updates; at large `n` the per-fit cost is "
+        "dominated instead by vectorised linear algebra over the Bernstein "
+        "design matrix, which pymlt now evaluates once per fit and caches "
+        "(the matrix depends only on `y` and the basis order, not on the "
+        "coefficients), so pymlt pulls ahead — up to ~1.8× at n=5000.  The "
+        "augmented Lagrangian also freezes its penalty ρ once the constraints "
+        "are feasible and accepts the alabama-style feasible-and-stalled "
+        "convergence point, so fits no longer burn the full outer-iteration "
+        "budget on degenerate active sets.  Absolute per-fit times of a few "
+        "milliseconds at small `n` mean timing noise can shift individual "
+        "cells by 10–30%, so treat small-`n` ratios as indicative rather "
+        "than precise.",
     ]
     return "".join(parts)
 
