@@ -8,7 +8,7 @@ Acceptance criteria (issue #65):
 
 * ``log_likelihood`` parity at ``rtol=1e-6, atol=1e-10``.
 * ``vec(Θ)`` parity at ``rtol=1e-4, atol=1e-4``.  R's ``mlt::mlt`` (which
-  drives ``alabama::auglag``) and pymlt's PHR auglag stop at slightly
+  drives ``alabama::auglag``) and mltpy's PHR auglag stop at slightly
   different KKT residuals, so the parameter vectors agree only to the
   precision of those stopping criteria even when the NLL agrees to
   ``rtol=1e-6``.  See ``CLAUDE.md`` gotcha on auglag KKT residuals.
@@ -16,12 +16,12 @@ Acceptance criteria (issue #65):
   ``rtol=1e-5``.
 * Column-wise monotonicity holds numerically on a dense ``(y, x)`` grid.
 * All three solvers (auglag, slsqp, trust-constr) agree on θ to
-  ``rtol=1e-4`` (same rationale as the R-vs-pymlt comparison).
+  ``rtol=1e-4`` (same rationale as the R-vs-mltpy comparison).
 
 R coefficient-order note: ``mlt::coef`` returns the interacting CTM
 coefficients in the order ``Bs1(y):Bs1(x), Bs2(y):Bs1(x), Bs3(y):Bs1(x),
 Bs1(y):Bs2(x), …`` — the y-index varies fastest as j cycles 1..q.  In the
-``Θ[i, j]`` convention used by pymlt (y-index ``i``, x-index ``j``), this is
+``Θ[i, j]`` convention used by mltpy (y-index ``i``, x-index ``j``), this is
 column-major flattening.  We therefore reshape via ``theta_R.reshape(q, p).T``
 to obtain a ``(p, q)`` matrix directly comparable to ``model.Theta_``.
 """
@@ -33,12 +33,12 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt import (
+from mltpy import (
     ConditionalTransformationModel,
     InteractionBasis,
     OptimizerConfig,
 )
-from pymlt.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -89,7 +89,7 @@ def _theta_R_to_Theta(theta_R: np.ndarray, p: int, q: int) -> np.ndarray:
     return theta_R.reshape(q, p).T
 
 
-def _fit_pymlt(
+def _fit_mltpy(
     label: str,
     data: dict[str, np.ndarray],
     solver: str = "auglag",
@@ -116,7 +116,7 @@ def _fit_pymlt(
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_theta_matches_R(label: str) -> None:
     data = _load_interaction_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
     p, q = 3, 3
     Theta_R = _theta_R_to_Theta(data["theta_R"], p, q)
     assert model.Theta_ is not None
@@ -126,13 +126,13 @@ def test_theta_matches_R(label: str) -> None:
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_loglik_matches_R(label: str) -> None:
     data = _load_interaction_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
     # Compute log-likelihood from the fitted model: ll = Σ log(density(y_i | x_i))
     log_pdf = np.log(
         model.predict(data["y_train"], X_new=data["x_train"][:, None], what="density")
     )
-    ll_pymlt = float(np.sum(log_pdf))
-    np.testing.assert_allclose(ll_pymlt, data["ll_R"], rtol=1e-6, atol=1e-10)
+    ll_mltpy = float(np.sum(log_pdf))
+    np.testing.assert_allclose(ll_mltpy, data["ll_R"], rtol=1e-6, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ def test_loglik_matches_R(label: str) -> None:
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_cdf_pdf_matches_R(label: str) -> None:
     data = _load_interaction_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     # R's expand.grid(y = y_grid, x = x_grid) yields rows with y varying
     # fastest: (y1, x1), (y2, x1), ..., (y_m, x1), (y1, x2), ...
@@ -155,15 +155,15 @@ def test_cdf_pdf_matches_R(label: str) -> None:
     y_flat = y_mesh.ravel()
     x_flat = x_mesh.ravel()
 
-    cdf_pymlt = model.predict(y_flat, X_new=x_flat[:, None], what="distribution")
-    pdf_pymlt = model.predict(y_flat, X_new=x_flat[:, None], what="density")
+    cdf_mltpy = model.predict(y_flat, X_new=x_flat[:, None], what="distribution")
+    pdf_mltpy = model.predict(y_flat, X_new=x_flat[:, None], what="density")
 
     # rtol matched to the achievable theta parity (~1e-4) — the same
-    # stopping-criterion divergence between R's alabama auglag and pymlt's PHR
+    # stopping-criterion divergence between R's alabama auglag and mltpy's PHR
     # propagates into the prediction grid.  atol=1e-5 keeps a meaningful floor
     # for the small-probability tails.
-    np.testing.assert_allclose(cdf_pymlt, data["cdf_R"], rtol=2e-4, atol=1e-5)
-    np.testing.assert_allclose(pdf_pymlt, data["pdf_R"], rtol=2e-4, atol=1e-5)
+    np.testing.assert_allclose(cdf_mltpy, data["cdf_R"], rtol=2e-4, atol=1e-5)
+    np.testing.assert_allclose(pdf_mltpy, data["pdf_R"], rtol=2e-4, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def test_cdf_pdf_matches_R(label: str) -> None:
 def test_monotone_on_dense_grid(label: str) -> None:
     """After the constrained fit, ∂h/∂y > 0 everywhere on a dense (y, x) grid."""
     data = _load_interaction_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     a, b = data["support"]
     y_dense = np.linspace(a + 1e-3, b - 1e-3, 40)
@@ -203,7 +203,7 @@ def test_solver_agreement(label: str) -> None:
     data = _load_interaction_reference(label)
     fits: dict[str, np.ndarray] = {}
     for solver in ("auglag", "slsqp", "trust-constr"):
-        model = _fit_pymlt(label, data, solver=solver)
+        model = _fit_mltpy(label, data, solver=solver)
         assert model.theta_ is not None
         fits[solver] = model.theta_
 
@@ -222,8 +222,8 @@ def test_build_constraint_matrices_rejects_polynomial_x() -> None:
     """``build_constraint_matrices_interaction`` raises a clear ValueError when
     the x-basis is not non-negative + PoU.  (Echoes the construction-time
     guard for defensive consistency.)"""
-    from pymlt.basis import PolynomialBasis
-    from pymlt.constraints import build_constraint_matrices_interaction
+    from mltpy.basis import PolynomialBasis
+    from mltpy.constraints import build_constraint_matrices_interaction
 
     ib = InteractionBasis.__new__(InteractionBasis)
     ib.y_basis = BernsteinBasis(order=2, support=(0.0, 1.0))

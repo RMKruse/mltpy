@@ -1,6 +1,6 @@
-# pymlt Validation Approach
+# mltpy Validation Approach
 
-Systematic comparison of pymlt (Python) against R's `mlt`/`tram` packages to verify correctness of the Python implementation. R is treated as ground truth.
+Systematic comparison of mltpy (Python) against R's `mlt`/`tram` packages to verify correctness of the Python implementation. R is treated as ground truth.
 
 ## Pipeline
 
@@ -11,13 +11,13 @@ The validation runs in three steps:
   ──────────                      ──────
   generate_all_references.R       convert_references.py        run_validation.py
   ─────────────────────────       ─────────────────────        ─────────────────
-  Fit models with mlt/tram   -->  Convert CSV to .npy     -->  Fit pymlt models
+  Fit models with mlt/tram   -->  Convert CSV to .npy     -->  Fit mltpy models
   Export theta, loglik,           (lossless, 17 sig. digits)   Compare against R
   CDF, PDF, quantiles, hazard                                 Report PASS/FAIL
   as CSV + metadata.json
 ```
 
-**Requirements**: R with packages `mlt`, `basefun`, `variables`, `tram`, `survival`, `jsonlite`. Python with `numpy`, `scipy`, and `pymlt`.
+**Requirements**: R with packages `mlt`, `basefun`, `variables`, `tram`, `survival`, `jsonlite`. Python with `numpy`, `scipy`, and `mltpy`.
 
 ## Test Case Coverage
 
@@ -125,7 +125,7 @@ The validation uses a two-tier pass/fail system that accounts for non-identifiab
 
 ### Why this two-tier system?
 
-Under heavy censoring, the upper Bernstein coefficients are **non-identifiable**: the likelihood surface is flat and multiple theta vectors yield the same log-likelihood and CDF. pymlt's SLSQP optimizer and R's augmented Lagrangian (`alabama::auglag`) may converge to different points on this flat ridge.
+Under heavy censoring, the upper Bernstein coefficients are **non-identifiable**: the likelihood surface is flat and multiple theta vectors yield the same log-likelihood and CDF. mltpy's SLSQP optimizer and R's augmented Lagrangian (`alabama::auglag`) may converge to different points on this flat ridge.
 
 When this happens:
 - **Log-likelihood matches** (same flat ridge)
@@ -207,7 +207,7 @@ Reference values were generated with:
 
 ## Known Limitations
 
-1. **case_06 (Coxph)**: Resolved. The original failure (Δll = 10.2) was caused by pymlt using `base_distribution="normal"` for Coxph, while R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox PH model requires `log[-log S(t)] = h(t)`, which corresponds to `base_distribution="min_extreme_value"`. After the fix, Δll = 0.0001.
+1. **case_06 (Coxph)**: Resolved. The original failure (Δll = 10.2) was caused by mltpy using `base_distribution="normal"` for Coxph, while R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox PH model requires `log[-log S(t)] = h(t)`, which corresponds to `base_distribution="min_extreme_value"`. After the fix, Δll = 0.0001.
 
 2. **case_16 (order=12 + right censoring)**: Extreme non-identifiability at high polynomial order with censoring. The log-likelihood matches (Δll = 0.034 < 0.1) but CDF barely exceeds tolerance (Δcdf = 0.0219 > 0.02). The Δθ = 1913 confirms the two optimizers found radically different parameterizations of nearly the same distribution function — a fundamental consequence of over-parameterization under censoring.
 
@@ -222,7 +222,7 @@ Terminal summary (first 6 Δ-columns only; full 16-metric table in
 `validation/results/validation_report.md`):
 
 ```
-pymlt validation — R reference comparison
+mltpy validation — R reference comparison
 ==============================================================================================================
 Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll │   Δcdf│   Δpdf │   Δqnt │   Δhaz
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ almost nothing after masking the upper and/or lower tails).
 Large `Δlogdensity` and `Δtrafo` values on censored cases are exactly
 the non-identifiability signature the two-tier pass/fail logic is
 designed for: Δcdf and Δll are tiny (both far below tolerance), so the
-underlying distribution function matches between R and pymlt — only
+underlying distribution function matches between R and mltpy — only
 the internal parameterisation `h(y)` differs, which makes `log f(y)`
 differ in a predictable way wherever pdf → 0. All such rows PASS.
 
@@ -296,7 +296,7 @@ Both failures involve right-censored survival data where the upper tail is poorl
 
 **case_06 (Coxph) — RESOLVED (was: wrong base distribution)**
 
-Root cause: pymlt's `Coxph` class was hardcoded to `base_distribution="normal"`, but R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox proportional hazards model requires `log[-log S(t)] = h(t) + x'β`, which corresponds to `h(T) ~ MinExtrVal`, not `h(T) ~ Normal`. After changing `Coxph` to use `base_distribution="min_extreme_value"`, case_06 passes with Δll = 0.0001. The Δθ = 1.94 reflects a different local optimum (the optimizers converge to slightly different points on the correct likelihood surface), but all functional metrics (CDF, PDF) match to machine precision.
+Root cause: mltpy's `Coxph` class was hardcoded to `base_distribution="normal"`, but R's `tram::Coxph` uses the minimum extreme value (reversed Gumbel) distribution. The Cox proportional hazards model requires `log[-log S(t)] = h(t) + x'β`, which corresponds to `h(T) ~ MinExtrVal`, not `h(T) ~ Normal`. After changing `Coxph` to use `base_distribution="min_extreme_value"`, case_06 passes with Δll = 0.0001. The Δθ = 1.94 reflects a different local optimum (the optimizers converge to slightly different points on the correct likelihood surface), but all functional metrics (CDF, PDF) match to machine precision.
 
 **case_16 (order=12 + right censoring) — over-parameterization non-identifiability (Δcdf = 0.0219)**
 

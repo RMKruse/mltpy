@@ -1,11 +1,11 @@
 """Convenience layer for common conditional transformation models.
 
 This module provides pre-configured wrappers around
-:class:`~pymlt.model.ConditionalTransformationModel` / :class:`~pymlt.model.MLT`
+:class:`~mltpy.model.ConditionalTransformationModel` / :class:`~mltpy.model.MLT`
 that mirror the R ``tram`` package (Hothorn).  Users working with these classes
-never need to import :class:`~pymlt.basis.BernsteinBasis`,
-:class:`~pymlt.variables.CensoringType`, or
-:class:`~pymlt.optimizer.OptimizerConfig` directly.
+never need to import :class:`~mltpy.basis.BernsteinBasis`,
+:class:`~mltpy.variables.CensoringType`, or
+:class:`~mltpy.optimizer.OptimizerConfig` directly.
 
 Classes
 -------
@@ -28,16 +28,16 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import norm as _norm
 
-from pymlt.basis import (
+from mltpy.basis import (
     BernsteinBasis,
     InteractionBasis,
     LogBernsteinBasis,
     OrdinalBasis,
 )
-from pymlt.likelihood import _H_CLIP, BaseDistribution, _get_dist
-from pymlt.model import MLT, ConditionalTransformationModel
-from pymlt.optimizer import OptimizerConfig
-from pymlt.variables import CensoringType, OrderedVariable
+from mltpy.likelihood import _H_CLIP, BaseDistribution, _get_dist
+from mltpy.model import MLT, ConditionalTransformationModel
+from mltpy.optimizer import OptimizerConfig
+from mltpy.variables import CensoringType, OrderedVariable
 
 # ---------------------------------------------------------------------------
 # Shared Wald-table helper
@@ -88,7 +88,7 @@ def _format_wald_table(
 class _TramModel(MLT):
     """Base class for all tram convenience models.
 
-    Extends :class:`~pymlt.model.MLT` with a diagnostic summary and an
+    Extends :class:`~mltpy.model.MLT` with a diagnostic summary and an
     optional matplotlib plot.  Not part of the public API.
     """
 
@@ -154,7 +154,7 @@ class _TramModel(MLT):
         """Format Wald coefficient tables for the ``β`` (and ``γ``) blocks.
 
         Returns ``None`` when the fitted model has no covariates, when the
-        model uses an :class:`~pymlt.basis.InteractionBasis` (the tensor
+        model uses an :class:`~mltpy.basis.InteractionBasis` (the tensor
         product has no flat ``beta`` block to tabulate), or if the Hessian
         is singular so that standard errors cannot be computed.  When the
         model was fitted with ``scaling=`` (γ block present), the scaling
@@ -236,7 +236,7 @@ class _TramModel(MLT):
         except ImportError:
             raise ImportError(
                 "matplotlib is required for plot(). "
-                "Install with: pip install 'pymlt[plots]'"
+                "Install with: pip install 'mltpy[plots]'"
             )
 
         self._check_is_fitted()
@@ -302,11 +302,11 @@ class BoxCox(_TramModel):
         Optimisation settings.  If ``None``, library defaults are used.
     censoring:
         Censoring type of the response data.  Defaults to
-        :attr:`~pymlt.variables.CensoringType.NONE`.  Pass
-        :attr:`~pymlt.variables.CensoringType.RIGHT`,
-        :attr:`~pymlt.variables.CensoringType.LEFT`, or
-        :attr:`~pymlt.variables.CensoringType.INTERVAL` together with a
-        :class:`~pymlt.variables.CensoredData` ``y`` to fit the censored
+        :attr:`~mltpy.variables.CensoringType.NONE`.  Pass
+        :attr:`~mltpy.variables.CensoringType.RIGHT`,
+        :attr:`~mltpy.variables.CensoringType.LEFT`, or
+        :attr:`~mltpy.variables.CensoringType.INTERVAL` together with a
+        :class:`~mltpy.variables.CensoredData` ``y`` to fit the censored
         Box-Cox likelihood.
     scaling:
         Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
@@ -320,7 +320,7 @@ class BoxCox(_TramModel):
 
     Examples
     --------
-    >>> from pymlt.tram import BoxCox
+    >>> from mltpy.tram import BoxCox
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> y = rng.lognormal(size=200)
@@ -446,7 +446,7 @@ class Coxph(_TramModel):
     fully-interacting) Cox model where the transformation itself depends
     on the covariate via the tensor product
     ``h(t | x) = (a(t) ⊗ b(x))ᵀ vec(Θ)``.  See ADR 0001 and
-    :class:`~pymlt.basis.InteractionBasis` for the parameter-vector layout
+    :class:`~mltpy.basis.InteractionBasis` for the parameter-vector layout
     and the column-wise monotonicity strategy.
 
     Parameters
@@ -460,9 +460,9 @@ class Coxph(_TramModel):
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
     interacting:
-        Optional x-basis (:class:`~pymlt.basis.BernsteinBasis`,
-        :class:`~pymlt.basis.OrdinalBasis`, or
-        :class:`~pymlt.basis.InterceptBasis`).  When provided, the model
+        Optional x-basis (:class:`~mltpy.basis.BernsteinBasis`,
+        :class:`~mltpy.basis.OrdinalBasis`, or
+        :class:`~mltpy.basis.InterceptBasis`).  When provided, the model
         is fit as ``MLT(InteractionBasis(BernsteinBasis(...), interacting))``
         instead of the standard shift model.  Only exact (non-censored)
         time data is currently supported on this path; censoring with an
@@ -484,8 +484,8 @@ class Coxph(_TramModel):
 
     Examples
     --------
-    >>> from pymlt.tram import Coxph
-    >>> from pymlt.variables import CensoredData
+    >>> from mltpy.tram import Coxph
+    >>> from mltpy.variables import CensoredData
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> y_time   = rng.exponential(scale=2.0, size=200)
@@ -687,8 +687,8 @@ class Lehmann(_TramModel):
 
     Examples
     --------
-    >>> from pymlt.tram import Lehmann
-    >>> from pymlt.variables import CensoredData
+    >>> from mltpy.tram import Lehmann
+    >>> from mltpy.variables import CensoredData
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> y_time   = rng.exponential(scale=2.0, size=200)
@@ -806,7 +806,7 @@ class Colr(_TramModel):
 
     Examples
     --------
-    >>> from pymlt.tram import Colr
+    >>> from mltpy.tram import Colr
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> y = rng.logistic(loc=2.0, scale=0.5, size=200)
@@ -905,7 +905,7 @@ class Lm(_TramModel):
         \hat{\mu}    &= a - \theta_0 \hat{\sigma}, \\
         \hat{\gamma} &= -\hat{\sigma} \, \beta_{\mathrm{ctm}}.
 
-    The minus sign on :math:`\hat{\gamma}` reflects pymlt's internal shift
+    The minus sign on :math:`\hat{\gamma}` reflects mltpy's internal shift
     convention ``h(y) + X @ beta = z`` (the R ``tram`` package uses
     ``h(y) - X @ beta = z``, hence R's :math:`\beta` equals
     :math:`-\beta_{\mathrm{ctm}}`).
@@ -942,7 +942,7 @@ class Lm(_TramModel):
     Examples
     --------
     >>> import numpy as np
-    >>> from pymlt.tram import Lm
+    >>> from mltpy.tram import Lm
     >>> rng = np.random.default_rng(0)
     >>> x = rng.normal(size=200)
     >>> y = 2.0 + 3.0 * x + rng.normal(scale=0.5, size=200)
@@ -1186,7 +1186,7 @@ class Survreg(_TramModel):
         Polynomial degree of the Bernstein basis on the log scale.  Defaults
         to 6.  Note that ``tram::Survreg`` itself fits a strictly affine
         (two-parameter) baseline on ``log(t)`` regardless of ``order``;
-        ``order = 1`` on the pymlt side reproduces that parameterisation
+        ``order = 1`` on the mltpy side reproduces that parameterisation
         and is required for R parity comparisons.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
@@ -1202,8 +1202,8 @@ class Survreg(_TramModel):
 
     Examples
     --------
-    >>> from pymlt.tram import Survreg
-    >>> from pymlt.variables import CensoredData
+    >>> from mltpy.tram import Survreg
+    >>> from mltpy.variables import CensoredData
     >>> import numpy as np
     >>> rng = np.random.default_rng(0)
     >>> t = rng.lognormal(mean=1.0, sigma=0.5, size=200)
@@ -1384,8 +1384,8 @@ class Survreg(_TramModel):
 
         from scipy.interpolate import CubicSpline
 
-        from pymlt.likelihood import _get_dist
-        from pymlt.model import _QMLT_GRID_POINTS
+        from mltpy.likelihood import _get_dist
+        from mltpy.model import _QMLT_GRID_POINTS
 
         a, b = self.basis.support
         theta_b = np.asarray(theta_b, dtype=float)
@@ -1505,12 +1505,12 @@ class Polr(ConditionalTransformationModel):
 
     where ``F`` is the CDF of the chosen base distribution and
     ``θ_1 ≤ ... ≤ θ_{K-1}`` are the cutpoints.  Internally implemented as a
-    CTM with a degenerate :class:`~pymlt.basis.OrdinalBasis` plus the
+    CTM with a degenerate :class:`~mltpy.basis.OrdinalBasis` plus the
     standard interval-censored likelihood path — the integer cut positions
     select the right ``θ_k`` per observation.
 
     .. note::
-       **Sign convention.** pymlt parameterises ``h(y|x) = h(y) + x'β``, so
+       **Sign convention.** mltpy parameterises ``h(y|x) = h(y) + x'β``, so
        the fitted ``β`` has the *opposite* sign of R's ``tram::Polr`` (which
        uses ``h(y) - x'β``).  Negate ``coef_`` to compare with R output.
 
@@ -1534,7 +1534,7 @@ class Polr(ConditionalTransformationModel):
     --------
     >>> import numpy as np
     >>> import pandas as pd
-    >>> from pymlt import Polr
+    >>> from mltpy import Polr
     >>> rng = np.random.default_rng(0)
     >>> y = pd.Categorical(
     ...     rng.choice(["low", "mid", "high"], size=200),
@@ -1575,7 +1575,7 @@ class Polr(ConditionalTransformationModel):
     def levels_(self) -> tuple[Any, ...]:
         """Ordered category labels resolved at fit time."""
         if self._ordvar is None:
-            from pymlt.model import NotFittedError
+            from mltpy.model import NotFittedError
 
             raise NotFittedError("Model has not been fitted yet. Call fit(y) first.")
         return self._ordvar.levels
@@ -1598,7 +1598,7 @@ class Polr(ConditionalTransformationModel):
         """Estimated regression coefficients ``β``.
 
         Length equals ``X.shape[1]`` from :meth:`fit`; empty array when
-        no ``X`` was supplied.  pymlt's sign convention (``h + Xβ``) flips
+        no ``X`` was supplied.  mltpy's sign convention (``h + Xβ``) flips
         the sign relative to R ``tram::Polr`` (``h − Xβ``) — negate to
         compare.
         """
@@ -1787,7 +1787,7 @@ class Polr(ConditionalTransformationModel):
                 names = self.feature_names_in_ or [
                     f"X{j + 1}" for j in range(beta.size)
                 ]
-                lines += ["", "Coefficients (note: pymlt sign — negate for R):"]
+                lines += ["", "Coefficients (note: mltpy sign — negate for R):"]
                 lines.append(_format_wald_table(names, beta, se[K - 1 :]))
             except RuntimeError:
                 lines += [

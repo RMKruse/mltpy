@@ -1,8 +1,8 @@
 """Optimisation wrapper for conditional transformation models.
 
 This module contains no mathematical logic — it only orchestrates calls to
-:func:`~pymlt.likelihood.negative_log_likelihood` and
-:func:`~pymlt.constraints.build_constraints`.
+:func:`~mltpy.likelihood.negative_log_likelihood` and
+:func:`~mltpy.constraints.build_constraints`.
 
 Analogue to R's ``mltoptim.R`` (sequential solver attempts) and the ``maxtry``
 restart mechanism in ``mlt()``.
@@ -19,24 +19,24 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint, minimize
 
-from pymlt._auglag import AugLagOptions, AugLagResult, auglag_minimize
-from pymlt.basis import BernsteinBasis, InteractionBasis
-from pymlt.constraints import (
+from mltpy._auglag import AugLagOptions, AugLagResult, auglag_minimize
+from mltpy.basis import BernsteinBasis, InteractionBasis
+from mltpy.constraints import (
     build_constraint_matrices,
     build_constraint_matrices_interaction,
     build_constraints,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     BaseDistribution,
     DistOps,
     InfeasibleParameterError,
     _get_dist,
     _negative_log_likelihood_from_dist,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     hessian as _hessian,
 )
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
@@ -66,7 +66,7 @@ class OptimizerConfig:
         perturbed and projected back to the feasible region.
     use_gradient:
         If ``True`` (default), the analytical gradient from
-        :func:`~pymlt.likelihood.negative_log_likelihood` is passed to scipy.
+        :func:`~mltpy.likelihood.negative_log_likelihood` is passed to scipy.
         Set to ``False`` only for debugging.
     verbose:
         If ``True``, print a warning on each failed attempt.
@@ -76,22 +76,22 @@ class OptimizerConfig:
         If a :class:`numpy.random.Generator`, it is used directly.
         If ``None`` (default), draws are non-reproducible across runs.
     auglag_options:
-        :class:`~pymlt._auglag.AugLagOptions` controlling the PHR outer loop.
+        :class:`~mltpy._auglag.AugLagOptions` controlling the PHR outer loop.
         Only consulted when ``solver="auglag"``; ignored otherwise.  ``None``
         (default) uses :class:`AugLagOptions` defaults (alabama parity).
     lower:
         If not ``None``, fixes ``θ[0] = lower`` as an equality constraint
         (pins the lower-boundary Bernstein coefficient).  Honoured by every
-        solver: passes through to :func:`~pymlt.constraints.build_constraints`
+        solver: passes through to :func:`~mltpy.constraints.build_constraints`
         for SLSQP/trust-constr and
-        :func:`~pymlt.constraints.build_constraint_matrices` for auglag.
+        :func:`~mltpy.constraints.build_constraint_matrices` for auglag.
     upper:
         If not ``None``, fixes ``θ[n_params−1] = upper`` analogously.
     polish:
         If ``True`` (default), run a Newton-CG polish step after auglag
         converges when no monotonicity constraints are active (interior-MLE
         fits).  Uses ``trust-ncg`` seeded at auglag's θ-hat with the
-        analytical Hessian from :func:`~pymlt.likelihood.hessian`.  The
+        analytical Hessian from :func:`~mltpy.likelihood.hessian`.  The
         polished θ is accepted only when NLL does not increase by more than
         ``1e-12`` and the monotonicity cone is preserved.  Has no effect on
         ``slsqp`` / ``trust-constr`` solvers.
@@ -113,7 +113,7 @@ class OptimizerConfig:
           matrix sliced to the free columns.  The pin therefore holds to
           machine precision regardless of solver tolerance.  ``constraint_C_eq``
           is ``None`` on this path (no equality row exists).
-        * :class:`~pymlt.basis.InteractionBasis` is not yet supported —
+        * :class:`~mltpy.basis.InteractionBasis` is not yet supported —
           generalising to ``vec_C(Θ)`` indices needs an explicit ADR
           decision and raises :class:`NotImplementedError`.
 
@@ -214,7 +214,7 @@ def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     """Project an arbitrary vector to the monotone-non-decreasing cone.
 
     Uses the simplest valid projection: ``np.sort``.  The result satisfies
-    ``D @ theta_b >= 0`` (the :class:`~pymlt.constraints.MonotonicityConstraint`).
+    ``D @ theta_b >= 0`` (the :class:`~mltpy.constraints.MonotonicityConstraint`).
 
     Parameters
     ----------
@@ -248,7 +248,7 @@ def _make_objective(
     ``jac=True`` should be passed to scipy.  When False it returns a scalar
     and ``jac=None`` should be used.
 
-    :class:`~pymlt.likelihood.InfeasibleParameterError` from an infeasible
+    :class:`~mltpy.likelihood.InfeasibleParameterError` from an infeasible
     ``theta`` (h' ≤ 0) is caught and replaced by a large penalty so that the
     optimiser can back off rather than crash.  Any other exception — including
     plain ``ValueError`` for unsupported ``base_distribution`` or shape
@@ -535,11 +535,11 @@ def optimize(
     Parameters
     ----------
     basis:
-        :class:`~pymlt.basis.BernsteinBasis` instance defining the response
+        :class:`~mltpy.basis.BernsteinBasis` instance defining the response
         transformation.
     y:
         Observations — plain ``NDArray`` for exact data, or
-        :class:`~pymlt.variables.CensoredData` for censored data.
+        :class:`~mltpy.variables.CensoredData` for censored data.
     X:
         Optional covariate matrix, shape (n, q).  If given, the last
         ``q`` entries of the returned ``theta`` are regression coefficients.
@@ -863,7 +863,7 @@ def _optimize_interaction(
 
     Dispatches on ``config.solver`` and uses the Kronecker monotonicity
     constraint ``(D ⊗ I_q) @ vec(Θ) ≥ 0`` (built once via
-    :func:`~pymlt.constraints.build_constraint_matrices_interaction`) in the
+    :func:`~mltpy.constraints.build_constraint_matrices_interaction`) in the
     form each solver expects.  X is required — it cannot be ``None`` for an
     interaction model.
     """
@@ -1081,7 +1081,7 @@ def _interaction_scipy(
     """SLSQP / trust-constr path for the interaction basis.
 
     Both methods consume the same ``A_ineq`` block-diagonal matrix that
-    :func:`~pymlt.constraints.build_constraint_matrices_interaction` builds —
+    :func:`~mltpy.constraints.build_constraint_matrices_interaction` builds —
     SLSQP via a ``type='ineq'`` dict and trust-constr via a
     :class:`scipy.optimize.LinearConstraint` — without code changes anywhere
     else.

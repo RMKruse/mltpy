@@ -1,12 +1,12 @@
-"""Tests for pymlt._auglag: AugLagOptions, AugLagResult, auglag_minimize."""
+"""Tests for mltpy._auglag: AugLagOptions, AugLagResult, auglag_minimize."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from pymlt._auglag import AugLagOptions, auglag_minimize
-from pymlt.constraints import ConstraintMatrices, build_constraint_matrices
+from mltpy._auglag import AugLagOptions, auglag_minimize
+from mltpy.constraints import ConstraintMatrices, build_constraint_matrices
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -357,8 +357,8 @@ class TestBuildConstraintMatrices:
 class TestOptimizerAuglag:
     def test_solver_auglag_converges(self) -> None:
         """optimizer.optimize() with solver='auglag' converges on simple data."""
-        from pymlt.basis import BernsteinBasis
-        from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
+        from mltpy.basis import BernsteinBasis
+        from mltpy.optimizer import OptimizationResult, OptimizerConfig, optimize
 
         rng = np.random.default_rng(0)
         y = rng.uniform(0.05, 0.95, 60)
@@ -374,8 +374,8 @@ class TestOptimizerAuglag:
 
     def test_auglag_theta_non_decreasing(self) -> None:
         """Monotonicity constraint must be satisfied at the auglag optimum."""
-        from pymlt.basis import BernsteinBasis
-        from pymlt.optimizer import OptimizerConfig, optimize
+        from mltpy.basis import BernsteinBasis
+        from mltpy.optimizer import OptimizerConfig, optimize
 
         rng = np.random.default_rng(1)
         y = rng.uniform(0.05, 0.95, 80)
@@ -387,8 +387,8 @@ class TestOptimizerAuglag:
 
     def test_auglag_slsqp_agree(self) -> None:
         """Auglag and SLSQP find the same log-likelihood on the same data."""
-        from pymlt.basis import BernsteinBasis
-        from pymlt.optimizer import OptimizerConfig, optimize
+        from mltpy.basis import BernsteinBasis
+        from mltpy.optimizer import OptimizerConfig, optimize
 
         rng = np.random.default_rng(7)
         y = rng.uniform(0.05, 0.95, 60)
@@ -399,8 +399,8 @@ class TestOptimizerAuglag:
 
     def test_auglag_result_auglag_only_fields(self) -> None:
         """n_outer_iter and kkt_residual are None for SLSQP, set for auglag."""
-        from pymlt.basis import BernsteinBasis
-        from pymlt.optimizer import OptimizerConfig, optimize
+        from mltpy.basis import BernsteinBasis
+        from mltpy.optimizer import OptimizerConfig, optimize
 
         rng = np.random.default_rng(2)
         y = rng.uniform(0.05, 0.95, 40)
@@ -417,8 +417,8 @@ class TestOptimizerAuglag:
 
     def test_auglag_default_options(self) -> None:
         """None auglag_options falls back to AugLagOptions defaults."""
-        from pymlt.basis import BernsteinBasis
-        from pymlt.optimizer import OptimizerConfig, optimize
+        from mltpy.basis import BernsteinBasis
+        from mltpy.optimizer import OptimizerConfig, optimize
 
         rng = np.random.default_rng(3)
         y = rng.uniform(0.05, 0.95, 40)

@@ -1,4 +1,4 @@
-"""Tests for ``confint`` and ``confband`` on :class:`pymlt.ConditionalTransformationModel`.
+"""Tests for ``confint`` and ``confband`` on :class:`mltpy.ConditionalTransformationModel`.
 
 Covers:
 
@@ -22,8 +22,8 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
-from pymlt import MLT, CensoredData, ConvergenceWarning, NotFittedError
-from pymlt.tram import BoxCox, Colr, Coxph
+from mltpy import MLT, CensoredData, ConvergenceWarning, NotFittedError
+from mltpy.tram import BoxCox, Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -58,7 +58,7 @@ def _load_confband_baseline():
     ["trafo", "distribution", "survivor", "density", "hazard"],
 )
 def test_confband_baseline_matches_R(what):
-    """Pymlt's confband on the order-4 MLT normal baseline matches R."""
+    """Mltpy's confband on the order-4 MLT normal baseline matches R."""
     ref = _load_confband_baseline()
     ref_band_path = REF_DIR / f"confband_baseline_{what}.txt"
     if not ref_band_path.exists():
@@ -67,7 +67,7 @@ def test_confband_baseline_matches_R(what):
     m = len(ref["y_grid"])
     ref_band = np.loadtxt(ref_band_path).reshape(m, 3)
 
-    # Fit pymlt on the same y, order=4, support=(0,1).  The MLE converges to
+    # Fit mltpy on the same y, order=4, support=(0,1).  The MLE converges to
     # the same theta as R (verified by tests/test_mlt.py), so vcov and the
     # resulting band match by construction.
     model = MLT(order=4, support=(0.0, 1.0)).fit(ref["y"])
@@ -75,7 +75,7 @@ def test_confband_baseline_matches_R(what):
 
     band = model.confband(ref["y_grid"], level=0.95, what=what)
     assert band.shape == (m, 3)
-    # Tolerance is loose enough to absorb the small residual between pymlt's
+    # Tolerance is loose enough to absorb the small residual between mltpy's
     # MLE and R's (≈1e-6 per-coefficient difference from the two optimisers
     # converging to the same point from different starting simplices).
     np.testing.assert_allclose(band, ref_band, rtol=5e-5, atol=1e-6)
@@ -115,17 +115,17 @@ def _load_confint_reference(model_name: str):
     return data
 
 
-def _apply_pymlt_sign(ci_R: np.ndarray, p: int, beta_sign: float) -> np.ndarray:
-    """Convert an R-convention CI table to pymlt's sign convention.
+def _apply_mltpy_sign(ci_R: np.ndarray, p: int, beta_sign: float) -> np.ndarray:
+    """Convert an R-convention CI table to mltpy's sign convention.
 
-    pymlt always uses ``h = h_b + x'β``.  tram's ``BoxCox`` uses
+    mltpy always uses ``h = h_b + x'β``.  tram's ``BoxCox`` uses
     ``negative=TRUE`` (``h = h_b - x'β``), so its β is the negative of
-    pymlt's.  For those rows, flip sign and swap (lower, upper).
+    mltpy's.  For those rows, flip sign and swap (lower, upper).
     """
     if beta_sign == 1.0:
         return ci_R.copy()
     out = ci_R.copy()
-    # For β rows: pymlt_lower = -R_upper, pymlt_upper = -R_lower
+    # For β rows: mltpy_lower = -R_upper, mltpy_upper = -R_lower
     out[p:, :] = -ci_R[p:, ::-1]
     return out
 
@@ -134,21 +134,21 @@ def test_confint_boxcox_matches_R():
     ref = _load_confint_reference("boxcox")
     a, b = ref["support"]
     m = BoxCox(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
-    ci_pymlt = m.confint(level=0.95)
-    ci_expected = _apply_pymlt_sign(ref["ci_R"], p=5, beta_sign=-1.0)
+    ci_mltpy = m.confint(level=0.95)
+    ci_expected = _apply_mltpy_sign(ref["ci_R"], p=5, beta_sign=-1.0)
     # Require fitted theta to match R (verified elsewhere) so CI matches.
-    # Tolerance accounts for the small difference between R's and pymlt's
+    # Tolerance accounts for the small difference between R's and mltpy's
     # optimiser-returned MLEs (the vcov formula itself is validated tighter
     # in tests/test_vcov.py).
-    np.testing.assert_allclose(ci_pymlt, ci_expected, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(ci_mltpy, ci_expected, rtol=1e-3, atol=1e-3)
 
 
 def test_confint_colr_matches_R():
     ref = _load_confint_reference("colr")
     a, b = ref["support"]
     m = Colr(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
-    ci_pymlt = m.confint(level=0.95)
-    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-3)
+    ci_mltpy = m.confint(level=0.95)
+    np.testing.assert_allclose(ci_mltpy, ref["ci_R"], rtol=1e-3, atol=1e-3)
 
 
 def test_confint_coxph_matches_R():
@@ -156,18 +156,18 @@ def test_confint_coxph_matches_R():
     a, b = ref["support"]
     cd = CensoredData.right_censored(ref["y"], censored=ref["event"] == 0)
     m = Coxph(support=(float(a), float(b)), order=4).fit(cd, X=ref["x"])
-    ci_pymlt = m.confint(level=0.95)
-    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-3)
+    ci_mltpy = m.confint(level=0.95)
+    np.testing.assert_allclose(ci_mltpy, ref["ci_R"], rtol=1e-3, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
 # R parity: profile-likelihood confint for tram fits (BoxCox, Colr, Coxph)
 #
 # Issue #88 — extends the Wald-CI parity block above by inverting the χ²_1
-# LR test in both R and pymlt and comparing the resulting (k, 2) tables on
+# LR test in both R and mltpy and comparing the resulting (k, 2) tables on
 # the same three tram fixtures.  R-side reference is emitted by
 # ``.write_profile_ci_ref`` in ``reference/generate_reference.R``; the
-# pymlt side calls ``confint(level=0.95, type="profile")`` from #87.
+# mltpy side calls ``confint(level=0.95, type="profile")`` from #87.
 #
 # Tolerance is looser than the Wald block (rtol=1e-3, atol=1e-6 vs 1e-3)
 # because each side runs its own root finder over an iteratively-refit
@@ -215,16 +215,16 @@ def _load_profile_ci_reference(model_name: str):
 def test_confint_profile_boxcox_matches_R():
     """Profile CI on BoxCox(y ~ x) matches R after the β sign flip.
 
-    pymlt parameterises ``h + x'β``; tram's ``BoxCox(negative=TRUE)`` uses
-    ``h - x'β``, so its β is the negative of pymlt's.  ``_apply_pymlt_sign``
+    mltpy parameterises ``h + x'β``; tram's ``BoxCox(negative=TRUE)`` uses
+    ``h - x'β``, so its β is the negative of mltpy's.  ``_apply_mltpy_sign``
     flips the β row (here row p=5, the single covariate) before comparing.
     """
     ref = _load_profile_ci_reference("boxcox")
     a, b = ref["support"]
     m = BoxCox(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
-    ci_pymlt = m.confint(level=0.95, type="profile")
-    ci_expected = _apply_pymlt_sign(ref["ci_R"], p=5, beta_sign=-1.0)
-    np.testing.assert_allclose(ci_pymlt, ci_expected, rtol=1e-3, atol=1e-6)
+    ci_mltpy = m.confint(level=0.95, type="profile")
+    ci_expected = _apply_mltpy_sign(ref["ci_R"], p=5, beta_sign=-1.0)
+    np.testing.assert_allclose(ci_mltpy, ci_expected, rtol=1e-3, atol=1e-6)
 
 
 def test_confint_profile_colr_matches_R():
@@ -232,15 +232,15 @@ def test_confint_profile_colr_matches_R():
     ref = _load_profile_ci_reference("colr")
     a, b = ref["support"]
     m = Colr(support=(float(a), float(b)), order=4).fit(ref["y"], X=ref["x"])
-    ci_pymlt = m.confint(level=0.95, type="profile")
-    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-6)
+    ci_mltpy = m.confint(level=0.95, type="profile")
+    np.testing.assert_allclose(ci_mltpy, ref["ci_R"], rtol=1e-3, atol=1e-6)
 
 
 def test_confint_profile_coxph_matches_R():
     """Profile CI on Coxph(Surv(y, event) ~ x) matches R.
 
     Right-censored fit, no sign flip.  The Bernstein MLE has Bs2=Bs3=Bs4
-    stacked on the monotonicity boundary — both R and pymlt land on the
+    stacked on the monotonicity boundary — both R and mltpy land on the
     same constrained-refit fallback there, so parity still holds at the
     standard tolerance.
     """
@@ -248,8 +248,8 @@ def test_confint_profile_coxph_matches_R():
     a, b = ref["support"]
     cd = CensoredData.right_censored(ref["y"], censored=ref["event"] == 0)
     m = Coxph(support=(float(a), float(b)), order=4).fit(cd, X=ref["x"])
-    ci_pymlt = m.confint(level=0.95, type="profile")
-    np.testing.assert_allclose(ci_pymlt, ref["ci_R"], rtol=1e-3, atol=1e-6)
+    ci_mltpy = m.confint(level=0.95, type="profile")
+    np.testing.assert_allclose(ci_mltpy, ref["ci_R"], rtol=1e-3, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +706,7 @@ def test_profile_ci_boundary_failure_returns_signed_inf_under_parm_none(
     endpoints saturate to ±inf with a warning naming the parameter and
     the failure kind, while other rows are finite.
     """
-    from pymlt.model import _ProfileInnerFailure
+    from mltpy.model import _ProfileInnerFailure
 
     model = small_mlt_for_profile
     real_loglik_at = model._profile_loglik_at
@@ -750,7 +750,7 @@ def test_profile_ci_boundary_failure_under_parm_explicit_raises(
     naming the parameter and the kind — #89 acceptance criterion 1, strict
     side: explicit caller gets the hard failure to inspect.
     """
-    from pymlt.model import _ProfileInnerFailure
+    from mltpy.model import _ProfileInnerFailure
 
     model = small_mlt_for_profile
     real_loglik_at = model._profile_loglik_at
@@ -781,7 +781,7 @@ def _make_inner_optimize_patcher(real_optimize, target_j, *, mode, real_theta):
     — theta drifts from the pin).  All other ``optimize`` calls pass through
     to the real implementation.
     """
-    from pymlt.optimizer import OptimizationResult
+    from mltpy.optimizer import OptimizationResult
 
     def patched(*args, **kwargs):
         cfg = kwargs.get("config")
@@ -818,13 +818,13 @@ def test_profile_ci_convergence_failure_returns_nan_under_parm_none(
     """parm=None + inner-fit non-convergence (KKT residual >> 1e-3 with no
     theta-pin drift) → warn + NaN endpoint — #89 acceptance criterion 4.
 
-    Patches ``pymlt.model.optimize`` to fabricate a non-convergent inner
+    Patches ``mltpy.model.optimize`` to fabricate a non-convergent inner
     result whenever ``fixed_params={0: v}`` is requested.  Asserts the
     public surface translates this into NaN row-0 endpoints with the
     other rows still finite and a ConvergenceWarning naming the index
     and the kind.
     """
-    import pymlt.model as pm
+    import mltpy.model as pm
 
     model = small_mlt_for_profile
     patcher = _make_inner_optimize_patcher(
@@ -856,8 +856,8 @@ def test_profile_ci_inner_loglik_detects_boundary_vs_convergence(
     pinned refit returned ``theta[j]`` drifted from ``v`` (boundary) or
     just non-convergent KKT (convergence).
     """
-    import pymlt.model as pm
-    from pymlt.model import _ProfileInnerFailure
+    import mltpy.model as pm
+    from mltpy.model import _ProfileInnerFailure
 
     model = small_mlt_for_profile
 
@@ -888,7 +888,7 @@ def test_profile_ci_convergence_failure_under_parm_explicit_raises(
     """parm=[j] singleton + inner-fit non-convergence → RuntimeError naming
     the parameter and the kind — #89 acceptance criterion 4, strict side.
     """
-    import pymlt.model as pm
+    import mltpy.model as pm
 
     model = small_mlt_for_profile
     patcher = _make_inner_optimize_patcher(

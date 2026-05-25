@@ -3,7 +3,7 @@
 End-to-end coverage of the ``tram::Colr(y ~ x_d | x_s, data, support, order)``
 convenience surface: the kwarg must thread through to the scaled-baseline
 likelihood (#71) and the scaled-predict path (#72) without callers having to
-reach for :class:`pymlt.MLT` directly.
+reach for :class:`mltpy.MLT` directly.
 
 Reference data lives in ``reference/scaling_colr_*`` and is produced by
 ``reference/generate_reference.R``.
@@ -11,7 +11,7 @@ Reference data lives in ``reference/scaling_colr_*`` and is produced by
 Sign conventions:
 
 * ``tram::Colr`` uses ``negative = FALSE`` (so ``h + X·β``), unlike
-  ``tram::BoxCox``.  pymlt parametrises ``h + X·β`` identically, so β is
+  ``tram::BoxCox``.  mltpy parametrises ``h + X·β`` identically, so β is
   sign-aligned with R ``tram::Colr``.
 * γ is sign-aligned across the two parameterisations (ADR 0002, Decision 5).
 """
@@ -23,7 +23,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt.tram import Colr
+from mltpy.tram import Colr
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -132,7 +132,7 @@ def test_colr_theta_beta_gamma_match_R(
     np.testing.assert_allclose(
         theta_b, colr_scaling_ref["theta_b"], rtol=1e-4, atol=1e-5
     )
-    # tram::Colr uses negative=FALSE (h + Xβ); pymlt parametrises h + Xβ
+    # tram::Colr uses negative=FALSE (h + Xβ); mltpy parametrises h + Xβ
     # identically, so β is sign-aligned with R `tram::Colr`.
     np.testing.assert_allclose(beta, colr_scaling_ref["beta_r"], rtol=1e-4, atol=1e-5)
     # γ is sign-aligned across the two parameterisations (ADR 0002, Decision 5).

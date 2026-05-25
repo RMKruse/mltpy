@@ -1,4 +1,4 @@
-"""Tests for pymlt.model — ConditionalTransformationModel and MLT."""
+"""Tests for mltpy.model — ConditionalTransformationModel and MLT."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from hypothesis import strategies as st
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
-from pymlt.basis import BernsteinBasis
-from pymlt.model import (
+from mltpy.basis import BernsteinBasis
+from mltpy.model import (
     MLT,
     AnovaResult,
     ConditionalTransformationModel,
@@ -21,8 +21,8 @@ from pymlt.model import (
     NotFittedError,
     anova,
 )
-from pymlt.optimizer import OptimizerConfig
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.optimizer import OptimizerConfig
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -133,7 +133,7 @@ class TestFit:
 
         Pinned to ``solver="slsqp"`` so ``max_iter=1`` actually starves the
         scipy inner solve.  Auglag's outer budget is controlled separately by
-        :attr:`~pymlt._auglag.AugLagOptions.max_outer_iter` and ignores
+        :attr:`~mltpy._auglag.AugLagOptions.max_outer_iter` and ignores
         ``max_iter``; the equivalent starvation path for auglag is covered in
         :mod:`tests.test_auglag`.
         """
@@ -278,7 +278,7 @@ class TestPredict:
     def test_non_monotone_theta_raises_on_hp_dependent_what(self, what):
         """Manually corrupting theta_ to violate monotonicity must raise on
         any predict path that uses h'(y), not silently floor to log(tiny)."""
-        from pymlt.likelihood import InfeasibleParameterError
+        from mltpy.likelihood import InfeasibleParameterError
 
         bad = self.model.theta_.copy()
         bad[: self.model.basis.order + 1] = bad[0]
@@ -327,8 +327,8 @@ class TestScore:
 
     def test_score_geq_init(self):
         """Score after fit >= score at initial theta (linspace)."""
-        from pymlt.likelihood import log_likelihood
-        from pymlt.optimizer import _initial_theta
+        from mltpy.likelihood import log_likelihood
+        from mltpy.optimizer import _initial_theta
 
         basis = BernsteinBasis(order=3, support=(0.0, 1.0))
         model = ConditionalTransformationModel(basis)
@@ -849,7 +849,7 @@ class TestPredictAllWhats:
         D = model.basis.derivative(grid, order=1)
         h = B @ model.theta_[:p]
         hp = D @ model.theta_[:p]
-        from pymlt.likelihood import _get_dist
+        from mltpy.likelihood import _get_dist
 
         dist = _get_dist(model.base_distribution)
         return model, grid, h, hp, dist
@@ -1301,8 +1301,8 @@ def test_integration_r_reference():
     model.fit(y_ref)
 
     # Log-likelihoods must agree (within tolerance from different optimisers)
-    from pymlt.basis import BernsteinBasis
-    from pymlt.likelihood import log_likelihood
+    from mltpy.basis import BernsteinBasis
+    from mltpy.likelihood import log_likelihood
 
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_r = log_likelihood(theta_r, basis, y_ref)
@@ -1315,8 +1315,8 @@ def test_integration_r_reference():
 # ---------------------------------------------------------------------------
 # R reference: max_extreme_value and exponential base distributions
 #
-# Validates that pymlt.log_likelihood agrees with R's mlt::logLik at R's
-# fitted theta for the new base distributions, and that pymlt's own fit
+# Validates that mltpy.log_likelihood agrees with R's mlt::logLik at R's
+# fitted theta for the new base distributions, and that mltpy's own fit
 # reaches at least that log-likelihood.
 # ---------------------------------------------------------------------------
 
@@ -1330,7 +1330,7 @@ class TestExponentialWithCovariates:
     """
 
     def _fit(self, seed: int = 31, n: int = 100, q: int = 2):
-        from pymlt.basis import BernsteinBasis
+        from mltpy.basis import BernsteinBasis
 
         rng = np.random.default_rng(seed)
         y = rng.uniform(0.05, 0.95, n)
@@ -1352,7 +1352,7 @@ class TestExponentialWithCovariates:
         Stronger than checking ``.converged``: assert both solvers reach the
         same log-likelihood, which is the property a user actually cares about.
         """
-        from pymlt.optimizer import OptimizerConfig
+        from mltpy.optimizer import OptimizerConfig
 
         model, basis, y, X = self._fit()
         slsqp_model = ConditionalTransformationModel(
@@ -1417,7 +1417,7 @@ class TestExponentialWithCovariates:
     ],
 )
 def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_file):
-    """LL at R's theta matches R; pymlt fit reaches ≥ R's LL minus 0.5 nats."""
+    """LL at R's theta matches R; mltpy fit reaches ≥ R's LL minus 0.5 nats."""
     required = [REF_DIR / f for f in (theta_file, y_file, ll_file)]
     if not all(p.exists() for p in required):
         pytest.skip(
@@ -1430,15 +1430,15 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
     ll_r = float(np.loadtxt(required[2]))
 
     order = len(theta_r) - 1
-    from pymlt.basis import BernsteinBasis
-    from pymlt.likelihood import log_likelihood
+    from mltpy.basis import BernsteinBasis
+    from mltpy.likelihood import log_likelihood
 
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_py_at_theta_r = log_likelihood(theta_r, basis, y_ref, base_distribution=name)
     # Same formula, same data, same theta → exact agreement with R mlt
     np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-8)
 
-    # pymlt's own fit should reach at least R's LL (minus optimiser slack)
+    # mltpy's own fit should reach at least R's LL (minus optimiser slack)
     model = MLT(order=order, support=(0.0, 1.0), base_distribution=name).fit(y_ref)
     ll_py = model.score(y_ref)
     assert ll_py >= ll_r - 0.5, (
@@ -1456,16 +1456,16 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
 
 def _refit_at_r_theta(model, theta_R, beta_sign):
     """Inject R's theta (with sign-flipped beta block if needed) into a fitted
-    pymlt model so residuals() evaluates at R's MLE rather than pymlt's.
+    mltpy model so residuals() evaluates at R's MLE rather than mltpy's.
 
     Mirrors the convention used in tests/test_vcov.py — tram::BoxCox uses
-    ``negative = TRUE`` (β sign flipped), Colr / Coxph match pymlt directly.
+    ``negative = TRUE`` (β sign flipped), Colr / Coxph match mltpy directly.
     """
     p = model.basis.order + 1
-    theta_pymlt = theta_R.copy()
-    if beta_sign != 1.0 and len(theta_pymlt) > p:
-        theta_pymlt[p:] *= beta_sign
-    model.theta_ = theta_pymlt
+    theta_mltpy = theta_R.copy()
+    if beta_sign != 1.0 and len(theta_mltpy) > p:
+        theta_mltpy[p:] *= beta_sign
+    model.theta_ = theta_mltpy
     return model
 
 
@@ -1512,7 +1512,7 @@ class TestResidualsRReference:
         return _refit_at_r_theta(m, ref["theta"], beta_sign)
 
     def test_boxcox(self):
-        from pymlt.tram import BoxCox
+        from mltpy.tram import BoxCox
 
         ref = self._load("boxcox")
         m = self._fit_and_inject(BoxCox, ref, beta_sign=-1.0)
@@ -1527,7 +1527,7 @@ class TestResidualsRReference:
         )
 
     def test_colr(self):
-        from pymlt.tram import Colr
+        from mltpy.tram import Colr
 
         ref = self._load("colr")
         m = self._fit_and_inject(Colr, ref, beta_sign=+1.0)
@@ -1542,7 +1542,7 @@ class TestResidualsRReference:
         )
 
     def test_coxph(self):
-        from pymlt.tram import Coxph
+        from mltpy.tram import Coxph
 
         ref = self._load("coxph")
         m = self._fit_and_inject(Coxph, ref, beta_sign=+1.0)
@@ -1562,7 +1562,7 @@ class TestResidualsProperties:
         """Score equation: sum of intercept-score residuals at the MLE is 0."""
         rng = np.random.default_rng(0)
         y = rng.normal(0, 1, 200)
-        from pymlt.tram import BoxCox
+        from mltpy.tram import BoxCox
 
         m = BoxCox(support=(float(y.min() - 0.1), float(y.max() + 0.1)), order=4).fit(y)
         # Sum of intercept-score residuals == ∂(-ℓ)/∂α at the MLE; bounded by
@@ -1573,7 +1573,7 @@ class TestResidualsProperties:
         """Cox-Snell residuals ~ Exp(1) under a correctly specified model."""
         rng = np.random.default_rng(1)
         y = rng.normal(0, 1, 1000)
-        from pymlt.tram import BoxCox
+        from mltpy.tram import BoxCox
 
         m = BoxCox(support=(float(y.min() - 0.1), float(y.max() + 0.1)), order=6).fit(y)
         r = m.residuals("cox-snell")
@@ -1590,7 +1590,7 @@ class TestResidualsProperties:
 
     def test_residuals_with_right_censoring_runs(self):
         """Right-censored fits produce length-n vectors with sane signs."""
-        from pymlt.tram import Coxph
+        from mltpy.tram import Coxph
 
         rng = np.random.default_rng(3)
         n = 80

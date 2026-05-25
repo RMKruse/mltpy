@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-pymlt is currently pre-1.0 and follows a rolling release model: only the
+mltpy is currently pre-1.0 and follows a rolling release model: only the
 latest published version on PyPI receives security fixes. Patches are not
 back-ported to earlier releases.
 
@@ -15,8 +15,8 @@ We recommend always running the most recent release. The installed version
 is available via:
 
 ```python
-import pymlt
-print(pymlt.__version__)
+import mltpy
+print(mltpy.__version__)
 ```
 
 ## Reporting a Vulnerability
@@ -28,21 +28,21 @@ Report suspected vulnerabilities privately through either of the following
 channels:
 
 1. **GitHub Security Advisories** (preferred) — open a private report at
-   <https://github.com/RMKruse/pymlt/security/advisories/new>.
+   <https://github.com/RMKruse/mltpy/security/advisories/new>.
 2. **Email** — contact the maintainer at **kontakt.ddl@proton.me**
-   with the subject line `[pymlt security]`.
+   with the subject line `[mltpy security]`.
 
 To help us triage quickly, please include where you can:
 
 - A description of the issue and the potential impact.
-- The pymlt version, Python version, and OS where it was observed.
+- The mltpy version, Python version, and OS where it was observed.
 - Steps to reproduce, ideally a minimal code sample or input that triggers
   the behaviour.
 - Any relevant stack traces or logs.
 
 ### What to expect
 
-pymlt is maintained on a best-effort basis. We will:
+mltpy is maintained on a best-effort basis. We will:
 
 - Acknowledge your report as soon as we reasonably can.
 - Provide an initial assessment and severity classification once the issue
@@ -56,7 +56,7 @@ any public disclosure (coordinated disclosure).
 
 ## Scope and Threat Model
 
-pymlt is a numerical/statistical library for fitting Conditional
+mltpy is a numerical/statistical library for fitting Conditional
 Transformation Models. It performs in-process numerical computation on
 NumPy arrays and has no network, filesystem-write, or subprocess
 functionality at runtime. Its only hard dependencies are `numpy` and
@@ -64,22 +64,22 @@ functionality at runtime. Its only hard dependencies are `numpy` and
 
 Reports that fall within scope include, for example:
 
-- Memory-safety or code-execution issues reachable through pymlt's public
+- Memory-safety or code-execution issues reachable through mltpy's public
   API with well-formed inputs.
-- Vulnerabilities introduced by pymlt itself (not its dependencies) that
+- Vulnerabilities introduced by mltpy itself (not its dependencies) that
   could compromise the host process.
 
 The following are generally **out of scope**:
 
 - Crashes, exceptions, `RuntimeError` convergence failures, or non-finite
   results caused by malformed, adversarial, or numerically degenerate input
-  arrays. pymlt validates shapes and mathematical preconditions but does not
+  arrays. mltpy validates shapes and mathematical preconditions but does not
   treat its input arrays as a security boundary — do not feed untrusted data
   to a fitting routine and rely on it as a sandbox.
-- Loading model objects from untrusted sources. pymlt model objects may be
+- Loading model objects from untrusted sources. mltpy model objects may be
   serialised with `pickle`; **never unpickle data you do not trust**, as
   `pickle` can execute arbitrary code by design. This is a property of
-  `pickle`, not a pymlt vulnerability.
+  `pickle`, not a mltpy vulnerability.
 - Vulnerabilities in `numpy`, `scipy`, `matplotlib`, `pandas`, or other
   third-party packages — please report those to the respective projects.
   We will, however, update our version constraints in response to upstream

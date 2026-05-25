@@ -47,18 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `docs/examples/05_scaling_terms.ipynb`.
 - `Survreg` — parametric survival model on the log-time scale (R
   `tram::Survreg`). Fits `h(log t)` under the `"weibull"` (default),
-  `"lognormal"`, or `"loglogistic"` family. Re-exported via `pymlt.Survreg`
+  `"lognormal"`, or `"loglogistic"` family. Re-exported via `mltpy.Survreg`
   and R-validated against `tram::Survreg`.
 - `Lehmann` — proportional reverse-time hazards model for right-censored data
   (the dual of `Coxph`), using the new `"max_extreme_value"` base distribution
   (standard Gumbel) to realise `-log F(t|x) = h(t) + x'β`. Re-exported via
-  `pymlt.Lehmann`.
+  `mltpy.Lehmann`.
 - `"max_extreme_value"` base distribution (standard / right Gumbel) — the
   reverse-time-hazards link used by `Lehmann`.
 - Additional basis families: `OneHotBasis`, `InterceptBasis` (non-negative
   partition-of-unity x-bases for stratified / interaction terms),
   `PolynomialBasis`, `LegendreBasis`, and `LogBasis`. All re-exported from
-  `pymlt`.
+  `mltpy`.
 - Profile-likelihood confidence intervals — `confint(level, parm, type="profile")`
   inverts the χ²₁ likelihood-ratio test by refitting under
   `OptimizerConfig.fixed_params` and brent-q'ing the bracket. The appropriate
@@ -68,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `wald_test(R, r, vcov, regularize)` for linear restrictions `Rθ = r`,
   returning a `WaldTestResult` dataclass (`statistic`, `df`, `p_value`,
   `vcov_type`). Uses either the inverse-information or the HC0 sandwich
-  variance. Re-exported via `pymlt.WaldTestResult`.
+  variance. Re-exported via `mltpy.WaldTestResult`.
 - HC0 sandwich standard errors — `sandwich_se()` and `sandwich_vcov()` on
   `ConditionalTransformationModel`.
 - `OptimizerConfig.fixed_params` — pin a subset of parameters to fixed values
@@ -135,7 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `"min_extreme_value"` base distribution (reversed Gumbel / standard minimum
   extreme value) — the link that realises the Cox proportional hazards model
   `log[-log S(t)] = h(t)`; `Coxph` now uses it by default
-- Systematic validation harness comparing pymlt output against R `mlt`
+- Systematic validation harness comparing mltpy output against R `mlt`
   reference runs, with XFAIL/XPASS tracking (`validation/`)
 - Gradient verification suite — 79 tests across censoring types, base
   distributions, θ positions, and covariate modes, including narrow-interval
@@ -155,7 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `fit()`, `optimize()`, `score()`, and `log_likelihood()`
 - `Lm` class — `_TramModel` subclass fixing `order=1`, normal base, and
   uncensored data; exposes `sigma_`, `intercept_`, `coef_`, and
-  `fitted_transformation(y)`. Re-exported via `pymlt.Lm`.
+  `fitted_transformation(y)`. Re-exported via `mltpy.Lm`.
   R-validated against `tram::Lm` and `lm()` for both the intercept-only and
   single-covariate cases (`tram.py`, `reference/lm_*`, `tests/test_tram.py`)
 - `Polr` (proportional-odds ordinal regression) — subclass of
@@ -163,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `fit()` (the response level count `K` is only known then). Uses
   `OrdinalBasis(K)` (degenerate one-hot cutpoint basis) and interval
   censoring; exposes `predict_proba` / `predict_class`. Sign convention:
-  pymlt parameterises `h + X·β`, so `Polr.coef_` is the negative of R
+  mltpy parameterises `h + X·β`, so `Polr.coef_` is the negative of R
   `tram::Polr`'s `beta`.
 - PHR augmented Lagrangian solver (`_auglag.py`: `auglag_minimize`,
   `AugLagOptions`, `AugLagResult`) — mirrors R `mlt`'s `alabama::auglag` and
@@ -203,7 +203,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   censoring (lower for right-cens, upper for left-cens, midpoint for
   interval-cens). R-validated against `residuals(fit)` and
   `-log(predict(fit, type="survivor"))` for BoxCox / Colr / Coxph fits
-  (`pymlt/model.py`, `pymlt/likelihood.py`, `reference/residuals_*`,
+  (`mltpy/model.py`, `mltpy/likelihood.py`, `reference/residuals_*`,
   `tests/test_model.py::TestResiduals*`)
 - Observation weights and offset support across the full model pipeline
   (`fit`, `predict`, `score`, `confband`, `residuals`, `estfun`):

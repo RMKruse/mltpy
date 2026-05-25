@@ -9,11 +9,11 @@ match at ``rtol=1e-5`` / ``atol=1e-7``.
 flipped to upper-tail censoring (R does not expose a Colr left-censoring
 helper, so we mirror the upper-tail data through ``-y`` and use the same
 likelihood path).  The dedicated ``RIGHT`` and ``INTERVAL`` fixtures
-exercise their branches directly via :class:`pymlt.variables.CensoredData`.
+exercise their branches directly via :class:`mltpy.variables.CensoredData`.
 
 Sign convention: ``tram::BoxCox`` uses ``negative = TRUE`` (so ``h − X·β``)
-and pymlt's β compares against ``-β_R``.  ``tram::Coxph`` and ``tram::Colr``
-use ``negative = FALSE`` (``h + X·β``) — same sign as pymlt — so the parity
+and mltpy's β compares against ``-β_R``.  ``tram::Coxph`` and ``tram::Colr``
+use ``negative = FALSE`` (``h + X·β``) — same sign as mltpy — so the parity
 test does *not* flip those β blocks.  γ is sign-aligned across all three
 (ADR 0002 Decision 5).
 """
@@ -25,10 +25,10 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt import MLT
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import negative_log_likelihood
-from pymlt.variables import CensoredData, CensoringType
+from mltpy import MLT
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import negative_log_likelihood
+from mltpy.variables import CensoredData, CensoringType
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -104,7 +104,7 @@ def test_coxph_right_scaled_matches_R(coxph_ref: dict) -> None:
     np.testing.assert_allclose(
         model.theta_[:p], coxph_ref["theta_b"], rtol=1e-4, atol=1e-5
     )
-    # Coxph uses negative=FALSE; β sign-aligned with pymlt.
+    # Coxph uses negative=FALSE; β sign-aligned with mltpy.
     np.testing.assert_allclose(
         model.theta_[p : p + q_d], coxph_ref["beta_r"], rtol=1e-4, atol=1e-5
     )
@@ -221,7 +221,7 @@ def test_colr_scaled_matches_R(colr_ref: dict) -> None:
     np.testing.assert_allclose(
         model.theta_[:p], colr_ref["theta_b"], rtol=1e-4, atol=1e-5
     )
-    # Colr uses negative=FALSE; β sign-aligned with pymlt.
+    # Colr uses negative=FALSE; β sign-aligned with mltpy.
     np.testing.assert_allclose(
         model.theta_[p : p + q_d], colr_ref["beta_r"], rtol=1e-4, atol=1e-5
     )

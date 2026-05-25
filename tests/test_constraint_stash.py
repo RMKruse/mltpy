@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from pymlt.basis import BernsteinBasis, InteractionBasis, OneHotBasis
-from pymlt.model import MLT, ConditionalTransformationModel
-from pymlt.optimizer import OptimizerConfig
-from pymlt.tram import Coxph
+from mltpy.basis import BernsteinBasis, InteractionBasis, OneHotBasis
+from mltpy.model import MLT, ConditionalTransformationModel
+from mltpy.optimizer import OptimizerConfig
+from mltpy.tram import Coxph
 
 # ---------------------------------------------------------------------------
 # Fixtures

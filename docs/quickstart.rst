@@ -1,7 +1,7 @@
 Quick start
 ===========
 
-pymlt fits a monotone transformation ``h(y|x)`` such that ``h(Y|X)`` follows
+mltpy fits a monotone transformation ``h(y|x)`` such that ``h(Y|X)`` follows
 a known reference distribution (standard normal by default). Once fitted,
 the model answers distributional queries — CDF, density, quantile, hazard,
 survivor, cumulative hazard, odds, the transformation itself, and the
@@ -14,12 +14,12 @@ and prints the estimated median.
 .. code-block:: python
 
    import numpy as np
-   import pymlt
+   import mltpy
 
    rng = np.random.default_rng(0)
    y = rng.lognormal(mean=3.5, sigma=0.8, size=200).clip(0, 200)
 
-   model = pymlt.MLT(order=6, support=(0, 200))
+   model = mltpy.MLT(order=6, support=(0, 200))
    model.fit(y)
 
    grid   = np.linspace(10, 180, 100)

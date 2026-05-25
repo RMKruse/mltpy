@@ -3,8 +3,8 @@
 **Date:** 2026-05-21  
 **Status:** Accepted  
 **Deciders:** RMKruse  
-**Issue:** [#69 Scaling Terms: ADR for scaled-baseline API and monotonicity strategy](https://github.com/RMKruse/pymlt/issues/69)  
-**Parent:** [#28 Scaling Terms (epic)](https://github.com/RMKruse/pymlt/issues/28), [#33 Architectural extensions](https://github.com/RMKruse/pymlt/issues/33)
+**Issue:** [#69 Scaling Terms: ADR for scaled-baseline API and monotonicity strategy](https://github.com/RMKruse/mltpy/issues/69)  
+**Parent:** [#28 Scaling Terms (epic)](https://github.com/RMKruse/mltpy/issues/28), [#33 Architectural extensions](https://github.com/RMKruse/mltpy/issues/33)
 
 ---
 
@@ -81,7 +81,7 @@ same message family as the existing `X_new` checks.
 
 **Centring:** users are responsible for column-centring their scaling
 design if they want `γ = 0` to correspond to the marginal-mean variance.
-No automatic centring is performed — mirroring how pymlt does not
+No automatic centring is performed — mirroring how mltpy does not
 auto-centre `X` today.
 
 **Rejected alternatives:**
@@ -245,8 +245,8 @@ The factor of **0.5 in the exponent** matches mlt's internal convention
 (`mlt:::tmlt` evaluates `sterm <- exp(0.5 * <scaling_predict>)`), so γ is
 sign- *and* magnitude-aligned with R `tram`'s scaling coefficient.  This
 was discovered while implementing the tracer-bullet slice (#70) — without
-the 0.5 factor, pymlt's γ converges to half R's γ even though the fitted
-likelihood matches.  See `pymlt/likelihood.py::_ll_none` for the
+the 0.5 factor, mltpy's γ converges to half R's γ even though the fitted
+likelihood matches.  See `mltpy/likelihood.py::_ll_none` for the
 implementation.
 
 Then
@@ -291,9 +291,9 @@ the existing `_ll_interval` structure.
 
 ## Decision 5 — Sign Convention vs. R `tram`
 
-pymlt parameterises `h + X_d · β`; R `tram::*` parameterises
+mltpy parameterises `h + X_d · β`; R `tram::*` parameterises
 `h − X_d · β` (documented for `Polr` and inherited by the rest of the
-`_TramModel` subclasses).  pymlt's `β` is therefore the **negative** of
+`_TramModel` subclasses).  mltpy's `β` is therefore the **negative** of
 R's `β`.
 
 For the scaling block, R `tram::Lm(..., scale = ~ z)` parameterises
@@ -301,7 +301,7 @@ For the scaling block, R `tram::Lm(..., scale = ~ z)` parameterises
     h_R(y | x_d, x_s) = h_0(y) · exp(0.5 · x_s · γ_R) − x_d · β_R,
 
 i.e. the sign on `β` flips but the scaling block enters with the
-**same sign *and* magnitude** as ours.  So pymlt's `γ` is sign-aligned
+**same sign *and* magnitude** as ours.  So mltpy's `γ` is sign-aligned
 with R `tram`'s `γ` — *no flip required* when checking parity.
 (Confirmed against `tram::Lm`'s vignette §2 and against `mlt:::tmlt`
 in `mlt/R/methods.R`, which evaluates `sterm <- exp(0.5 * predict(
@@ -314,8 +314,8 @@ for the `γ` block.  The Python parity test compares element-wise without
 any further sign manipulation.
 
 A unit test in #70 ratchets this convention: it fits the same toy data
-under R and pymlt and asserts `np.allclose(pymlt.coef_, -r.beta)` AND
-`np.allclose(pymlt.gamma_coef_, r.gamma)`.  If the test fails, the
+under R and mltpy and asserts `np.allclose(mltpy.coef_, -r.beta)` AND
+`np.allclose(mltpy.gamma_coef_, r.gamma)`.  If the test fails, the
 convention is wrong, not the implementation.
 
 ---

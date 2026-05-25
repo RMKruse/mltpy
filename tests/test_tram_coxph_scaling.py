@@ -3,14 +3,14 @@
 End-to-end coverage of the ``tram::Coxph(Surv(y, event) ~ x_d | x_s, data,
 support, order)`` convenience surface: the kwarg must thread through to the
 scaled-baseline likelihood (#71) and the scaled-predict path (#72) without
-callers having to reach for :class:`pymlt.MLT` directly.
+callers having to reach for :class:`mltpy.MLT` directly.
 
 Reference data lives in ``reference/scaling_coxph_*`` and is produced by
 ``reference/generate_reference.R``.
 
 Sign conventions:
 
-* ``tram::Coxph`` uses ``negative = FALSE`` (so ``h + X·β``).  pymlt
+* ``tram::Coxph`` uses ``negative = FALSE`` (so ``h + X·β``).  mltpy
   parametrises ``h + X·β`` identically, so β is sign-aligned across the
   two parameterisations.
 * γ is sign-aligned across the two parameterisations (ADR 0002, Decision 5).
@@ -23,9 +23,9 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt.basis import BernsteinBasis
-from pymlt.tram import Coxph
-from pymlt.variables import CensoredData
+from mltpy.basis import BernsteinBasis
+from mltpy.tram import Coxph
+from mltpy.variables import CensoredData
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -130,7 +130,7 @@ def test_coxph_theta_beta_gamma_match_R(
     np.testing.assert_allclose(
         theta_b, coxph_scaling_ref["theta_b"], rtol=1e-4, atol=1e-5
     )
-    # tram::Coxph uses negative=FALSE; β sign-aligned with pymlt.
+    # tram::Coxph uses negative=FALSE; β sign-aligned with mltpy.
     np.testing.assert_allclose(beta, coxph_scaling_ref["beta_r"], rtol=1e-4, atol=1e-5)
     # γ is sign-aligned across the two parameterisations.
     np.testing.assert_allclose(

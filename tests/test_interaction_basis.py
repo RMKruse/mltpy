@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from pymlt import (
+from mltpy import (
     MLT,
     ConditionalTransformationModel,
     InteractionBasis,
     OptimizerConfig,
 )
-from pymlt.basis import BernsteinBasis, OneHotBasis
+from mltpy.basis import BernsteinBasis, OneHotBasis
 
 # ---------------------------------------------------------------------------
 # OneHotBasis unit tests
@@ -188,7 +188,7 @@ class TestInteractionBasisEvaluate:
 
 class TestInteractionBasisConstraints:
     def test_constraint_matrix_shape(self) -> None:
-        from pymlt.constraints import build_constraint_matrices_interaction
+        from mltpy.constraints import build_constraint_matrices_interaction
 
         ib = InteractionBasis(
             y_basis=BernsteinBasis(order=3, support=(0.0, 1.0)),
@@ -203,7 +203,7 @@ class TestInteractionBasisConstraints:
 
     def test_constraint_feasibility(self) -> None:
         """Non-decreasing columns of Theta satisfy (D⊗I_q)@vec(Theta) >= 0."""
-        from pymlt.constraints import build_constraint_matrices_interaction
+        from mltpy.constraints import build_constraint_matrices_interaction
 
         ib = InteractionBasis(
             y_basis=BernsteinBasis(order=2, support=(0.0, 1.0)),
@@ -217,7 +217,7 @@ class TestInteractionBasisConstraints:
         assert np.all(cm.A_ineq @ theta >= -1e-14)
 
     def test_constraint_infeasible(self) -> None:
-        from pymlt.constraints import build_constraint_matrices_interaction
+        from mltpy.constraints import build_constraint_matrices_interaction
 
         ib = InteractionBasis(
             y_basis=BernsteinBasis(order=2, support=(0.0, 1.0)),
@@ -232,7 +232,7 @@ class TestInteractionBasisConstraints:
         assert np.any(cm.A_ineq @ theta < 0)
 
     def test_unsupported_x_basis_raises(self) -> None:
-        from pymlt.basis import PolynomialBasis
+        from mltpy.basis import PolynomialBasis
 
         with pytest.raises(ValueError, match="non-negative and a partition"):
             InteractionBasis(
@@ -392,10 +392,10 @@ class TestStratifiedPredict:
 
 
 def test_one_hot_basis_in_public_api() -> None:
-    import pymlt
+    import mltpy
 
-    assert hasattr(pymlt, "OneHotBasis")
-    from pymlt import OneHotBasis as OHB
+    assert hasattr(mltpy, "OneHotBasis")
+    from mltpy import OneHotBasis as OHB
 
     b = OHB(K=3)
     assert b.order == 2

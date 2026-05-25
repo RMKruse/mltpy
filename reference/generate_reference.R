@@ -59,7 +59,7 @@ fit_small <- mlt(ctm(b_small), data = data.frame(y = y))
 fit_large <- mlt(ctm(b_large), data = data.frame(y = y))
 
 # AIC from mlt works directly; BIC() returns NA because mlt has no nobs()
-# method, so compute BIC manually using the same formula pymlt uses:
+# method, so compute BIC manually using the same formula mltpy uses:
 # BIC = -2*ll + log(n_obs) * n_free_params.
 ll_s <- logLik(fit_small)
 ll_l <- logLik(fit_large)
@@ -79,7 +79,7 @@ writeLines(
 )
 
 # Likelihood-ratio test: mlt has no anova() method, so compute the LRT
-# directly from logLik(). This matches pymlt.anova() (deviance = 2*Δll,
+# directly from logLik(). This matches mltpy.anova() (deviance = 2*Δll,
 # df = Δn_free_params, p = 1 - Χ²_df(deviance)).
 ll_small <- logLik(fit_small)
 ll_large <- logLik(fit_large)
@@ -107,7 +107,7 @@ cat(sprintf("anova: Chisq=%.4f, df=%d, p=%.4g\n", chisq, df_lrt, p_val))
 # on [0, 1] and writes the resulting 11x5 model matrix to
 #   reference/bernstein_reference.txt
 # in ascending-column order. Used by tests/test_basis.py::test_reference_npy
-# to cross-check pymlt.basis.BernsteinBasis.evaluate() against basefun.
+# to cross-check mltpy.basis.BernsteinBasis.evaluate() against basefun.
 # ---------------------------------------------------------------------------
 
 y_grid <- seq(0, 1, length.out = 11)
@@ -133,7 +133,7 @@ cat(sprintf("Wrote Bernstein reference matrix: %dx%d\n", nrow(M_ref), ncol(M_ref
 #   ll_right_theta.txt  — Bernstein coefficients from R's mlt
 #   ll_right_ll.txt     — scalar log-likelihood from mlt::logLik
 #
-# The Python test evaluates pymlt.log_likelihood at θ on (y, event) and
+# The Python test evaluates mltpy.log_likelihood at θ on (y, event) and
 # asserts it matches the scalar LL, cross-validating both the likelihood
 # implementation and the censoring dispatch.
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ cat(sprintf(
 # Counting-process Surv(start, stop, event) gives R's delayed-entry encoding:
 # observation i is only at risk during [trunc_lo[i], y_lt[i]], so the mlt
 # log-likelihood divides each row by P(Y_i > trunc_lo[i] | x_i) — exactly
-# the truncation correction we are validating in pymlt.
+# the truncation correction we are validating in mltpy.
 #
 # Files emitted (parallel to the right-censored block above):
 #   ll_trunc_y.txt      — 200 observed/censored thresholds
@@ -277,7 +277,7 @@ cat(sprintf("Exponential: n=%d, ll=%.6f\n", length(y_exp), ll_exp))
 #
 # tram::Lm with order=1 Bernstein + normal base is equivalent to classical
 # normal linear regression.  We write both the CTM Bernstein coefficients
-# (from tram::Lm) and the lm() point estimates so pymlt tests can verify
+# (from tram::Lm) and the lm() point estimates so mltpy tests can verify
 # both the raw theta_ and the derived (intercept, slope, sigma).
 #
 #   lm_uni_y.txt         — response vector
@@ -372,7 +372,7 @@ cat(sprintf("Lm covariate: n=%d, intercept=%.6f, slope=%.6f, sigma=%.6f\n",
 #   vcov_<model>_vcov.txt    — flattened vcov(fit) matrix (row-major)
 #   vcov_<model>_estfun.txt  — flattened sandwich::estfun(fit) matrix (row-major)
 #
-# pymlt tests load theta and data, call hessian()/score_matrix() at that
+# mltpy tests load theta and data, call hessian()/score_matrix() at that
 # theta, invert the Hessian, and cross-check against R's vcov and estfun.
 # This isolates the analytical Hessian formula from optimiser differences.
 # ---------------------------------------------------------------------------
@@ -398,7 +398,7 @@ fit_bc <- tram::BoxCox(y ~ x, data = data.frame(y = y_bc, x = x_bc),
 theta_bc   <- coef(fit_bc, with_baseline = TRUE)
 estfun_bc  <- sandwich::estfun(fit_bc)
 # tram's vcov() restricts to beta; mlt's vcov() returns the full (p+q, p+q)
-# observed information inverse — that's what we need to match against pymlt.
+# observed information inverse — that's what we need to match against mltpy.
 vcov_full_bc <- vcov(as.mlt(fit_bc))
 
 writeLines(format(y_bc, digits = 15), con = file.path(out_dir, "vcov_boxcox_y.txt"))
@@ -482,7 +482,7 @@ cat(sprintf("Coxph vcov ref: n=%d, p+q=%d, observed=%d\n",
 # confint() is ±qnorm(0.975) * sqrt(diag(vcov(fit))) around coef(fit).  R's
 # mlt::confint picks a sub-block via `parm` but this is the same formula.
 # We emit R-convention CIs for each of the three tram fits above.  tram's
-# sign convention differs from pymlt's only for BoxCox (negative=TRUE);
+# sign convention differs from mltpy's only for BoxCox (negative=TRUE);
 # the Python test flips beta rows accordingly before comparing.
 #
 #   reference/confint_<model>.txt  — flattened (k, 2) matrix, row-major
@@ -658,7 +658,7 @@ cat(sprintf("Coxph predict-quantile ref: %d X x %d probs\n",
 #   residuals_<model>_deviance.txt — sign(r-1) · sqrt(2·|r - log r - 1|)
 #
 # For Cox-Snell on the right-censored Coxph fit, the observed point for
-# censored obs is the censoring time (Surv$time).  This matches pymlt's
+# censored obs is the censoring time (Surv$time).  This matches mltpy's
 # convention of evaluating S at the observed lower bound.
 # ---------------------------------------------------------------------------
 
@@ -816,8 +816,8 @@ cat(sprintf("Coxph weights ref: n=%d, sum_w=%d, p+q=%d\n",
 #   reference/polr_<link>_theta.txt     — coef(fit, with_baseline = TRUE)
 #                                         (first K-1 entries are cutpoints,
 #                                          remaining are R-side beta which
-#                                          satisfy h - X·beta_R = z; pymlt
-#                                          uses h + X·beta so beta_pymlt =
+#                                          satisfy h - X·beta_R = z; mltpy
+#                                          uses h + X·beta so beta_mltpy =
 #                                          -beta_R)
 #   reference/polr_<link>_loglik.txt    — scalar log-likelihood
 #   reference/polr_<link>_proba.txt     — predict(fit, type = "density")
@@ -853,7 +853,7 @@ writeLines(format(flatten_row_major(X_polr), digits = 15),
   ll    <- as.numeric(logLik(as.mlt(fit)))
   # Evaluate per-level probabilities at every observation by passing the full
   # ordered level set as q.  Returns a (K, n) matrix; transpose to (n, K) and
-  # write row-major to match pymlt.predict_proba.
+  # write row-major to match mltpy.predict_proba.
   q_levels <- factor(levels_polr, levels = levels_polr, ordered = TRUE)
   proba <- predict(fit, newdata = data_polr, q = q_levels, type = "density")
   proba <- t(as.matrix(proba))
@@ -911,7 +911,7 @@ q_int <- 3L  # number of Bernstein-x functions
 x_int <- runif(n_int, 0, 1)
 # Mild conditional shift, low homoscedastic noise.  Keeps the MLE strictly in
 # the interior of the monotone cone — no stacked active constraints — so
-# alabama::auglag and pymlt's PHR solver converge to the same θ to within
+# alabama::auglag and mltpy's PHR solver converge to the same θ to within
 # their respective KKT tolerances.
 y_int <- 0.5 + 1.0 * x_int + rnorm(n_int, sd = 0.6)
 a_int <- min(y_int) - 0.2
@@ -997,8 +997,8 @@ writeLines(format(probs_int, digits = 15),
 # Scaling-terms tracer (issue #70) — BoxCox + normal base, scale=~x_s.
 #
 # Heteroskedastic Box-Cox:  h(y | x_d, x_s) = h_0(y) * exp(x_s * gamma) - x_d * beta_R
-# (R / tram convention: shift enters with a minus; pymlt parameterises h + x_d * beta,
-# so pymlt.coef_ == -coef(fit)["x_d"].  Gamma is sign-aligned across R and pymlt; see
+# (R / tram convention: shift enters with a minus; mltpy parameterises h + x_d * beta,
+# so mltpy.coef_ == -coef(fit)["x_d"].  Gamma is sign-aligned across R and mltpy; see
 # docs/adr/0002-scaling-terms.md, Decision 5.)
 #
 # Fixtures emitted:
@@ -1053,7 +1053,7 @@ cat(sprintf("scaling BoxCox normal ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 #
 # In each case the parameter file ``scaling_*_theta.txt`` stores the *full*
 # parameter vector ``coef(as.mlt(fit))`` flattened as
-# ``[theta_b | beta_tram | gamma]``.  pymlt parametrises ``h + X_d·β`` (R
+# ``[theta_b | beta_tram | gamma]``.  mltpy parametrises ``h + X_d·β`` (R
 # ``tram`` parametrises ``h − X_d·β``), so the Python parity test flips the
 # β block before comparing.  γ is sign-aligned across the two
 # parameterisations (ADR 0002, Decision 5).
@@ -1271,9 +1271,9 @@ cat(sprintf("scaling predict ref: m=%d × k=%d (k_q=%d)\n",
 # θ_b, β, γ and the log-likelihood under the convenience surface.
 #
 # tram::Lm uses ``order = 1`` Bernstein on a normal base; ``negative = TRUE``
-# (so ``h − X_d·β``), so the pymlt β block is sign-flipped at compare time.
+# (so ``h − X_d·β``), so the mltpy β block is sign-flipped at compare time.
 # tram::Survreg fits a transformation on log-time (LogBernsteinBasis in
-# pymlt); we cover all three distributions (``weibull``, ``lognormal``,
+# mltpy); we cover all three distributions (``weibull``, ``lognormal``,
 # ``loglogistic``) at right-censored time scales.  γ is sign-aligned with R
 # (ADR 0002, Decision 5) for both.
 #
@@ -1317,7 +1317,7 @@ cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 # ---- scaling_survreg_<dist> (Survreg + scale=~x_s, right-censored) -------
 # tram::Survreg uses log-time with order=6 Bernstein on the log scale and
 # the chosen parametric link (Weibull / log-normal / log-logistic).  We
-# cover all three to match the convenience surface in pymlt.tram.Survreg.
+# cover all three to match the convenience surface in mltpy.tram.Survreg.
 .write_survreg_scaling <- function(dist_name, seed) {
   set.seed(seed)
   n <- 200
@@ -1334,7 +1334,7 @@ cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
   df <- data.frame(y = y, event = event, x_d = x_d, x_s = x_s)
   # tram::Survreg uses a 2-parameter parametric baseline on log(t)
   # (h(log t) = (log t − α) / σ) regardless of ``order``.  A
-  # ``LogBernsteinBasis(order=1)`` on the pymlt side is affine in
+  # ``LogBernsteinBasis(order=1)`` on the mltpy side is affine in
   # log(t) and yields an equivalent two-parameter reparameterisation
   # (matching θ exactly after the basis transformation).  We therefore
   # request ``order = 1`` on the R side as a matching cue, knowing the
@@ -1382,7 +1382,7 @@ cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 #
 # Sign conventions (ADR 0002, Decision 5):
 #
-# * BoxCox uses ``negative = TRUE`` so β_R = −β_pymlt.  Both rows and
+# * BoxCox uses ``negative = TRUE`` so β_R = −β_mltpy.  Both rows and
 #   columns indexed by β therefore flip sign in the vcov; the Python test
 #   applies the diagonal signing matrix ``diag([1]*p + [-1]*q_d + [1]*q_s)``
 #   before comparing.
@@ -1459,7 +1459,7 @@ cat(sprintf("scaling Lm ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 
 # Dedicated BoxCox vcov fit — n=200, order=4, seed=770 gives an interior
 # MLE (no active monotonicity constraints), so the full 8×8 vcov is
-# numerically well-conditioned and matches pymlt's ``inv(H)`` element-wise.
+# numerically well-conditioned and matches mltpy's ``inv(H)`` element-wise.
 set.seed(770)
 n_v_bc <- 200
 x_s_v_bc <- rnorm(n_v_bc)
@@ -1495,7 +1495,7 @@ fit_v_co <- tram::Colr(y ~ x_d | x_s, data = df_v_co,
 # Coxph + scale=~x_s, right-censored.  Coxph fits are structurally
 # constraint-binding on the baseline (the tail of the baseline hazard is
 # under-determined), so the θ_b block of the vcov reflects R's
-# active-constraint penalty and does not match pymlt's bare ``inv(H)``.
+# active-constraint penalty and does not match mltpy's bare ``inv(H)``.
 # The β / γ sub-block is the practically meaningful block for covariate
 # inference and matches at the same tolerance as BoxCox / Colr.
 set.seed(770)
@@ -1525,7 +1525,7 @@ fit_v_cx <- tram::Coxph(Surv(y, event) ~ x_d | x_s, data = df_v_cx,
 # fits the constant-variance baseline ``tram::BoxCox(y ~ x_d)`` against the
 # heteroskedastic ``tram::BoxCox(y ~ x_d | x_s)`` on the *same* data and
 # *same* support / basis order.  The likelihood-ratio statistic on γ is
-# what the notebook reproduces with pymlt; this fixture pins it.
+# what the notebook reproduces with mltpy; this fixture pins it.
 #
 # Reference is the LR test on γ from ``tram::BoxCox(..., scale=~x_s)`` vs.
 # ``tram::BoxCox(...)`` (the issue spec asks for ``tram::Lm`` parity, but
@@ -1634,9 +1634,9 @@ cat(sprintf("profile_ci_baseline: p=%d rows written\n",
 # Same χ²_1 LR inversion as the baseline above, but generic over any tram /
 # mlt fit object: we refit via `update(fit, fixed = pin)` instead of
 # re-creating the `mlt(ctm, data, fixed=pin)` call by hand.  This lets the
-# helper handle BoxCox (negative=TRUE — β sign-flipped vs pymlt), Colr, and
+# helper handle BoxCox (negative=TRUE — β sign-flipped vs mltpy), Colr, and
 # Coxph (right-censored) uniformly.  The Python side flips BoxCox β rows
-# before comparing — see `_apply_pymlt_sign` in tests/test_confidence.py.
+# before comparing — see `_apply_mltpy_sign` in tests/test_confidence.py.
 #
 # Output layout — `profile_ci_<model>.txt`: `(k, 2)` flattened row-major
 # with columns `[lower, upper]`, identical contract to the Wald fixtures

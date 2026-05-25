@@ -1,4 +1,4 @@
-"""Runtime benchmark for ``pymlt.MLT.fit`` across a grid of (n, order, censoring).
+"""Runtime benchmark for ``mltpy.MLT.fit`` across a grid of (n, order, censoring).
 
 Generates the input datasets in ``benchmarks/data/`` so that ``bench_r.R`` can
 consume the byte-identical CSVs (Alternative B in the benchmark plan).
@@ -27,8 +27,8 @@ from typing import Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 
-import pymlt
-from pymlt import CensoredData, CensoringType, ConvergenceWarning
+import mltpy
+from mltpy import CensoredData, CensoringType, ConvergenceWarning
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -122,10 +122,10 @@ def write_data_csvs() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_model(order: int, censoring: str) -> pymlt.MLT:
+def _build_model(order: int, censoring: str) -> mltpy.MLT:
     """Construct a fresh MLT instance for the given cell."""
     cens = CensoringType.NONE if censoring == "NONE" else CensoringType.RIGHT
-    return pymlt.MLT(order=order, support=SUPPORT, censoring=cens)
+    return mltpy.MLT(order=order, support=SUPPORT, censoring=cens)
 
 
 def _make_fit_input(
@@ -138,13 +138,13 @@ def _make_fit_input(
     return CensoredData.right_censored(y, censored_mask)
 
 
-def _time_one_fit(model: pymlt.MLT, fit_input: object) -> tuple[float, bool, int]:
+def _time_one_fit(model: mltpy.MLT, fit_input: object) -> tuple[float, bool, int]:
     """Time a single ``fit()`` call. Returns (seconds, converged, n_iter).
 
     ``converged`` is ``True`` when the solver's own flag is set OR when the
     auglag KKT residual is small enough to indicate the fit reached the
     optimum but ran out of outer iterations on a degenerate active set (a
-    well-documented PHR behaviour — see ``pymlt/CLAUDE.md``'s solver-dispatch
+    well-documented PHR behaviour — see ``mltpy/CLAUDE.md``'s solver-dispatch
     note).  Without this fallback the aggregator would drop genuinely good
     auglag fits and report ``nan`` timings for every cell.
     """
@@ -235,7 +235,7 @@ def write_results_csv(rows: list[dict[str, object]]) -> None:
 
 
 def main() -> None:
-    print(f"pymlt benchmark — version {pymlt.__version__}")
+    print(f"mltpy benchmark — version {mltpy.__version__}")
     print(f"  data dir:    {DATA_DIR}")
     print(f"  results csv: {RESULTS_CSV}")
     print(

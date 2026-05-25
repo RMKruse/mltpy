@@ -1,4 +1,4 @@
-"""Tests for pymlt.optimizer — convergence, feasibility, result structure."""
+"""Tests for mltpy.optimizer — convergence, feasibility, result structure."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ import warnings
 import numpy as np
 import pytest
 
-from pymlt._auglag import AugLagOptions
-from pymlt.basis import BernsteinBasis
-from pymlt.constraints import MonotonicityConstraint
-from pymlt.likelihood import negative_log_likelihood
-from pymlt.optimizer import (
+from mltpy._auglag import AugLagOptions
+from mltpy.basis import BernsteinBasis
+from mltpy.constraints import MonotonicityConstraint
+from mltpy.likelihood import negative_log_likelihood
+from mltpy.optimizer import (
     OptimizationResult,
     OptimizerConfig,
     _initial_theta,
@@ -20,7 +20,7 @@ from pymlt.optimizer import (
     _project_to_feasible,
     optimize,
 )
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -228,7 +228,7 @@ class TestOptimizeConvergence:
 
     def test_nll_decreased_from_init(self, solver):
         """Optimised NLL ≤ initial NLL."""
-        from pymlt.likelihood import negative_log_likelihood
+        from mltpy.likelihood import negative_log_likelihood
 
         cfg = OptimizerConfig(solver=solver)
         basis = make_basis(order=3)
@@ -343,7 +343,7 @@ class TestOptimizeReproducibility:
     Pinned to ``solver="slsqp"``: the restart-RNG plumbing is shared with the
     auglag path, but ``max_iter=1`` is the SLSQP-specific knob that forces
     scipy to bail early and trigger the restart loop.  Auglag has its own outer
-    budget via :class:`~pymlt._auglag.AugLagOptions` and does not honour
+    budget via :class:`~mltpy._auglag.AugLagOptions` and does not honour
     ``max_iter``; on this easy fixture it converges on the first attempt so the
     RNG is never consulted.  Testing the same code path through SLSQP is
     sufficient — both solvers wrap the same ``_perturb_and_project`` /
@@ -426,7 +426,7 @@ class TestBaseDistributionValidation:
         def count_optimizer_get_dist(base_distribution):
             nonlocal calls
             calls += 1
-            from pymlt.likelihood import _NORM_OPS
+            from mltpy.likelihood import _NORM_OPS
 
             return _NORM_OPS
 
@@ -435,8 +435,8 @@ class TestBaseDistributionValidation:
                 "_get_dist should not run inside optimize() evaluations"
             )
 
-        monkeypatch.setattr("pymlt.optimizer._get_dist", count_optimizer_get_dist)
-        monkeypatch.setattr("pymlt.likelihood._get_dist", fail_likelihood_get_dist)
+        monkeypatch.setattr("mltpy.optimizer._get_dist", count_optimizer_get_dist)
+        monkeypatch.setattr("mltpy.likelihood._get_dist", fail_likelihood_get_dist)
 
         result = optimize(make_basis(order=2), simple_data(n=20))
 
@@ -521,7 +521,7 @@ class TestOptimizeExceptionFallback:
     """SLSQP-specific failure handling: the SLSQP / trust-constr path calls
     ``scipy.optimize.minimize`` directly, so monkeypatching that import
     is the lever for forcing a ``LinAlgError``.  The auglag path goes through
-    :func:`~pymlt._auglag.auglag_minimize`; equivalent failure-mode coverage
+    :func:`~mltpy._auglag.auglag_minimize`; equivalent failure-mode coverage
     for that path lives in ``tests/test_auglag.py``."""
 
     def test_linalg_error_retries_and_falls_back(self, monkeypatch):
@@ -531,7 +531,7 @@ class TestOptimizeExceptionFallback:
         def boom(*args, **kwargs):
             raise LinAlgError("singular matrix")
 
-        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+        monkeypatch.setattr("mltpy.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(solver="slsqp", max_restarts=2)
         basis = make_basis(order=3)
@@ -549,7 +549,7 @@ class TestOptimizeExceptionFallback:
         def boom(*args, **kwargs):
             raise RuntimeError("scipy blew up")
 
-        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+        monkeypatch.setattr("mltpy.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(solver="slsqp", max_restarts=2)
         with pytest.raises(RuntimeError, match="scipy blew up"):
@@ -562,7 +562,7 @@ class TestOptimizeExceptionFallback:
         def boom(*args, **kwargs):
             raise LinAlgError("singular matrix")
 
-        monkeypatch.setattr("pymlt.optimizer.minimize", boom)
+        monkeypatch.setattr("mltpy.optimizer.minimize", boom)
 
         cfg = OptimizerConfig(solver="slsqp", max_restarts=0, verbose=True)
         with pytest.warns(RuntimeWarning, match="hit"):
@@ -588,7 +588,7 @@ class TestMakeObjectiveNarrowCatch:
             raise ValueError("bad shape")
 
         monkeypatch.setattr(
-            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+            "mltpy.optimizer._negative_log_likelihood_from_dist", bad_nll
         )
         with pytest.raises(ValueError, match="bad shape"):
             obj(np.linspace(0.0, 1.0, basis.order + 1))
@@ -602,7 +602,7 @@ class TestMakeObjectiveNarrowCatch:
             raise ValueError("bad shape")
 
         monkeypatch.setattr(
-            "pymlt.optimizer._negative_log_likelihood_from_dist", bad_nll
+            "mltpy.optimizer._negative_log_likelihood_from_dist", bad_nll
         )
         with pytest.raises(ValueError, match="bad shape"):
             obj(np.linspace(0.0, 1.0, basis.order + 1))
@@ -618,7 +618,7 @@ class TestOptimizeVerboseNonConvergence:
         """Tight iter budget → scipy returns success=False → verbose warning.
 
         Pinned to SLSQP: ``max_iter`` is the SLSQP/trust-constr iteration cap.
-        Auglag uses :attr:`~pymlt._auglag.AugLagOptions.max_outer_iter` (its
+        Auglag uses :attr:`~mltpy._auglag.AugLagOptions.max_outer_iter` (its
         own verbose-warning path is unit-tested in ``test_auglag.py``).
         """
         cfg = OptimizerConfig(solver="slsqp", max_iter=1, max_restarts=3, verbose=True)
@@ -729,7 +729,7 @@ class TestPolishStep:
         """Coxph has active monotonicity constraints — polish must be skipped."""
         import warnings
 
-        from pymlt.tram import Coxph
+        from mltpy.tram import Coxph
 
         rng = np.random.default_rng(0)
         t = rng.exponential(1.0, 100)
@@ -869,7 +869,7 @@ class TestFixedParamsAuglag:
         """InteractionBasis uses a vec_C(Θ) layout — pinning by index needs
         its own design decision (column/row indexing, Kronecker padding).
         Deferred per issue #85 scope."""
-        from pymlt.basis import BernsteinBasis, InteractionBasis, OneHotBasis
+        from mltpy.basis import BernsteinBasis, InteractionBasis, OneHotBasis
 
         rng = np.random.default_rng(0)
         n = 40
@@ -962,7 +962,7 @@ class TestFixedParamsScipy:
     @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
     def test_fixed_params_stacks_with_lower_upper(self, solver):
         """``lower`` / ``upper`` boundary pins are equality constraints
-        emitted by :class:`~pymlt.constraints.BoundaryConstraint`.  When the
+        emitted by :class:`~mltpy.constraints.BoundaryConstraint`.  When the
         SLSQP / trust-constr branch reduces away ``fixed_params`` indices,
         the boundary equality rows must be sliced through the same shift so
         the pins continue to hold on the reduced subvector."""

@@ -10,7 +10,7 @@ issue #71: "All seven base distributions tested under scaling for at least
 one censoring type each."
 
 ``"exponential"`` × scaling is rejected up-front by
-:class:`~pymlt.model.ConditionalTransformationModel.__init__`
+:class:`~mltpy.model.ConditionalTransformationModel.__init__`
 (see ADR 0002 Decision 3); we assert the ``ValueError`` rather than fit.
 """
 
@@ -19,10 +19,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pymlt import MLT
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import negative_log_likelihood
-from pymlt.variables import CensoredData, CensoringType
+from mltpy import MLT
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import negative_log_likelihood
+from mltpy.variables import CensoredData, CensoringType
 
 
 def _make_dataset(
@@ -256,7 +256,7 @@ def test_exponential_without_scaling_still_works() -> None:
     """Sanity guard: exponential alone is unchanged by the scaling ADR.
 
     Confirms the up-front rejection in
-    :class:`~pymlt.model.ConditionalTransformationModel.__init__` does
+    :class:`~mltpy.model.ConditionalTransformationModel.__init__` does
     not accidentally fire when ``scaling`` is ``None``.
     """
     y, x_d, _, support = _make_dataset()

@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-# generate_all_references.R — Generate R mlt/tram reference values for pymlt validation
+# generate_all_references.R — Generate R mlt/tram reference values for mltpy validation
 #
 # Run with:  Rscript validation/generate_all_references.R
 # Requires:  mlt, basefun, variables, jsonlite, tram
@@ -1287,7 +1287,7 @@ generate_case_19 <- function(base_path) {
 
 main <- function() {
   cat("========================================\n")
-  cat("pymlt reference value generation\n")
+  cat("mltpy reference value generation\n")
   cat("========================================\n\n")
 
   base_path <- "validation/references"

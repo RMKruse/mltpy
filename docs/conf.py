@@ -1,4 +1,4 @@
-"""Sphinx configuration for the pymlt documentation site."""
+"""Sphinx configuration for the mltpy documentation site."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(".."))
 # ---------------------------------------------------------------------------
 # Project metadata
 # ---------------------------------------------------------------------------
-project = "pymlt"
+project = "mltpy"
 author = "René-Marcel Kruse"
 copyright = "2026, René-Marcel Kruse"
 release = "0.4.0"
@@ -42,16 +42,16 @@ exclude_patterns = ["_build", "**.ipynb_checkpoints", "Thumbs.db", ".DS_Store"]
 # HTML / theme
 # ---------------------------------------------------------------------------
 html_theme = "pydata_sphinx_theme"
-html_title = "pymlt"
+html_title = "mltpy"
 html_theme_options = {
-    "github_url": "https://github.com/RMKruse/pymlt",
+    "github_url": "https://github.com/RMKruse/mltpy",
     "show_prev_next": False,
     "navbar_align": "left",
     "use_edit_page_button": False,
     "icon_links": [
         {
             "name": "PyPI",
-            "url": "https://pypi.org/project/pymlt/",
+            "url": "https://pypi.org/project/mltpy/",
             "icon": "fa-brands fa-python",
         },
     ],
@@ -84,7 +84,7 @@ nbsphinx_prolog = r"""
 
 .. note::
    This page was generated from the notebook
-   `{{ docname }} <https://github.com/RMKruse/pymlt/blob/main/docs/{{ docname }}>`_.
+   `{{ docname }} <https://github.com/RMKruse/mltpy/blob/main/docs/{{ docname }}>`_.
 """
 
 # ---------------------------------------------------------------------------

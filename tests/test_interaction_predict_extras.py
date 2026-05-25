@@ -20,12 +20,12 @@ import numpy as np
 import pytest
 from scipy.stats import kstest
 
-from pymlt import (
+from mltpy import (
     ConditionalTransformationModel,
     InteractionBasis,
     OptimizerConfig,
 )
-from pymlt.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -64,7 +64,7 @@ def _load_extras_reference(label: str) -> dict[str, np.ndarray]:
     }
 
 
-def _fit_pymlt(
+def _fit_mltpy(
     label: str,
     data: dict[str, np.ndarray],
     solver: str = "auglag",
@@ -97,7 +97,7 @@ def _flat_yx(y_grid: np.ndarray, x_grid: np.ndarray) -> tuple[np.ndarray, np.nda
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_survivor_matches_R(label: str) -> None:
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
     y_flat, x_flat = _flat_yx(data["y_grid"], data["x_grid"])
     surv = model.predict(y_flat, X_new=x_flat[:, None], what="survivor")
     # Same tolerance as the CDF/PDF parity test in #65 — see
@@ -108,7 +108,7 @@ def test_survivor_matches_R(label: str) -> None:
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_hazard_matches_R(label: str) -> None:
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
     y_flat, x_flat = _flat_yx(data["y_grid"], data["x_grid"])
     haz = model.predict(y_flat, X_new=x_flat[:, None], what="hazard")
     np.testing.assert_allclose(haz, data["haz_R"], rtol=2e-4, atol=1e-5)
@@ -122,7 +122,7 @@ def test_hazard_matches_R(label: str) -> None:
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_quantile_matches_R(label: str) -> None:
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     probs = data["probs"]
     x_grid = data["x_grid"]
@@ -133,10 +133,10 @@ def test_quantile_matches_R(label: str) -> None:
     probs_flat = np.tile(probs, n_x)
     x_flat = np.repeat(x_grid, n_p)
 
-    q_pymlt = model.predict(probs_flat, X_new=x_flat[:, None], what="quantile")
+    q_mltpy = model.predict(probs_flat, X_new=x_flat[:, None], what="quantile")
     # rtol slightly looser than CDF parity because the quantile is the
     # inverse of h(·|x); a 2e-4 error in θ amplifies near the tails.
-    np.testing.assert_allclose(q_pymlt, data["quant_R"], rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(q_mltpy, data["quant_R"], rtol=1e-3, atol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ def test_quantile_matches_R(label: str) -> None:
 def test_quantile_inverts_cdf(label: str) -> None:
     """Quantile is the right inverse of the CDF at the row's x."""
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     probs = np.array([0.05, 0.20, 0.50, 0.80, 0.95])
     x_vals = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
@@ -171,7 +171,7 @@ def test_quantile_inverts_cdf(label: str) -> None:
 def test_simulate_ks_at_fixed_x(label: str) -> None:
     """``simulate(n, X=x0·ones)`` empirical CDF matches the analytical CDF."""
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     n = 10_000
     x_fixed = 0.4
@@ -204,7 +204,7 @@ def test_plot_interaction_with_X(label: str) -> None:
     import matplotlib.pyplot as plt
 
     data = _load_extras_reference(label)
-    model = _fit_pymlt(label, data)
+    model = _fit_mltpy(label, data)
 
     a, b = data["support"]
     y_curve = np.linspace(a + 1e-3, b - 1e-3, 50)
@@ -222,7 +222,7 @@ def test_plot_interaction_with_X(label: str) -> None:
 def test_plot_interaction_requires_X() -> None:
     """plot() on an interaction model raises a clear error when X is None."""
     data = _load_extras_reference("normal")
-    model = _fit_pymlt("normal", data)
+    model = _fit_mltpy("normal", data)
     a, b = data["support"]
     y_curve = np.linspace(a + 1e-3, b - 1e-3, 20)
     with pytest.raises(ValueError, match="X"):

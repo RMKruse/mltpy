@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint
 
 if TYPE_CHECKING:
-    from pymlt.basis import InteractionBasis
+    from mltpy.basis import InteractionBasis
 
 # ---------------------------------------------------------------------------
 # Monotonicity constraint
@@ -225,7 +225,7 @@ class ConstraintMatrices:
 def build_constraint_matrices_interaction(
     basis: "InteractionBasis",
 ) -> ConstraintMatrices:
-    """Build constraint matrices for an :class:`~pymlt.basis.InteractionBasis`.
+    """Build constraint matrices for an :class:`~mltpy.basis.InteractionBasis`.
 
     Constructs the Kronecker inequality ``(D ⊗ I_q) @ vec(Θ) ≥ 0`` that
     enforces column-wise monotonicity: ``D @ Θ[:, j] ≥ 0`` for every
@@ -234,7 +234,7 @@ def build_constraint_matrices_interaction(
     Parameters
     ----------
     basis:
-        The :class:`~pymlt.basis.InteractionBasis` to build constraints for.
+        The :class:`~mltpy.basis.InteractionBasis` to build constraints for.
 
     Returns
     -------
@@ -247,10 +247,10 @@ def build_constraint_matrices_interaction(
     ------
     ValueError
         If the x-basis type is not supported for closed-form constraints.
-        (This is already checked at :class:`~pymlt.basis.InteractionBasis`
+        (This is already checked at :class:`~mltpy.basis.InteractionBasis`
         construction time, so this branch is a safety net.)
     """
-    from pymlt.basis import _SUPPORTED_X_BASIS_TYPES
+    from mltpy.basis import _SUPPORTED_X_BASIS_TYPES
 
     if not isinstance(basis.x_basis, _SUPPORTED_X_BASIS_TYPES):
         raise ValueError(
@@ -291,7 +291,7 @@ def build_constraint_matrices(
     """Build constraint matrices for the augmented Lagrangian solver.
 
     Returns a :class:`ConstraintMatrices` dataclass whose fields are passed
-    directly to :func:`~pymlt._auglag.auglag_minimize`.
+    directly to :func:`~mltpy._auglag.auglag_minimize`.
 
     Monotonicity (``A_ineq @ θ ≥ 0``) is always included.  When ``lower`` or
     ``upper`` are provided, equality rows pinning ``θ[0] = lower`` and/or

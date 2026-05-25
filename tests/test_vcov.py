@@ -1,6 +1,6 @@
 """Tests for analytical Hessian, vcov(), and score contributions.
 
-Cross-checks the new public APIs (`pymlt.hessian`, `pymlt.score_matrix`,
+Cross-checks the new public APIs (`mltpy.hessian`, `mltpy.score_matrix`,
 model methods `vcov`, `estfun`, `score_contributions`, `standard_errors`,
 and the updated `_TramModel.summary`) against:
 
@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from scipy.optimize import approx_fprime
 
-from pymlt import (
+from mltpy import (
     MLT,
     CensoredData,
     CensoringType,
@@ -32,9 +32,9 @@ from pymlt import (
     negative_log_likelihood,
     score_matrix,
 )
-from pymlt.basis import BernsteinBasis
-from pymlt.optimizer import OptimizationResult
-from pymlt.tram import BoxCox, Colr, Coxph
+from mltpy.basis import BernsteinBasis
+from mltpy.optimizer import OptimizationResult
+from mltpy.tram import BoxCox, Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -350,16 +350,16 @@ def _load_vcov_reference(model: str) -> dict:
 def _assert_hessian_and_scores_match(
     model_cls, base_distribution, censoring, ref: dict, beta_sign: float
 ):
-    """Evaluate pymlt's hessian() and score_matrix() at R's theta and compare.
+    """Evaluate mltpy's hessian() and score_matrix() at R's theta and compare.
 
-    pymlt always parametrises the covariate shift as ``h(y|x) = h_b(y) + x'β``.
+    mltpy always parametrises the covariate shift as ``h(y|x) = h_b(y) + x'β``.
     tram's convention depends on the model: ``BoxCox`` uses ``negative = TRUE``
     (so ``h = h_b - x'β``) while ``Colr`` and ``Coxph`` use ``negative = FALSE``
-    (so ``h = h_b + x'β``, matching pymlt).  ``beta_sign`` is ``-1`` when we
+    (so ``h = h_b + x'β``, matching mltpy).  ``beta_sign`` is ``-1`` when we
     need to flip the β block (BoxCox) and ``+1`` otherwise.  The sign applies
     to the β entries of theta, the β rows/columns of vcov (via outer product),
     and the β columns of estfun.  ``estfun`` additionally flips overall sign
-    because ``sandwich::estfun.mlt`` returns ``∂(-ℓ)/∂θ`` while pymlt's
+    because ``sandwich::estfun.mlt`` returns ``∂(-ℓ)/∂θ`` while mltpy's
     ``score_matrix`` returns ``∂ℓ/∂θ``.
     """
     a, b = ref["support"]
@@ -370,7 +370,7 @@ def _assert_hessian_and_scores_match(
 
     sign = np.ones(p + q)
     sign[p:] = beta_sign
-    theta_pymlt = ref["theta"] * sign
+    theta_mltpy = ref["theta"] * sign
 
     if "event" in ref:
         cd = CensoredData.right_censored(ref["y"], censored=ref["event"] == 0)
@@ -379,18 +379,18 @@ def _assert_hessian_and_scores_match(
         y_obj = ref["y"]
 
     H = hessian(
-        theta_pymlt, basis, y_obj, X, censoring, base_distribution=base_distribution
+        theta_mltpy, basis, y_obj, X, censoring, base_distribution=base_distribution
     )
-    vcov_pymlt = np.linalg.inv(H)
-    vcov_ref_pymlt_conv = ref["vcov"] * np.outer(sign, sign)
-    np.testing.assert_allclose(vcov_pymlt, vcov_ref_pymlt_conv, rtol=1e-4, atol=1e-6)
+    vcov_mltpy = np.linalg.inv(H)
+    vcov_ref_mltpy_conv = ref["vcov"] * np.outer(sign, sign)
+    np.testing.assert_allclose(vcov_mltpy, vcov_ref_mltpy_conv, rtol=1e-4, atol=1e-6)
 
-    scores_pymlt = score_matrix(
-        theta_pymlt, basis, y_obj, X, censoring, base_distribution=base_distribution
+    scores_mltpy = score_matrix(
+        theta_mltpy, basis, y_obj, X, censoring, base_distribution=base_distribution
     )
-    scores_ref_pymlt_conv = -ref["estfun"] * sign[None, :]
+    scores_ref_mltpy_conv = -ref["estfun"] * sign[None, :]
     np.testing.assert_allclose(
-        scores_pymlt, scores_ref_pymlt_conv, rtol=1e-5, atol=1e-8
+        scores_mltpy, scores_ref_mltpy_conv, rtol=1e-5, atol=1e-8
     )
 
 
@@ -824,7 +824,7 @@ class TestVcovAuglag:
     Distinct from ``'active'`` (which only augments on bare-inversion
     failure) and from ``None`` (no augmentation, raise on singular).  The
     motivating case is scaled-baseline Coxph, where R's
-    ``vcov(as.mlt(fit))`` applies the augmentation but pymlt's bare
+    ``vcov(as.mlt(fit))`` applies the augmentation but mltpy's bare
     ``inv(H)`` doesn't — see ``test_scaling_inference.py`` for the parity
     check.  These tests pin the mode's algebraic identity and its
     relationship to the other two modes on plain (unscaled) fits.

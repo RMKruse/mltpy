@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate pymlt against R mlt/tram reference values.
+"""Validate mltpy against R mlt/tram reference values.
 
 Iterates over all cases in validation/references/, fits the corresponding
-pymlt model, and compares theta, log-likelihood, and CDF predictions
+mltpy model, and compares theta, log-likelihood, and CDF predictions
 against the R reference.
 
 The committed reference data is CSV + metadata.json (the R ground truth);
@@ -146,7 +146,7 @@ class ReferenceCase:
 
 @dataclass
 class FittedResult:
-    """Result of fitting a pymlt model on reference data."""
+    """Result of fitting a mltpy model on reference data."""
 
     theta_py: NDArray[np.float64]
     loglik_py: float
@@ -303,7 +303,7 @@ _FAILED_FIT = FittedResult(
 
 
 def fit_python_model(case: ReferenceCase) -> FittedResult:
-    """Instantiate and fit the correct pymlt model for *case*.
+    """Instantiate and fit the correct mltpy model for *case*.
 
     All exceptions are caught — a failed fit returns a ``FittedResult``
     with ``converged=False`` so the script never aborts on a single case.
@@ -317,13 +317,13 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
     -------
     FittedResult
     """
-    # Lazy import so the script can be syntax-checked without pymlt installed
+    # Lazy import so the script can be syntax-checked without mltpy installed
     try:
-        from pymlt.model import MLT
-        from pymlt.tram import BoxCox, Colr, Coxph
-        from pymlt.variables import CensoredData, CensoringType
+        from mltpy.model import MLT
+        from mltpy.tram import BoxCox, Colr, Coxph
+        from mltpy.variables import CensoredData, CensoringType
     except ImportError as e:
-        print(f"  ERROR: pymlt not importable: {e}", file=sys.stderr)
+        print(f"  ERROR: mltpy not importable: {e}", file=sys.stderr)
         return _FAILED_FIT
 
     try:
@@ -423,7 +423,7 @@ def fit_python_model(case: ReferenceCase) -> FittedResult:
 
         # --- 10 new predict() outputs — all evaluated on ``cdf_grid`` ---
         # Only compute when R has provided a reference on this case, so
-        # pymlt and R are always compared on the same grid points.
+        # mltpy and R are always compared on the same grid points.
         X_new_preds: NDArray[np.float64] | None = None
         if case.regression:
             X_new_preds = np.zeros((len(case.cdf_grid), case.n_covariates))
@@ -513,14 +513,14 @@ def compare_results(
     fit: FittedResult,
     verbose: bool = False,
 ) -> ValidationResult:
-    """Compare pymlt fit against R reference values.
+    """Compare mltpy fit against R reference values.
 
     Parameters
     ----------
     ref:
         Reference data from R.
     fit:
-        pymlt fit result.
+        mltpy fit result.
     verbose:
         If True, print per-component details for failing cases.
 
@@ -849,7 +849,7 @@ def print_report(results: list[ValidationResult]) -> None:
         return text
 
     print()
-    print("pymlt validation — R reference comparison")
+    print("mltpy validation — R reference comparison")
     print("=" * 110)
     header = (
         f"{'Case':<28}│ {'Model':<7}│ {'n':>5} │ {'Ord':>3} │ {'Status':<6}"
@@ -951,7 +951,7 @@ def save_report(
         + " |"
     )
     sep = "|" + "|".join(["------"] * (5 + len(_existing_cols) + len(_new_cols))) + "|"
-    lines = ["# pymlt Validation Report", "", header, sep]
+    lines = ["# mltpy Validation Report", "", header, sep]
 
     def _md(val: float | None) -> str:
         if val is None:
@@ -1036,7 +1036,7 @@ def save_report(
 def main() -> None:
     """Entry point for the validation runner."""
     parser = argparse.ArgumentParser(
-        description="Validate pymlt against R mlt/tram reference values."
+        description="Validate mltpy against R mlt/tram reference values."
     )
     parser.add_argument(
         "--case",

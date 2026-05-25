@@ -1,7 +1,7 @@
 Installation
 ============
 
-pymlt is a pure-Python package with only numpy and scipy as required
+mltpy is a pure-Python package with only numpy and scipy as required
 dependencies. It targets Python ≥ 3.12.
 
 Basic install
@@ -9,26 +9,26 @@ Basic install
 
 .. code-block:: bash
 
-   pip install pymlt
+   pip install mltpy
 
 Optional extras
 ---------------
 
 .. code-block:: bash
 
-   pip install "pymlt[plots]"      # matplotlib for .plot() helpers
-   pip install "pymlt[pandas]"     # accept pd.Series as y
-   pip install "pymlt[examples]"   # run the vignettes (lifelines, jupyter, …)
-   pip install "pymlt[dev]"        # tests, linters, type checker
-   pip install "pymlt[docs]"       # build the documentation locally
+   pip install "mltpy[plots]"      # matplotlib for .plot() helpers
+   pip install "mltpy[pandas]"     # accept pd.Series as y
+   pip install "mltpy[examples]"   # run the vignettes (lifelines, jupyter, …)
+   pip install "mltpy[dev]"        # tests, linters, type checker
+   pip install "mltpy[docs]"       # build the documentation locally
 
 Development install
 -------------------
 
 .. code-block:: bash
 
-   git clone https://github.com/RMKruse/pymlt
-   cd pymlt
+   git clone https://github.com/RMKruse/mltpy
+   cd mltpy
    pip install -e ".[dev,examples]"
 
 Building the docs locally also requires `pandoc <https://pandoc.org/>`_,

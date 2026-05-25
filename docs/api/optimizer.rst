@@ -1,6 +1,6 @@
 optimizer
 =========
 
-.. automodule:: pymlt.optimizer
+.. automodule:: mltpy.optimizer
    :members:
    :show-inheritance:

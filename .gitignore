@@ -51,6 +51,6 @@ benchmarks/data/
 .hypothesis/
 .claude/
 Claude.md
-pymlt.egg-info/
+mltpy.egg-info/
 
 .coverage

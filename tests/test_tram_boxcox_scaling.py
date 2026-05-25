@@ -3,7 +3,7 @@
 End-to-end coverage of the ``tram::BoxCox(y ~ x_d, data, scale=~x_s)``
 convenience surface: the kwarg must thread through to the scaled-baseline
 likelihood (#71) and the scaled-predict path (#72) without callers having to
-reach for :class:`pymlt.MLT` directly.
+reach for :class:`mltpy.MLT` directly.
 
 Reference data is reused from the #70 fit fixture
 (``scaling_boxcox_normal_*``) and the #72 predict fixtures
@@ -12,7 +12,7 @@ Reference data is reused from the #70 fit fixture
 
 Sign conventions:
 
-* ``tram::BoxCox`` uses ``negative = TRUE`` (so ``h − X·β``).  pymlt
+* ``tram::BoxCox`` uses ``negative = TRUE`` (so ``h − X·β``).  mltpy
   parametrises ``h + X·β``; the β block compares against ``-β_R``.
 * γ is sign-aligned across the two parameterisations
   (ADR 0002, Decision 5).
@@ -25,7 +25,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt.tram import BoxCox
+from mltpy.tram import BoxCox
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -128,7 +128,7 @@ def test_boxcox_theta_beta_gamma_match_R(
     np.testing.assert_allclose(
         theta_b, boxcox_scaling_ref["theta_b"], rtol=1e-5, atol=1e-7
     )
-    # pymlt parametrises h + Xβ; tram::BoxCox uses h - Xβ_R.  Sign flip on β.
+    # mltpy parametrises h + Xβ; tram::BoxCox uses h - Xβ_R.  Sign flip on β.
     np.testing.assert_allclose(
         beta, -boxcox_scaling_ref["beta_r"], rtol=1e-5, atol=1e-7
     )

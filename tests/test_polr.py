@@ -7,9 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import pymlt
-from pymlt import OrderedVariable, OrdinalBasis, Polr
-from pymlt.variables import CensoredData
+import mltpy
+from mltpy import OrderedVariable, OrdinalBasis, Polr
+from mltpy.variables import CensoredData
 
 REFERENCE_DIR = Path(__file__).resolve().parent.parent / "reference"
 
@@ -246,7 +246,7 @@ class TestPolrSmoke:
 
     def test_unfitted_levels_raises(self):
         m = Polr()
-        with pytest.raises(pymlt.NotFittedError):
+        with pytest.raises(mltpy.NotFittedError):
             _ = m.levels_
 
     def test_inferred_levels_from_pandas_categorical(self):
@@ -337,7 +337,7 @@ class TestPolrReference:
     def test_coef_matches_r_with_sign_flip(self, fixture_data, r_label, py_dist):
         theta_r = np.loadtxt(REFERENCE_DIR / f"polr_{r_label}_theta.txt")
         K = fixture_data["K"]
-        # R parameterises h - X·β; pymlt uses h + X·β.  Negate to compare.
+        # R parameterises h - X·β; mltpy uses h + X·β.  Negate to compare.
         beta_r = theta_r[K - 1 :]
         m = Polr(levels=fixture_data["levels"], distribution=py_dist).fit(
             fixture_data["y"], fixture_data["X"]

@@ -1,6 +1,6 @@
-"""Finite-difference verification of analytical gradients in pymlt.
+"""Finite-difference verification of analytical gradients in mltpy.
 
-Tests every analytical gradient in :mod:`pymlt.likelihood` against a
+Tests every analytical gradient in :mod:`mltpy.likelihood` against a
 finite-difference approximation computed via
 :func:`scipy.optimize.approx_fprime`. This is an independent correctness
 check that does not depend on R: it catches bugs that the R-comparison
@@ -27,10 +27,10 @@ import pytest
 from numpy.typing import NDArray
 from scipy.optimize import approx_fprime
 
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import negative_log_likelihood
-from pymlt.model import MLT
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import negative_log_likelihood
+from mltpy.model import MLT
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Configuration

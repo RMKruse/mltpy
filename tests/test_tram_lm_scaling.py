@@ -3,14 +3,14 @@
 End-to-end coverage of the ``tram::Lm(y ~ x_d | x_s, data, scale = ~x_s)``
 convenience surface.  The kwarg must thread through to the scaled-baseline
 likelihood (#71) and the scaled-predict path (#72) without callers having
-to reach for :class:`pymlt.MLT` directly.
+to reach for :class:`mltpy.MLT` directly.
 
 Reference data lives in ``reference/scaling_lm_*`` and is produced by
 ``reference/generate_reference.R``.
 
 Sign conventions:
 
-* ``tram::Lm`` uses ``negative = TRUE`` (so ``h − X_d·β``).  pymlt
+* ``tram::Lm`` uses ``negative = TRUE`` (so ``h − X_d·β``).  mltpy
   parametrises ``h + X_d·β``; the β block compares against ``-β_R``.
 * γ is sign-aligned across the two parameterisations
   (ADR 0002, Decision 5).
@@ -18,7 +18,7 @@ Sign conventions:
 Notes
 -----
 ``tram::Lm`` represents the baseline as the affine basis ``(1, y)`` (a
-``polynomial_basis``) whereas pymlt's ``Lm`` uses the equivalent order=1
+``polynomial_basis``) whereas mltpy's ``Lm`` uses the equivalent order=1
 ``BernsteinBasis``.  The two parameterisations are linearly related — the
 fitted h(y) curve is identical at the MLE — but the raw ``theta_b`` block
 is in different coordinates and is not asserted element-wise here.
@@ -33,7 +33,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt.tram import Lm
+from mltpy.tram import Lm
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -113,7 +113,7 @@ def test_lm_beta_gamma_match_R(fitted_lm: Lm, lm_scaling_ref: dict) -> None:
     beta = fitted_lm.theta_[p : p + q_d]
     gamma = fitted_lm.theta_[p + q_d :]
 
-    # pymlt parametrises h + Xβ; tram::Lm uses h − Xβ_R.  Sign flip on β.
+    # mltpy parametrises h + Xβ; tram::Lm uses h − Xβ_R.  Sign flip on β.
     np.testing.assert_allclose(beta, -lm_scaling_ref["beta_r"], rtol=1e-5, atol=1e-7)
     # γ is sign-aligned across the two parameterisations (ADR 0002, Decision 5).
     np.testing.assert_allclose(gamma, lm_scaling_ref["gamma_r"], rtol=1e-5, atol=1e-7)

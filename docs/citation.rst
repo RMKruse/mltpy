@@ -1,19 +1,19 @@
 Citation
 ========
 
-If you use pymlt in scientific work, please cite both the underlying
+If you use mltpy in scientific work, please cite both the underlying
 methodology and the package.
 
-pymlt (software)
+mltpy (software)
 ----------------
 
 .. code-block:: bibtex
 
-   @software{pymlt,
+   @software{mltpy,
      author  = {Kruse, Ren{\'e}-Marcel},
-     title   = {pymlt: Conditional Transformation Models in Python},
+     title   = {mltpy: Conditional Transformation Models in Python},
      year    = {2026},
-     url     = {https://github.com/RMKruse/pymlt},
+     url     = {https://github.com/RMKruse/mltpy},
      version = {0.1.0},
    }
 

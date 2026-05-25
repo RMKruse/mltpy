@@ -1,4 +1,4 @@
-"""Tests for pymlt.likelihood — log-likelihood correctness, stability, gradients."""
+"""Tests for mltpy.likelihood — log-likelihood correctness, stability, gradients."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from scipy.optimize import check_grad
 
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import (
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import (
     _VALID_BASE_DISTRIBUTIONS,
     _get_dist,
     _log_diff_ndtr,
     log_likelihood,
     negative_log_likelihood,
 )
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -194,7 +194,7 @@ class TestLogLikelihoodRight:
         fits an mlt model with a Bernstein basis of order 4 on (0, 1) to 200
         right-censored observations, then writes y, the event indicator,
         θ, and the scalar log-likelihood. This test reconstructs the same
-        censored dataset in pymlt, evaluates ``log_likelihood`` at R's θ,
+        censored dataset in mltpy, evaluates ``log_likelihood`` at R's θ,
         and asserts exact agreement (same formula, same data, same θ).
         """
         import pathlib
@@ -218,7 +218,7 @@ class TestLogLikelihoodRight:
         ll_ref = float(np.loadtxt(required[3]))
 
         # R's Surv(time, event) uses event=1 for observed, 0 for censored;
-        # pymlt's CensoredData.right_censored takes is_censored (True ⇒ censored).
+        # mltpy's CensoredData.right_censored takes is_censored (True ⇒ censored).
         is_censored = event == 0
 
         basis = BernsteinBasis(order=len(theta) - 1, support=(0.0, 1.0))
@@ -329,7 +329,7 @@ class TestLogLikelihoodTruncation:
         """Per-observation ``log P_i`` computed with scipy.norm only.
 
         Mirrors the formula the truncation correction is supposed to
-        implement.  Independent of pymlt internals.
+        implement.  Independent of mltpy internals.
         """
         from scipy.special import log_ndtr
         from scipy.stats import norm
@@ -627,7 +627,7 @@ class TestLogLikelihoodTruncation:
         """hessian(...) is symmetric and matches the FD of the analytic gradient."""
         from scipy.optimize import approx_fprime
 
-        from pymlt.likelihood import hessian
+        from mltpy.likelihood import hessian
 
         rng = np.random.default_rng(3)
         basis = make_basis(order=3)
@@ -661,7 +661,7 @@ class TestLogLikelihoodTruncation:
 
     def test_score_matrix_sums_to_minus_nll_gradient(self):
         """``score_matrix.sum(0) == −grad(NLL)`` under truncation."""
-        from pymlt.likelihood import score_matrix
+        from mltpy.likelihood import score_matrix
 
         rng = np.random.default_rng(5)
         basis = make_basis(order=3)
@@ -680,7 +680,7 @@ class TestLogLikelihoodTruncation:
 
     def test_intercept_score_finite_difference(self):
         """intercept_score == d ℓ_i / d α at α=0, verified via finite differences."""
-        from pymlt.likelihood import intercept_score
+        from mltpy.likelihood import intercept_score
 
         rng = np.random.default_rng(9)
         basis = make_basis(order=3)
@@ -711,7 +711,7 @@ class TestLogLikelihoodTruncation:
         np.testing.assert_allclose(analytic.sum(), d_total_fd, rtol=1e-4, atol=1e-6)
 
     def test_reference_ll_trunc(self):
-        """Pymlt LL matches mlt::logLik on left-truncated + right-censored data."""
+        """Mltpy LL matches mlt::logLik on left-truncated + right-censored data."""
         import pathlib
 
         ref_dir = pathlib.Path(__file__).parent.parent / "reference"
@@ -752,7 +752,7 @@ class TestLogLikelihoodTruncation:
         # log(width=0) = -inf) so logpdf - log_p = +inf and exercises the
         # overflow branch.  After the fix the weight must be finite and
         # large, never zero.
-        from pymlt.likelihood import (
+        from mltpy.likelihood import (
             _LOG_FLOAT_MAX,
             _NORM_OPS,
             _truncation_weights,
@@ -1082,7 +1082,7 @@ class TestNegScore:
         return -(dist.logpdf(h + eps) - dist.logpdf(h - eps)) / (2 * eps)
 
     def test_normal(self):
-        from pymlt.likelihood import _NORM_OPS, _neg_score
+        from mltpy.likelihood import _NORM_OPS, _neg_score
 
         h = np.linspace(-2.0, 2.0, 9)
         np.testing.assert_allclose(_neg_score(h, _NORM_OPS), h, rtol=1e-12)
@@ -1091,7 +1091,7 @@ class TestNegScore:
         )
 
     def test_min_extreme_value(self):
-        from pymlt.likelihood import _MEV_OPS, _neg_score
+        from mltpy.likelihood import _MEV_OPS, _neg_score
 
         h = np.linspace(-1.5, 1.5, 9)
         expected = np.exp(h) - 1.0
@@ -1101,7 +1101,7 @@ class TestNegScore:
         )
 
     def test_max_extreme_value(self):
-        from pymlt.likelihood import _MAXEV_OPS, _neg_score
+        from mltpy.likelihood import _MAXEV_OPS, _neg_score
 
         h = np.linspace(-1.5, 1.5, 9)
         expected = 1.0 - np.exp(-h)
@@ -1111,7 +1111,7 @@ class TestNegScore:
         )
 
     def test_exponential(self):
-        from pymlt.likelihood import _EXPON_OPS, _neg_score
+        from mltpy.likelihood import _EXPON_OPS, _neg_score
 
         h = np.linspace(0.1, 3.0, 9)  # strictly > 0: in support
         expected = np.ones_like(h)
@@ -1121,7 +1121,7 @@ class TestNegScore:
         )
 
     def test_logistic(self):
-        from pymlt.likelihood import _LOGIS_OPS, _neg_score
+        from mltpy.likelihood import _LOGIS_OPS, _neg_score
 
         h = np.linspace(-2.0, 2.0, 9)
         expected = 2.0 * _LOGIS_OPS.cdf(h) - 1.0
@@ -1131,7 +1131,7 @@ class TestNegScore:
         )
 
     def test_laplace(self):
-        from pymlt.likelihood import _LAPLACE_OPS, _neg_score
+        from mltpy.likelihood import _LAPLACE_OPS, _neg_score
 
         h = np.array([-2.0, -1.0, -0.5, 0.5, 1.0, 2.0])
         expected = np.sign(h)
@@ -1141,7 +1141,7 @@ class TestNegScore:
         )
 
     def test_cauchy(self):
-        from pymlt.likelihood import _CAUCHY_OPS, _neg_score
+        from mltpy.likelihood import _CAUCHY_OPS, _neg_score
 
         h = np.linspace(-2.0, 2.0, 9)
         expected = 2.0 * h / (1.0 + h**2)
@@ -1152,7 +1152,7 @@ class TestNegScore:
 
     def test_unhandled_kind_raises_neg_score(self):
         """Exhaustiveness guard: an unknown kind fails loudly, no logistic fallthrough."""
-        from pymlt.likelihood import DistOps, _neg_score
+        from mltpy.likelihood import DistOps, _neg_score
 
         bogus = DistOps(kind="not-a-real-distribution", scipy=None)  # type: ignore[arg-type]
 
@@ -1161,7 +1161,7 @@ class TestNegScore:
 
     def test_unhandled_kind_raises_d2_logpdf(self):
         """Same guard in _d2_logpdf — the other correctness-critical dispatch."""
-        from pymlt.likelihood import DistOps, _d2_logpdf
+        from mltpy.likelihood import DistOps, _d2_logpdf
 
         bogus = DistOps(kind="not-a-real-distribution", scipy=None)  # type: ignore[arg-type]
 
@@ -1315,7 +1315,7 @@ class TestDistOpsDispatchIsIdentityFree:
     """
 
     def _make_ops(self, base_distribution):
-        from pymlt.likelihood import DistOps, _get_dist
+        from mltpy.likelihood import DistOps, _get_dist
 
         canonical = _get_dist(base_distribution)
         proxy = _ScipyProxy(canonical.scipy)
@@ -1332,21 +1332,21 @@ class TestDistOpsDispatchIsIdentityFree:
         return np.linspace(-2.0, 2.0, 9)
 
     def test_neg_score_matches(self, base_distribution):
-        from pymlt.likelihood import _neg_score
+        from mltpy.likelihood import _neg_score
 
         canonical, wrapped = self._make_ops(base_distribution)
         h = self._h_grid(base_distribution)
         np.testing.assert_array_equal(_neg_score(h, wrapped), _neg_score(h, canonical))
 
     def test_d2_logpdf_matches(self, base_distribution):
-        from pymlt.likelihood import _d2_logpdf
+        from mltpy.likelihood import _d2_logpdf
 
         canonical, wrapped = self._make_ops(base_distribution)
         h = self._h_grid(base_distribution)
         np.testing.assert_array_equal(_d2_logpdf(h, wrapped), _d2_logpdf(h, canonical))
 
     def test_log_likelihood_none_matches(self, base_distribution):
-        from pymlt.likelihood import _log_likelihood_from_dist
+        from mltpy.likelihood import _log_likelihood_from_dist
 
         canonical, wrapped = self._make_ops(base_distribution)
         basis = make_basis(order=4)
@@ -1361,7 +1361,7 @@ class TestDistOpsDispatchIsIdentityFree:
         np.testing.assert_allclose(got, ref, rtol=1e-12, atol=0.0)
 
     def test_nll_with_gradient_matches(self, base_distribution):
-        from pymlt.likelihood import _negative_log_likelihood_from_dist
+        from mltpy.likelihood import _negative_log_likelihood_from_dist
 
         canonical, wrapped = self._make_ops(base_distribution)
         basis = make_basis(order=4)
@@ -1379,7 +1379,7 @@ class TestDistOpsDispatchIsIdentityFree:
 
     def test_log_likelihood_left_censored_matches(self, base_distribution):
         """Covers the ``log_ndtr if dist.kind == 'normal'`` fast-path sites."""
-        from pymlt.likelihood import _log_likelihood_from_dist
+        from mltpy.likelihood import _log_likelihood_from_dist
 
         canonical, wrapped = self._make_ops(base_distribution)
         basis = make_basis(order=4)
@@ -1469,7 +1469,7 @@ class TestDistOpsClosedForm:
     @pytest.mark.parametrize("kind", list(_VALID_BASE_DISTRIBUTIONS))
     @pytest.mark.parametrize("method", METHODS)
     def test_closed_form_does_not_touch_scipy(self, kind, method):
-        from pymlt.likelihood import DistOps
+        from mltpy.likelihood import DistOps
 
         canonical = _get_dist(kind)
         ops = DistOps(kind=canonical.kind, scipy=_RaisingScipy(canonical.scipy))
@@ -1484,7 +1484,7 @@ class TestDistOpsClosedForm:
         np.testing.assert_allclose(got, ref, rtol=1e-10, atol=1e-12)
 
     def test_exponential_logpdf_full_domain(self):
-        from pymlt.likelihood import _EXPON_OPS
+        from mltpy.likelihood import _EXPON_OPS
 
         # Documented divergence from scipy: logpdf = -h on the whole line
         # (scipy returns -inf for h < 0).  Load-bearing for the exact-data

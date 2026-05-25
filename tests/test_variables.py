@@ -1,4 +1,4 @@
-"""Tests for pymlt.variables — variable types and CensoredData."""
+"""Tests for mltpy.variables — variable types and CensoredData."""
 
 import numpy as np
 import pytest
@@ -6,7 +6,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from pymlt.variables import CensoredData
+from mltpy.variables import CensoredData
 
 # ---------------------------------------------------------------------------
 # CensoredData — constructors

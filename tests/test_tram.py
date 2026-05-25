@@ -1,4 +1,4 @@
-"""Tests for pymlt.tram — BoxCox, Coxph, Colr, Lm."""
+"""Tests for mltpy.tram — BoxCox, Coxph, Colr, Lm."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from hypothesis import strategies as st
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
-import pymlt
-from pymlt.model import MLT
-from pymlt.tram import BoxCox, Colr, Coxph, Lehmann, Lm, _format_wald_table, _TramModel
-from pymlt.variables import CensoredData, CensoringType
+import mltpy
+from mltpy.model import MLT
+from mltpy.tram import BoxCox, Colr, Coxph, Lehmann, Lm, _format_wald_table, _TramModel
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -68,7 +68,7 @@ class TestBoxCoxSmoke:
         assert h.shape == (len(y),)
 
     def test_fitted_transformation_before_fit_raises(self):
-        from pymlt.model import NotFittedError
+        from mltpy.model import NotFittedError
 
         model = BoxCox(support=(0.0, 1.0))
         with pytest.raises(NotFittedError):
@@ -586,16 +586,16 @@ class TestPlot:
 
 
 # ---------------------------------------------------------------------------
-# Top-level pymlt import
+# Top-level mltpy import
 # ---------------------------------------------------------------------------
 
 
-def test_pymlt_top_level_import():
-    assert hasattr(pymlt, "BoxCox")
-    assert hasattr(pymlt, "Coxph")
-    assert hasattr(pymlt, "Colr")
-    assert hasattr(pymlt, "Lm")
-    model = pymlt.BoxCox(support=(0.0, 1.0))
+def test_mltpy_top_level_import():
+    assert hasattr(mltpy, "BoxCox")
+    assert hasattr(mltpy, "Coxph")
+    assert hasattr(mltpy, "Colr")
+    assert hasattr(mltpy, "Lm")
+    model = mltpy.BoxCox(support=(0.0, 1.0))
     assert isinstance(model, BoxCox)
 
 
@@ -679,13 +679,13 @@ class TestLmAccessors:
 
     def test_accessors_before_fit_raise(self):
         model = Lm(support=(0.0, 1.0))
-        with pytest.raises(pymlt.NotFittedError):
+        with pytest.raises(mltpy.NotFittedError):
             _ = model.sigma_
-        with pytest.raises(pymlt.NotFittedError):
+        with pytest.raises(mltpy.NotFittedError):
             _ = model.intercept_
-        with pytest.raises(pymlt.NotFittedError):
+        with pytest.raises(mltpy.NotFittedError):
             _ = model.coef_
-        with pytest.raises(pymlt.NotFittedError):
+        with pytest.raises(mltpy.NotFittedError):
             model.fitted_transformation(self.y)
 
     def test_degenerate_theta_raises(self):
@@ -825,12 +825,12 @@ class TestCoxphInteracting:
 
     def test_matches_mlt_with_interaction_basis(self):
         """Coxph(interacting=...) reproduces MLT(InteractionBasis(...))."""
-        from pymlt import (
+        from mltpy import (
             ConditionalTransformationModel,
             InteractionBasis,
             OptimizerConfig,
         )
-        from pymlt.basis import BernsteinBasis
+        from mltpy.basis import BernsteinBasis
 
         y, x = self._exact_data()
         y_basis = BernsteinBasis(order=3, support=(0.0, 1.0))
@@ -857,8 +857,8 @@ class TestCoxphInteracting:
 
     def test_survival_and_hazard_monotone_on_grid(self):
         """survival(y) is monotone non-increasing and hazard(y) is non-negative."""
-        from pymlt import OptimizerConfig
-        from pymlt.basis import BernsteinBasis
+        from mltpy import OptimizerConfig
+        from mltpy.basis import BernsteinBasis
 
         y, x = self._exact_data(seed=1)
         x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
@@ -882,8 +882,8 @@ class TestCoxphInteracting:
 
     def test_stores_interaction_basis_on_self(self):
         """The model's basis attribute is the constructed InteractionBasis."""
-        from pymlt import InteractionBasis
-        from pymlt.basis import BernsteinBasis
+        from mltpy import InteractionBasis
+        from mltpy.basis import BernsteinBasis
 
         x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
         model = Coxph(support=(0.0, 1.0), order=3, interacting=x_basis)

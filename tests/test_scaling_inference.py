@@ -11,7 +11,7 @@ adds the ``[theta_b | beta | gamma]`` block layout, including the
 R parity fixtures live in ``reference/scaling_vcov_*`` and are produced
 by ``reference/generate_reference.R`` (``tram::vcov(...)`` and
 ``sandwich::vcovHC(...)``).  See ADR 0002 Decision 5 for the sign
-convention: pymlt's β block flips for BoxCox (``negative = TRUE``) but
+convention: mltpy's β block flips for BoxCox (``negative = TRUE``) but
 γ is sign-aligned with R ``tram::*``'s scaling block on every model.
 """
 
@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 from scipy.optimize import approx_fprime
 
-from pymlt import (
+from mltpy import (
     MLT,
     CensoredData,
     CensoringType,
@@ -31,8 +31,8 @@ from pymlt import (
     negative_log_likelihood,
     score_matrix,
 )
-from pymlt.basis import BernsteinBasis
-from pymlt.tram import Colr, Coxph
+from mltpy.basis import BernsteinBasis
+from mltpy.tram import Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -485,10 +485,10 @@ def _load_scaled_vcov_fixture(tag: str) -> dict | None:
 
 
 def _sign_matrix_for(tag: str, p: int, q_d: int, q_s: int) -> np.ndarray:
-    """Diagonal signing matrix that aligns pymlt's vcov with R's.
+    """Diagonal signing matrix that aligns mltpy's vcov with R's.
 
-    pymlt parametrises ``h + Xβ``; ``tram::BoxCox`` uses ``negative = TRUE``
-    so ``β_R = -β_pymlt`` — both rows and columns indexed by β flip sign in
+    mltpy parametrises ``h + Xβ``; ``tram::BoxCox`` uses ``negative = TRUE``
+    so ``β_R = -β_mltpy`` — both rows and columns indexed by β flip sign in
     the vcov.  ``tram::Coxph`` / ``Colr`` use ``negative = FALSE`` (no flip).
     γ is sign-aligned across all three classes (ADR 0002 Decision 5).
     """
@@ -498,8 +498,8 @@ def _sign_matrix_for(tag: str, p: int, q_d: int, q_s: int) -> np.ndarray:
     return np.diag(s)
 
 
-def _theta_pymlt_at_R(tag: str, ref: dict) -> np.ndarray:
-    """Convert R's coef vector to pymlt's sign convention.
+def _theta_mltpy_at_R(tag: str, ref: dict) -> np.ndarray:
+    """Convert R's coef vector to mltpy's sign convention.
 
     BoxCox flips β to absorb ``negative = TRUE``; Coxph / Colr keep β.  γ is
     sign-aligned across all three classes (ADR 0002 Decision 5).
@@ -533,22 +533,22 @@ def test_scaled_vcov_bare_matches_R(tag: str) -> None:
     Function-vs-function check at R's reported θ (sign-flipped for BoxCox's
     β).  For BoxCox and Colr the dedicated fixtures land at *interior*
     MLEs (no active monotonicity constraints), so R's ``vcov.mlt`` reduces
-    to bare ``solve(H)`` and pymlt's bare ``inv(H @ θ_R)`` matches the
+    to bare ``solve(H)`` and mltpy's bare ``inv(H @ θ_R)`` matches the
     full ``(p+q_d+q_s)²`` block at rtol=1e-4 / atol=1e-6.
 
     The Coxph case lives in :func:`test_scaled_vcov_coxph_matches_R_via_auglag`
     because its baseline hazard is structurally constraint-binding and R's
     ``vcov.mlt`` applies an active-set penalty that bare ``inv(H)`` misses
-    — the test there exercises pymlt's ``regularize='auglag'`` mode
+    — the test there exercises mltpy's ``regularize='auglag'`` mode
     end-to-end instead.
     """
     ref = _load_scaled_vcov_fixture(tag)
     if ref is None:
         pytest.skip(f"scaling_vcov_{tag}_* reference fixtures not found")
     basis = BernsteinBasis(order=ref["p"] - 1, support=ref["support"])
-    theta_pymlt = _theta_pymlt_at_R(tag, ref)
+    theta_mltpy = _theta_mltpy_at_R(tag, ref)
     H = hessian(
-        theta_pymlt,
+        theta_mltpy,
         basis,
         ref["y"],
         ref["x_d"],
@@ -568,7 +568,7 @@ def test_scaled_vcov_coxph_matches_R_via_auglag() -> None:
     The scaled-baseline Coxph fit lands at the monotonicity boundary (two
     adjacent θ_b coefficients tie up).  At that boundary R's
     ``vcov(as.mlt(fit))`` applies an active-set penalty that bare
-    ``inv(H)`` from pymlt misses — the function-vs-function check would
+    ``inv(H)`` from mltpy misses — the function-vs-function check would
     fail at ``max_rel ≈ 37`` on the full block.  ``vcov(regularize='auglag')``
     pre-augments the Hessian along binding rows with the same
     ``ρ · Aᵀ_active A_active`` term R uses, recovering full-block parity at
@@ -593,7 +593,7 @@ def test_scaled_vcov_coxph_matches_R_via_auglag() -> None:
     V_expected = S @ ref["V_info_r"] @ S
     # Full block parity, including the θ_b and cross-block entries that
     # bare ``inv(H)`` was ~37× off on.  Tolerance absorbs the small
-    # optimiser drift between pymlt's and R's auglag (``Δθ ≈ 1e-5``)
+    # optimiser drift between mltpy's and R's auglag (``Δθ ≈ 1e-5``)
     # propagated through the inverse of an ill-conditioned matrix.
     np.testing.assert_allclose(V_py, V_expected, rtol=5e-3, atol=1e-4)
 
@@ -602,11 +602,11 @@ def test_scaled_vcov_coxph_matches_R_via_auglag() -> None:
 def test_scaled_sandwich_matches_R(tag: str) -> None:
     """``V_HC0 = V_info U'U V_info`` (HC0 sandwich) matches R element-wise.
 
-    Reuses R's vcov for the bread and pymlt's analytical score matrix for
+    Reuses R's vcov for the bread and mltpy's analytical score matrix for
     the meat, mirroring the R recipe: ``vcov(as.mlt(fit)) %*%
     crossprod(estfun(as.mlt(fit))) %*% vcov(as.mlt(fit))``.  Because the
     meat is computed from the same per-observation scores (signed for β
-    under BoxCox) the comparison is essentially testing whether pymlt's
+    under BoxCox) the comparison is essentially testing whether mltpy's
     ``score_matrix`` reproduces R's ``estfun.mlt`` row-by-row at the same θ.
 
     The Coxph case lives in
@@ -619,9 +619,9 @@ def test_scaled_sandwich_matches_R(tag: str) -> None:
     if ref is None:
         pytest.skip(f"scaling_vcov_{tag}_* reference fixtures not found")
     basis = BernsteinBasis(order=ref["p"] - 1, support=ref["support"])
-    theta_pymlt = _theta_pymlt_at_R(tag, ref)
+    theta_mltpy = _theta_mltpy_at_R(tag, ref)
     H = hessian(
-        theta_pymlt,
+        theta_mltpy,
         basis,
         ref["y"],
         ref["x_d"],
@@ -631,7 +631,7 @@ def test_scaled_sandwich_matches_R(tag: str) -> None:
     )
     V_py_info = np.linalg.inv(H)
     U = score_matrix(
-        theta_pymlt,
+        theta_mltpy,
         basis,
         ref["y"],
         ref["x_d"],
@@ -651,14 +651,14 @@ def test_scaled_sandwich_coxph_matches_R_via_auglag() -> None:
     Same mechanism as :func:`test_scaled_vcov_coxph_matches_R_via_auglag`:
     the scaled Coxph fit binds two adjacent θ_b coefficients on the
     monotonicity boundary, so R's ``vcov(as.mlt(fit))`` — which forms the
-    bread of the sandwich — augments along the active constraint.  Pymlt's
+    bread of the sandwich — augments along the active constraint.  Mltpy's
     bread must follow suit; otherwise the penalty leak compounds through
     both ``V_info`` copies of ``V = V_info · UᵀU · V_info``.
 
     End-to-end fit through the public ``sandwich_vcov`` API (not
     function-vs-function at θ_R), so the tolerance absorbs both the small
     optimiser drift in θ̂ (``Δθ ≈ 1e-5``) and the meat reweighting that
-    comes from evaluating ``U`` at pymlt's θ̂ rather than R's.  Empirically
+    comes from evaluating ``U`` at mltpy's θ̂ rather than R's.  Empirically
     those two error sources combine to ``max_rel ≈ 5e-5`` on the full block;
     we use the same ``rtol=1e-4, atol=1e-6`` as the BoxCox / Colr branch so
     Coxph is no longer the loose case.  The previous sub-block-only check at
@@ -678,12 +678,12 @@ def test_scaled_sandwich_coxph_matches_R_via_auglag() -> None:
 def test_scaled_wald_test_gamma_matches_R(tag: str) -> None:
     """Wald(H0: γ_1 = 0) on a scaled fit matches R's W statistic and p-value.
 
-    The fit is re-run in pymlt (so this hits the public ``wald_test`` API
+    The fit is re-run in mltpy (so this hits the public ``wald_test`` API
     end-to-end, not just the analytical Hessian).  The statistic and p-value
     target R's ``Rθ' (RVR')⁻¹ Rθ`` computed from ``vcov(as.mlt(fit))``.
 
     For BoxCox / Colr the vcov is interior and parity holds at rtol=1e-3 —
-    pymlt re-fits rather than using R's reported θ, so the optimiser stops
+    mltpy re-fits rather than using R's reported θ, so the optimiser stops
     at a slightly different θ̂ and that residual propagates into Rθ and
     (RVR').  The Coxph case lives in
     :func:`test_scaled_wald_test_gamma_coxph_matches_R_via_auglag` because
@@ -713,7 +713,7 @@ def test_scaled_wald_test_gamma_coxph_matches_R_via_auglag() -> None:
     fitted θ̂ binds the baseline monotonicity boundary, so R's
     ``vcov(as.mlt(fit))`` augments along the active constraint.  Calling
     ``model.wald_test(R, regularize='auglag')`` threads that same
-    augmentation into pymlt's V, recovering parity on the γ-row that bare
+    augmentation into mltpy's V, recovering parity on the γ-row that bare
     ``inv(H)`` was off by ~37×.  Empirically W matches R at ``rel ≈ 8e-5``;
     we use the same ``rtol=1e-3, atol=1e-5`` as the BoxCox / Colr branch
     (driven by the optimiser-drift residual in θ̂ that propagates into Rθ
@@ -736,7 +736,7 @@ def test_scaled_wald_test_gamma_coxph_matches_R_via_auglag() -> None:
 
 
 def _fit_scaled(tag: str, ref: dict):
-    """Fit the appropriate pymlt model class on the loaded reference data."""
+    """Fit the appropriate mltpy model class on the loaded reference data."""
     if tag == "boxcox":
         model: object = MLT(
             order=ref["p"] - 1,
@@ -808,7 +808,7 @@ def test_scaled_intercept_score_matches_closed_form_exact_normal() -> None:
     + x_d·β``, so the residual is ``-h_i`` evaluated at the scaled h.  This
     pins the wiring beyond shape-only.
     """
-    from pymlt.likelihood import intercept_score
+    from mltpy.likelihood import intercept_score
 
     prob = _toy_scaled_problem(n=40, p=5, q_d=2, q_s=1, seed=21)
     theta = prob["theta"]

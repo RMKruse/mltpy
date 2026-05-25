@@ -1,4 +1,4 @@
-# Contributing to pymlt
+# Contributing to mltpy
 
 ## Prerequisites
 
@@ -12,8 +12,8 @@ Optional (only needed to regenerate R reference files):
 ## Getting started
 
 ```bash
-git clone https://github.com/rene-marcel-kruse/pymlt
-cd pymlt
+git clone https://github.com/rene-marcel-kruse/mltpy
+cd mltpy
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
@@ -22,13 +22,13 @@ pip install -e ".[dev]"
 
 ```bash
 pytest tests/          # full suite
-pytest --cov=pymlt     # with coverage report
+pytest --cov=mltpy     # with coverage report
 ```
 
 ## Benchmarks
 
 ```bash
-make benchmark         # times pymlt vs. R mlt across n × order × censoring
+make benchmark         # times mltpy vs. R mlt across n × order × censoring
 ```
 
 Requires R with the `mlt`, `basefun`, `variables`, and `survival` packages.
@@ -41,7 +41,7 @@ the latest committed report is at
 | Tool | Command | Notes |
 |------|---------|-------|
 | ruff | `ruff check .` / `ruff format .` | linting + formatting |
-| mypy | `mypy pymlt/` | strict mode; scipy stubs excluded |
+| mypy | `mypy mltpy/` | strict mode; scipy stubs excluded |
 
 Line length: 88 characters.
 
@@ -76,5 +76,5 @@ pytest tests/test_model.py -k r_reference
 
 - One logical change per PR.
 - All tests must pass: `pytest tests/ -q`
-- No mypy errors: `mypy pymlt/`
+- No mypy errors: `mypy mltpy/`
 - No ruff warnings: `ruff check .`

@@ -2,8 +2,8 @@
 
 Users import exclusively from this module::
 
-    import pymlt
-    model = pymlt.MLT(order=6, support=(0, 100))
+    import mltpy
+    model = mltpy.MLT(order=6, support=(0, 100))
     model.fit(y)
     cdf = model.predict(y_new, what="distribution")
 
@@ -30,8 +30,8 @@ from scipy.optimize import brentq
 from scipy.special import comb, log_ndtr
 from scipy.stats import chi2, norm
 
-from pymlt.basis import BernsteinBasis, InteractionBasis
-from pymlt.likelihood import (
+from mltpy.basis import BernsteinBasis, InteractionBasis
+from mltpy.likelihood import (
     _H_CLIP,
     BaseDistribution,
     InfeasibleParameterError,
@@ -41,17 +41,17 @@ from pymlt.likelihood import (
     _validate_weights_offset,
     log_likelihood,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     hessian as _hessian,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     intercept_score as _intercept_score,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     score_matrix as _score_matrix,
 )
-from pymlt.optimizer import OptimizationResult, OptimizerConfig, optimize
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.optimizer import OptimizationResult, OptimizerConfig, optimize
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Exceptions and warnings
@@ -188,14 +188,14 @@ class ConditionalTransformationModel:
     Parameters
     ----------
     basis:
-        :class:`~pymlt.basis.BernsteinBasis` defining the response
+        :class:`~mltpy.basis.BernsteinBasis` defining the response
         transformation.
     censoring:
         Censoring type of the response data.  Defaults to
-        :attr:`~pymlt.variables.CensoringType.NONE`.
+        :attr:`~mltpy.variables.CensoringType.NONE`.
     optimizer_config:
         Optimisation settings.  If ``None``, defaults from
-        :class:`~pymlt.optimizer.OptimizerConfig` are used.
+        :class:`~mltpy.optimizer.OptimizerConfig` are used.
     """
 
     def __init__(
@@ -257,7 +257,7 @@ class ConditionalTransformationModel:
 
         self.n_obs_: int | None = None
         """Number of observations used in :meth:`fit`.  For
-        :class:`~pymlt.variables.CensoredData`, this is ``y.n``; otherwise
+        :class:`~mltpy.variables.CensoredData`, this is ``y.n``; otherwise
         ``len(y)``.  ``None`` before :meth:`fit`."""
 
         self.n_free_params_: int | None = None
@@ -432,7 +432,7 @@ class ConditionalTransformationModel:
         y:
             Response observations.  Must lie within ``basis.support``.
             Accepts ``np.ndarray``, ``pd.Series``, or
-            :class:`~pymlt.variables.CensoredData`.
+            :class:`~mltpy.variables.CensoredData`.
         X:
             Optional covariate matrix of shape ``(n, q)``.  If given, the
             last ``q`` entries of ``theta_`` are regression coefficients.
@@ -1370,7 +1370,7 @@ class ConditionalTransformationModel:
               as a fallback.  This is the default because the Hessian can be
               singular at constrained MLEs, and on well-conditioned fits it
               reduces to bare ``H⁻¹`` (R ``mlt::vcov.mlt`` behaves the same
-              way in the cases where pymlt's bare ``inv(H)`` already matches R
+              way in the cases where mltpy's bare ``inv(H)`` already matches R
               — see ``tests/test_confidence.py``).
             * ``'auglag'`` — *always* return the active-set-constrained
               covariance when active monotonicity rows exist, rather than
@@ -1386,7 +1386,7 @@ class ConditionalTransformationModel:
               to bare ``H`` when no constraint binds or auglag data are
               unavailable.  Opt-in because it inflates standard errors along
               tied rows and consequently widens ``confint`` / ``confband``
-              outputs in cases where pymlt's bare ``inv(H)`` already matches R.
+              outputs in cases where mltpy's bare ``inv(H)`` already matches R.
             * ``None`` — raise ``RuntimeError`` on singular Hessian (original
               behaviour; useful when you need a diagnostic failure).
 
@@ -2726,7 +2726,7 @@ class ConditionalTransformationModel:
         except ImportError as exc:
             raise ImportError(
                 "matplotlib is required for plot(). "
-                "Install with: pip install 'pymlt[plots]'"
+                "Install with: pip install 'mltpy[plots]'"
             ) from exc
 
         self._check_is_fitted()

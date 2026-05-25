@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pymlt"
+name = "mltpy"
 version = "0.4.0"
 description = "Conditional Transformation Models — Python port of R mlt"
 readme = "README.md"
@@ -26,8 +26,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/RMKruse/pymlt"
-Documentation = "https://rmkruse.github.io/pymlt/"
+Repository = "https://github.com/RMKruse/mltpy"
+Documentation = "https://rmkruse.github.io/mltpy/"
 
 [project.optional-dependencies]
 pandas = ["pandas>=2.0"]
@@ -63,12 +63,12 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pymlt*"]
+include = ["mltpy*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [
-    "ignore::pymlt.model.ConvergenceWarning",
+    "ignore::mltpy.model.ConvergenceWarning",
 ]
 
 [tool.mypy]
@@ -89,7 +89,7 @@ select = ["E", "F", "W", "I"]
 "tests/*" = ["E501"]
 
 [tool.coverage.run]
-source = ["pymlt"]
+source = ["mltpy"]
 omit = ["tests/*", ".venv/*"]
 
 [tool.coverage.report]

@@ -1,6 +1,6 @@
 tram
 ====
 
-.. automodule:: pymlt.tram
+.. automodule:: mltpy.tram
    :members:
    :show-inheritance:

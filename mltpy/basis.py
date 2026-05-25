@@ -512,7 +512,7 @@ class OrdinalBasis:
     ``k ∈ {1, ..., K-1}`` (representing the boundary between level ``k`` and
     level ``k+1``), the basis returns the one-hot row ``e_k`` of length
     ``K-1``, so ``B(k) @ θ = θ_k`` exactly — the basis *selects* the cutpoint.
-    Combined with :class:`~pymlt.constraints.MonotonicityConstraint` of
+    Combined with :class:`~mltpy.constraints.MonotonicityConstraint` of
     ``n_params = K-1`` this yields ``θ_1 ≤ ... ≤ θ_{K-1}``.
 
     The class duck-types :class:`BernsteinBasis` (``order``, ``support``,
@@ -529,7 +529,7 @@ class OrdinalBasis:
     The transformation ``h(y) = B(y) @ θ`` is a step function across cut
     positions, so its analytical derivative w.r.t. ``y`` is zero almost
     everywhere.  :meth:`derivative` returns zero accordingly; the exact-
-    likelihood paths in :mod:`pymlt.likelihood` would log(0) but are never
+    likelihood paths in :mod:`mltpy.likelihood` would log(0) but are never
     invoked for ordinal data — every observation is interval-censored
     (or one-sided open) and routes through the censored likelihoods.
     """
@@ -550,7 +550,7 @@ class OrdinalBasis:
         """Wide enough to bracket integer cut positions ``1..K-1``.
 
         Rows that resolve to ``±∞`` bypass the support check in
-        :meth:`pymlt.model.ConditionalTransformationModel._validate_input`.
+        :meth:`mltpy.model.ConditionalTransformationModel._validate_input`.
         """
         return (0.0, float(self.K))
 
@@ -566,7 +566,7 @@ class OrdinalBasis:
         y:
             Observations, shape ``(n,)``.  Each value must be an integer in
             ``{1, ..., K-1}`` (the synthetic cut positions emitted by
-            :meth:`pymlt.variables.OrderedVariable.from_labels`).
+            :meth:`mltpy.variables.OrderedVariable.from_labels`).
 
         Returns
         -------

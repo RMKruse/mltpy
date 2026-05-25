@@ -1,7 +1,7 @@
 # Results of the Validation Process
 
 ```
-pymlt validation — R reference comparison
+mltpy validation — R reference comparison
 ==============================================================================================================
 Case                        │ Model  │     n │ Ord │ Status│     Δθ │    Δll │   Δcdf│   Δpdf │   Δqnt │   Δhaz
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────

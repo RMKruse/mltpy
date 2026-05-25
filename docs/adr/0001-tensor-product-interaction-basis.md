@@ -3,8 +3,8 @@
 **Date:** 2026-05-17  
 **Status:** Accepted  
 **Deciders:** RMKruse  
-**Issue:** [#62 Interacting Terms: ADR for tensor-product API and monotonicity strategy](https://github.com/RMKruse/pymlt/issues/62)  
-**Parent:** [#27 Interacting Terms (Tensor Products)](https://github.com/RMKruse/pymlt/issues/27)
+**Issue:** [#62 Interacting Terms: ADR for tensor-product API and monotonicity strategy](https://github.com/RMKruse/mltpy/issues/62)  
+**Parent:** [#27 Interacting Terms (Tensor Products)](https://github.com/RMKruse/mltpy/issues/27)
 
 ---
 
@@ -22,8 +22,8 @@ This ADR resolves five open questions required before any tensor-product code is
 
 ## Decision 1 — Public Surface
 
-**Chosen:** Single new class `InteractionBasis(y_basis, x_basis)` in `pymlt.basis`,
-re-exported from `pymlt.__init__`.  The existing `MLT` / `ConditionalTransformationModel`
+**Chosen:** Single new class `InteractionBasis(y_basis, x_basis)` in `mltpy.basis`,
+re-exported from `mltpy.__init__`.  The existing `MLT` / `ConditionalTransformationModel`
 classes accept this as the `basis=` argument; no new model class is introduced, and no
 new model parameter (`interacting=...`) is added.
 
@@ -160,8 +160,8 @@ all models constructed without `InteractionBasis`.
 
 ## Stub files
 
-Alongside this ADR, a `class InteractionBasis` skeleton is added to `pymlt/basis.py`
-and re-exported from `pymlt/__init__.py`, raising `NotImplementedError` on all calls.
+Alongside this ADR, a `class InteractionBasis` skeleton is added to `mltpy/basis.py`
+and re-exported from `mltpy/__init__.py`, raising `NotImplementedError` on all calls.
 This lets downstream slices import the name without a follow-up rename.
 
 ---

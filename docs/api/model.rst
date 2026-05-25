@@ -1,6 +1,6 @@
 model
 =====
 
-.. automodule:: pymlt.model
+.. automodule:: mltpy.model
    :members:
    :show-inheritance:

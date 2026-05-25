@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from scipy.stats import kstest
 
-from pymlt import MLT
+from mltpy import MLT
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 

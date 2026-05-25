@@ -1,4 +1,4 @@
-"""Tests for pymlt.constraints — monotonicity and boundary constraints."""
+"""Tests for mltpy.constraints — monotonicity and boundary constraints."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from scipy.optimize import LinearConstraint, minimize
 
-from pymlt.constraints import (
+from mltpy.constraints import (
     BoundaryConstraint,
     MonotonicityConstraint,
     build_constraint_matrices,

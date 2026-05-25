@@ -1,4 +1,4 @@
-# pymlt Validation Report
+# mltpy Validation Report
 
 | Case | Model | n | Order | Status | Δθ | Δll | Δcdf | Δpdf | Δquant | Δhaz | Δtrafo | Δsurvivor | Δcumhazard | Δodds | Δlogdistribution | Δlogsurvivor | Δlogdensity | Δloghazard | Δlogcumhazard | Δlogodds |
 |------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|------|

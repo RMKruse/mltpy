@@ -92,8 +92,8 @@ def _make_fit(
     """Build a FittedResult near the reference with controlled deltas.
 
     For each of the 10 new metric names, a ``<what>_offset`` keyword adds a
-    uniform shift to the corresponding pymlt prediction (only when the
-    reference provides a value; otherwise the pymlt field stays ``None``).
+    uniform shift to the corresponding mltpy prediction (only when the
+    reference provides a value; otherwise the mltpy field stays ``None``).
     """
     pdf_py = None
     if ref.pdf_values_r is not None:

@@ -14,8 +14,8 @@ Acceptance criteria (from #70):
 
 The fixture is produced by ``reference/generate_reference.R`` (block "Scaling-terms
 tracer (issue #70)").  R / tram parameterises the shift block with the *minus*
-sign (``negative=TRUE`` on BoxCox), so ``pymlt.coef_`` compares against
-``-r.beta``.  The scaling block (γ) is sign-aligned across R and pymlt; see
+sign (``negative=TRUE`` on BoxCox), so ``mltpy.coef_`` compares against
+``-r.beta``.  The scaling block (γ) is sign-aligned across R and mltpy; see
 ``docs/adr/0002-scaling-terms.md``, Decision 5.
 """
 
@@ -26,10 +26,10 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt import MLT
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import negative_log_likelihood
-from pymlt.variables import CensoringType
+from mltpy import MLT
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import negative_log_likelihood
+from mltpy.variables import CensoringType
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 _FIXTURE_FILES = [
@@ -108,7 +108,7 @@ def test_scaling_theta_beta_gamma_match_R(scaling_ref: dict) -> None:
     gamma = model.theta_[p + q_d :]
 
     np.testing.assert_allclose(theta_b, scaling_ref["theta_b"], rtol=1e-5, atol=1e-7)
-    # pymlt parametrises h + Xβ; tram BoxCox uses h - Xβ_R.  Sign flip on β.
+    # mltpy parametrises h + Xβ; tram BoxCox uses h - Xβ_R.  Sign flip on β.
     np.testing.assert_allclose(beta, -scaling_ref["beta_r"], rtol=1e-5, atol=1e-7)
     # γ is sign-aligned across the two parameterisations (ADR 0002, Decision 5).
     np.testing.assert_allclose(gamma, scaling_ref["gamma_r"], rtol=1e-5, atol=1e-7)

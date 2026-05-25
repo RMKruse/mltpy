@@ -29,7 +29,7 @@ The target distribution Z follows one of:
                              covariates a per-row inequality
                              ``theta_b[0] + X_i · β >= 0`` is added for each
                              training observation (see
-                             :func:`pymlt.constraints.build_constraints`).
+                             :func:`mltpy.constraints.build_constraints`).
 
 Weighted log-likelihood
 -----------------------
@@ -85,8 +85,8 @@ from scipy.stats import laplace as _laplace
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
-from pymlt.basis import BernsteinBasis, InteractionBasis
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.basis import BernsteinBasis, InteractionBasis
+from mltpy.variables import CensoredData, CensoringType
 
 BaseDistribution = Literal[
     "normal",
@@ -273,7 +273,7 @@ def _get_dist(base_distribution: str) -> DistOps:
       if ``h(T) ~ MaxExtrVal`` then ``-log F(t) = h(t) + x'beta``.
     * ``"exponential"``        — :data:`scipy.stats.expon`, the standard
       exponential (rate 1).  Support is ``[0, ∞)``; the optimiser enforces
-      ``h(y|x) >= 0`` via :func:`pymlt.constraints.build_constraints`.  With
+      ``h(y|x) >= 0`` via :func:`mltpy.constraints.build_constraints`.  With
       no covariates this collapses to ``theta_b[0] >= 0``; with covariates,
       one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row.
     * ``"laplace"``            — :data:`scipy.stats.laplace`, the standard
@@ -1330,8 +1330,8 @@ def _ll_none(
 
     The factor of ``0.5`` in the exponent matches mlt's internal convention
     (``mlt:::tmlt`` evaluates ``sterm <- exp(0.5 * <scaling_predict>)``), so
-    pymlt's γ is sign- *and* magnitude-aligned with R ``tram``'s scaling
-    coefficient.  Without the 0.5, pymlt's γ would be half R's.
+    mltpy's γ is sign- *and* magnitude-aligned with R ``tram``'s scaling
+    coefficient.  Without the 0.5, mltpy's γ would be half R's.
 
     The parameter vector is ``theta = [theta_b | beta | gamma]`` of length
     ``p + q_d + q_s``.
@@ -3474,7 +3474,7 @@ def hessian(
     The returned matrix is the observed information ``∂²(-ℓ)/∂θ∂θ'`` at
     ``theta``.  Inverting it yields the asymptotic covariance matrix of the
     maximum-likelihood estimator (see
-    :meth:`~pymlt.model.ConditionalTransformationModel.vcov`).
+    :meth:`~mltpy.model.ConditionalTransformationModel.vcov`).
 
     Parameters
     ----------

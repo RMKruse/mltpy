@@ -1,7 +1,7 @@
-"""pymlt — Conditional Transformation Models in Python."""
+"""mltpy — Conditional Transformation Models in Python."""
 
-from pymlt._auglag import AugLagOptions, AugLagResult
-from pymlt.basis import (
+from mltpy._auglag import AugLagOptions, AugLagResult
+from mltpy.basis import (
     InteractionBasis,
     InterceptBasis,
     LegendreBasis,
@@ -10,14 +10,14 @@ from pymlt.basis import (
     OrdinalBasis,
     PolynomialBasis,
 )
-from pymlt.likelihood import (
+from mltpy.likelihood import (
     InfeasibleParameterError,
     hessian,
     log_likelihood,
     negative_log_likelihood,
     score_matrix,
 )
-from pymlt.model import (
+from mltpy.model import (
     MLT,
     AnovaResult,
     ConditionalTransformationModel,
@@ -26,9 +26,9 @@ from pymlt.model import (
     WaldTestResult,
     anova,
 )
-from pymlt.optimizer import OptimizerConfig
-from pymlt.tram import BoxCox, Colr, Coxph, Lehmann, Lm, Polr, Survreg
-from pymlt.variables import CensoredData, CensoringType, OrderedVariable
+from mltpy.optimizer import OptimizerConfig
+from mltpy.tram import BoxCox, Colr, Coxph, Lehmann, Lm, Polr, Survreg
+from mltpy.variables import CensoredData, CensoringType, OrderedVariable
 
 __version__ = "0.4.0"
 

@@ -6,14 +6,14 @@ convenience surface across all three parametric families
 (``"weibull"``, ``"lognormal"``, ``"loglogistic"``).  The kwarg must
 thread through to the scaled-baseline likelihood (#71) and the
 scaled-predict path (#72) without callers having to reach for
-:class:`pymlt.MLT` directly.
+:class:`mltpy.MLT` directly.
 
 Reference data lives in ``reference/scaling_survreg_<dist>_*`` and is
 produced by ``reference/generate_reference.R``.
 
 Sign conventions:
 
-* ``tram::Survreg`` uses ``negative = TRUE`` (so ``h − X_d·β``).  pymlt
+* ``tram::Survreg`` uses ``negative = TRUE`` (so ``h − X_d·β``).  mltpy
   parametrises ``h + X_d·β``; the β block compares against ``-β_R``.
 * γ is sign-aligned across the two parameterisations
   (ADR 0002, Decision 5).
@@ -22,7 +22,7 @@ Notes
 -----
 ``tram::Survreg`` always fits a strictly affine, two-parameter baseline
 on ``log(t)`` (a ``polynomial_basis`` with intercept + ``log(t)``).
-pymlt's ``Survreg`` uses ``LogBernsteinBasis`` on the log-time scale;
+mltpy's ``Survreg`` uses ``LogBernsteinBasis`` on the log-time scale;
 with ``order = 1`` the basis is also affine in ``log(t)`` and produces
 an equivalent (linearly reparameterised) baseline at the MLE.  The raw
 ``theta_b`` block is therefore in different coordinates between the two
@@ -38,8 +38,8 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt.tram import Survreg
-from pymlt.variables import CensoredData
+from mltpy.tram import Survreg
+from mltpy.variables import CensoredData
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -148,7 +148,7 @@ def test_survreg_beta_gamma_match_R(
     beta = fitted_survreg.theta_[p : p + q_d]
     gamma = fitted_survreg.theta_[p + q_d :]
 
-    # pymlt parametrises h + Xβ; tram::Survreg uses h − Xβ_R.  Sign flip on β.
+    # mltpy parametrises h + Xβ; tram::Survreg uses h − Xβ_R.  Sign flip on β.
     np.testing.assert_allclose(
         beta, -survreg_scaling_ref["beta_r"], rtol=1e-5, atol=1e-6
     )

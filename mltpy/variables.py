@@ -298,7 +298,7 @@ class CensoredData:
 class OrderedVariable:
     """Ordered categorical response with K levels and K-1 transformation cutpoints.
 
-    Used by :class:`pymlt.tram.Polr` (proportional-odds ordinal regression).
+    Used by :class:`mltpy.tram.Polr` (proportional-odds ordinal regression).
     A level-``k`` observation (``1 <= k <= K``) is mapped to interval-censored
     bounds on a synthetic integer cut scale::
 
@@ -306,7 +306,7 @@ class OrderedVariable:
         level k   → (k-1, k]      for 1 < k < K
         level K   → (K-1, +∞)
 
-    Combined with :class:`pymlt.basis.OrdinalBasis`, the cut position ``k``
+    Combined with :class:`mltpy.basis.OrdinalBasis`, the cut position ``k``
     selects one of ``K-1`` Bernstein-like coefficients ``θ_k`` so that
     ``h(y_k) = θ_k`` exactly.
 
@@ -374,7 +374,7 @@ class OrderedVariable:
         (variable, censored_data)
             ``variable`` carries the level vocabulary; ``censored_data`` has
             one row per observation with synthetic integer-cut bounds suitable
-            for :class:`~pymlt.basis.OrdinalBasis` and the interval-censored
+            for :class:`~mltpy.basis.OrdinalBasis` and the interval-censored
             likelihood path.
 
         Raises

@@ -1,4 +1,4 @@
-"""Tests for pymlt.basis — Bernstein basis, derivatives, and integration."""
+"""Tests for mltpy.basis — Bernstein basis, derivatives, and integration."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from pymlt.basis import (
+from mltpy.basis import (
     BernsteinBasis,
     InterceptBasis,
     LegendreBasis,
@@ -317,7 +317,7 @@ class TestAssembledCache:
         """evaluate participates in the same assembled cache: calling it warms
         the (B, dB) entry so a subsequent evaluate_with_derivative is a full
         hit (no dB rebuild)."""
-        from pymlt.basis import _bernstein_assembled_cache
+        from mltpy.basis import _bernstein_assembled_cache
 
         b = make_basis(order=4)
         y = np.linspace(0.1, 0.9, 18)
@@ -336,8 +336,8 @@ class TestAssembledCache:
 
     def test_cache_is_bounded(self):
         """Distinct y across many fits cannot grow the cache without limit."""
-        from pymlt.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
-        from pymlt.basis import _bernstein_assembled_cache as cache
+        from mltpy.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
+        from mltpy.basis import _bernstein_assembled_cache as cache
 
         cache.clear()
         b = make_basis(order=3)
@@ -349,8 +349,8 @@ class TestAssembledCache:
     def test_lru_recency_protects_accessed_entry(self):
         """A cache hit refreshes recency (move_to_end), so a recently-touched
         old entry survives eviction while the next-oldest is dropped."""
-        from pymlt.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
-        from pymlt.basis import _bernstein_assembled_cache as cache
+        from mltpy.basis import _BERNSTEIN_ASSEMBLED_CACHE_MAXSIZE as maxsize
+        from mltpy.basis import _bernstein_assembled_cache as cache
 
         cache.clear()
         b = make_basis(order=3)
@@ -470,7 +470,7 @@ def test_reference_npy(tmp_path):
 
     Reference is produced by reference/generate_reference.R and stored as
     a plain-text 11x5 matrix in reference/bernstein_reference.txt (ascending
-    column order, matching pymlt's convention).
+    column order, matching mltpy's convention).
     """
     import pathlib
 

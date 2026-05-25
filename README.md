@@ -1,19 +1,19 @@
-# pymlt — Conditional Transformation Models in Python
+# mltpy — Conditional Transformation Models in Python
 
-[![CI](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml/badge.svg)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/badge/docs-latest-blue)](https://rmkruse.github.io/pymlt/)
-[![codecov](https://img.shields.io/badge/coverage-tracked-informational)](https://github.com/RMKruse/pymlt/actions/workflows/ci.yml)
+[![CI](https://github.com/RMKruse/mltpy/actions/workflows/ci.yml/badge.svg)](https://github.com/RMKruse/mltpy/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-latest-blue)](https://rmkruse.github.io/mltpy/)
+[![codecov](https://img.shields.io/badge/coverage-tracked-informational)](https://github.com/RMKruse/mltpy/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Fit flexible conditional distributions to continuous, censored, or covariate-dependent data using monotone Bernstein polynomial transformations.
 
-**Documentation:** <https://rmkruse.github.io/pymlt/> · **Paper:** [Hothorn (2020), JSS 92(1)](https://doi.org/10.18637/jss.v092.i01)
+**Documentation:** <https://rmkruse.github.io/mltpy/> · **Paper:** [Hothorn (2020), JSS 92(1)](https://doi.org/10.18637/jss.v092.i01)
 
 ---
 
 ## Overview
 
-pymlt estimates the full conditional distribution of a response variable — not just its mean. The core model fits a monotone transformation h(y|x) that maps observations to a standard normal distribution via maximum likelihood. Once fitted, the model yields CDFs, densities, quantile functions, hazard rates, and synthetic samples from a single object.
+mltpy estimates the full conditional distribution of a response variable — not just its mean. The core model fits a monotone transformation h(y|x) that maps observations to a standard normal distribution via maximum likelihood. Once fitted, the model yields CDFs, densities, quantile functions, hazard rates, and synthetic samples from a single object.
 
 The package supports exact, right-censored, left-censored, and interval-censored data, with optional covariate matrices for conditional (regression) inference. It is a Python port of Hothorn (2020) `mlt` R package.
 
@@ -22,16 +22,16 @@ The package supports exact, right-censored, left-censored, and interval-censored
 ## Installation
 
 ```bash
-pip install pymlt
+pip install mltpy
 ```
 
 Optional extras:
 
 ```bash
-pip install "pymlt[plots]"      # matplotlib-backed .plot() helpers
-pip install "pymlt[pandas]"     # pd.Series inputs
-pip install "pymlt[examples]"   # lifelines, jupyter, matplotlib — run the vignettes
-pip install "pymlt[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
+pip install "mltpy[plots]"      # matplotlib-backed .plot() helpers
+pip install "mltpy[pandas]"     # pd.Series inputs
+pip install "mltpy[examples]"   # lifelines, jupyter, matplotlib — run the vignettes
+pip install "mltpy[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
 ```
 
 **Requirements:** Python ≥ 3.12, numpy ≥ 1.24, scipy ≥ 1.10.
@@ -42,12 +42,12 @@ pip install "pymlt[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
 
 ```python
 import numpy as np
-import pymlt
+import mltpy
 
 rng = np.random.default_rng(0)
 y = rng.lognormal(mean=3.5, sigma=0.8, size=200).clip(0, 200)
 
-model = pymlt.MLT(order=6, support=(0, 200))
+model = mltpy.MLT(order=6, support=(0, 200))
 model.fit(y)
 
 grid   = np.linspace(10, 180, 100)
@@ -86,7 +86,7 @@ print(f"Estimated median: {median:.1f}")
 
 ## Performance
 
-`pymlt.MLT.fit()` is on geometric mean **2.52× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (median per cell over the converged reps). pymlt is the faster backend in all 24 cells (none 2.38×, right 2.68×). Representative slice at **`order = 6`** (full grid in the report linked below):
+`mltpy.MLT.fit()` is on geometric mean **2.52× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (median per cell over the converged reps). mltpy is the faster backend in all 24 cells (none 2.38×, right 2.68×). Representative slice at **`order = 6`** (full grid in the report linked below):
 
 | n | Censoring | Python (median) | R (median) | Speedup |
 |---:|:---|---:|---:|---:|
@@ -111,17 +111,17 @@ Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12.13 + numpy 2.4.4 + scip
 
 ```python
 import numpy as np
-import pymlt
+import mltpy
 
 times    = np.array([12.5, 45.2, 23.1, 89.3, 55.0, 31.7, 78.4])
 censored = np.array([False, True, False, False, True, False, True])
 
-cd = pymlt.CensoredData.right_censored(times, censored)
+cd = mltpy.CensoredData.right_censored(times, censored)
 
-model = pymlt.MLT(
+model = mltpy.MLT(
     order=5,
     support=(0, 365),
-    censoring=pymlt.CensoringType.RIGHT,
+    censoring=mltpy.CensoringType.RIGHT,
 )
 model.fit(cd)
 
@@ -144,7 +144,7 @@ n   = 300
 X   = rng.standard_normal((n, 2))
 y   = rng.uniform(0.05, 0.95, n)
 
-model = pymlt.MLT(order=4, support=(0, 1))
+model = mltpy.MLT(order=4, support=(0, 1))
 model.fit(y, X=X)
 
 X_new = np.array([[0.0, 1.0], [-1.0, 0.5]])
@@ -156,11 +156,11 @@ cdf   = model.predict(y_new, X_new=X_new, what="distribution")
 
 ```python
 centers = np.linspace(0.1, 0.9, 50)
-cd = pymlt.CensoredData.interval_censored(
+cd = mltpy.CensoredData.interval_censored(
     lower=centers - 0.05,
     upper=centers + 0.05,
 )
-model = pymlt.MLT(order=4, support=(0, 1), censoring=pymlt.CensoringType.INTERVAL)
+model = mltpy.MLT(order=4, support=(0, 1), censoring=mltpy.CensoringType.INTERVAL)
 model.fit(cd)
 ```
 
@@ -180,13 +180,13 @@ remain as opt-in alternatives; SLSQP is faster on small unconstrained-like
 problems, trust-constr handles ill-conditioned ones better.
 
 ```python
-cfg = pymlt.OptimizerConfig(
+cfg = mltpy.OptimizerConfig(
     solver="slsqp",          # opt-in alternative to the auglag default
     max_iter=2000,
     max_restarts=5,
     verbose=True,
 )
-model = pymlt.MLT(order=6, support=(0, 1), optimizer_config=cfg)
+model = mltpy.MLT(order=6, support=(0, 1), optimizer_config=cfg)
 ```
 
 ---
@@ -332,21 +332,21 @@ https://doi.org/10.1111/sjos.12291
 
 ## Citation
 
-If you use pymlt in scientific work, please cite the package alongside
+If you use mltpy in scientific work, please cite the package alongside
 the methodological papers above:
 
 ```bibtex
-@software{pymlt,
+@software{mltpy,
   author  = {Kruse, Ren{\'e}-Marcel},
-  title   = {pymlt: Conditional Transformation Models in Python},
+  title   = {mltpy: Conditional Transformation Models in Python},
   year    = {2026},
-  url     = {https://github.com/RMKruse/pymlt},
+  url     = {https://github.com/RMKruse/mltpy},
   version = {0.4.0}
 }
 ```
 
 Full BibTeX entries for the underlying methodology live in the
-[documentation](https://rmkruse.github.io/pymlt/citation.html).
+[documentation](https://rmkruse.github.io/mltpy/citation.html).
 
 ---
 

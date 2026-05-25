@@ -1,6 +1,6 @@
 basis
 =====
 
-.. automodule:: pymlt.basis
+.. automodule:: mltpy.basis
    :members:
    :show-inheritance:

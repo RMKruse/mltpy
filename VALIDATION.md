@@ -35,10 +35,10 @@
 
 ## 2. Model Dispatch: fit_python_model()
 
- Maps metadata.model × metadata.censoring to pymlt class + data preparation:
+ Maps metadata.model × metadata.censoring to mltpy class + data preparation:
 
 ```
- metadata.model  │ metadata.censoring │ pymlt class │ base_dist  │ Data preparation
+ metadata.model  │ metadata.censoring │ mltpy class │ base_dist  │ Data preparation
  ────────────────┼────────────────────┼─────────────┼────────────┼──────────────────────────────
  "mlt"           │ "none"             │ MLT         │ "normal"   │ fit(y) or fit(y, X=X)
  "mlt"           │ "right"            │ MLT         │ "normal"   │ CensoredData.right_censored(y, ~status.astype(bool))
@@ -49,7 +49,7 @@
  "colr"          │ "none"             │ Colr        │ (forced)   │ fit(y)
 ```
 
- Key detail: status.npy stores 1=event, 0=censored. pymlt's CensoredData.right_censored(y, censored=...) expects True=censored. So: censored = ~status.astype(bool)
+ Key detail: status.npy stores 1=event, 0=censored. mltpy's CensoredData.right_censored(y, censored=...) expects True=censored. So: censored = ~status.astype(bool)
  (invert).
 
  Key detail: For "mlt" with "left" or "right" censoring, the MLT constructor needs censoring=CensoringType.RIGHT / CensoringType.LEFT explicitly.

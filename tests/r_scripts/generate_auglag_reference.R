@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # generate_auglag_reference.R — Generate alabama::auglag reference values
-# for the pymlt auglag parity tests.
+# for the mltpy auglag parity tests.
 #
 # Fixtures:
 #   1. Lm-equivalent (order=1 Bernstein, normal base, no covariates)
@@ -20,7 +20,7 @@
 #            tests/reference_data/auglag/bernstein_bounded_n50_seed42.json
 #            tests/reference_data/auglag/exponential_n50_seed43.json
 #
-# The negative log-likelihood is implemented directly (consistent with pymlt)
+# The negative log-likelihood is implemented directly (consistent with mltpy)
 # to avoid dependence on mlt internal APIs.
 
 suppressPackageStartupMessages({
@@ -50,13 +50,13 @@ t_obs <- (y - y_min) / span
 B <- cbind(1 - t_obs, t_obs)
 
 # ---------------------------------------------------------------------------
-# Negative log-likelihood consistent with pymlt likelihood.py
+# Negative log-likelihood consistent with mltpy likelihood.py
 #   LL = sum_i [log phi(h_i) + log h'_i]
-#   h_i  = B[i,] %*% theta  (clipped to +/-30 as in pymlt)
+#   h_i  = B[i,] %*% theta  (clipped to +/-30 as in mltpy)
 #   h'_i = (theta[2] - theta[1]) / span   (constant over i)
 # ---------------------------------------------------------------------------
 
-H_CLIP <- 30.0   # matches pymlt._H_CLIP
+H_CLIP <- 30.0   # matches mltpy._H_CLIP
 
 nll <- function(theta) {
   h      <- as.numeric(B %*% theta)
@@ -88,7 +88,7 @@ hin     <- function(theta) theta[2] - theta[1]
 hin_jac <- function(theta) matrix(c(-1, 1), nrow = 1L)
 
 # ---------------------------------------------------------------------------
-# Starting point — matches pymlt _initial_theta: linspace(0, 1, p)
+# Starting point — matches mltpy _initial_theta: linspace(0, 1, p)
 # ---------------------------------------------------------------------------
 
 theta_init <- seq(0, 1, length.out = p)
@@ -149,13 +149,13 @@ cat(sprintf("Written: %s\n", outfile))
 # ===========================================================================
 #
 # Same y data and support as fixture 1.  Pins theta[1] = -2.5 (R 1-indexed,
-# = pymlt theta[0]).  This exercises the boundary-equality path in
+# = mltpy theta[0]).  This exercises the boundary-equality path in
 # build_constraint_matrices(): a single C_eq row.
 #
 # Design notes:
 #   * Order = 1 leaves a single free coefficient (theta_2).  The constrained
 #     negative log-likelihood is therefore one-dimensional and strictly
-#     convex, eliminating multi-modality.  Both alabama::auglag and pymlt's
+#     convex, eliminating multi-modality.  Both alabama::auglag and mltpy's
 #     PHR solver converge to the same KKT point regardless of their
 #     internal stopping rules, which permits the strict rtol=1e-6 parity
 #     assertion.
@@ -201,7 +201,7 @@ hin_jac2 <- function(theta) matrix(c(-1, 1), nrow = 1L)
 heq2     <- function(theta) theta[1] - lower2
 heq_jac2 <- function(theta) matrix(c(1, 0), nrow = 1L)
 
-# Starting point — same as pymlt _initial_theta with lower provided:
+# Starting point — same as mltpy _initial_theta with lower provided:
 # linspace(0, 1, p2) shifted by lower (theta[0] starts at `lower`).
 theta_init2 <- seq(0, 1, length.out = p2) + lower2
 
@@ -265,7 +265,7 @@ cat(sprintf("Written: %s\n", outfile2))
 # at y_min where B_k(y_min) = [1, 0, ..., 0], so the per-row constraints
 # reduce to
 #   theta_b[1] + X_i * beta >= 0    for i = 1..n
-# (R 1-indexed; this is pymlt's theta_b[0] + X_i.beta).
+# (R 1-indexed; this is mltpy's theta_b[0] + X_i.beta).
 #
 # Design notes:
 #   * Order = 1 keeps the analytical NLL in a closed form (h'(y) constant
@@ -341,7 +341,7 @@ hin_jac3 <- function(theta) {
   rbind(J_mono, J_supp)
 }
 
-# Starting point: pymlt _initial_theta with no boundary pins:
+# Starting point: mltpy _initial_theta with no boundary pins:
 #   theta_b = linspace(0, 1, p) = c(0, 1);  beta = 0.
 # Monotonicity: 1 - 0 = 1 >= 0 (OK).
 # Support: 0 + x_i * 0 = 0 >= 0 for every i (feasible at the boundary).
@@ -352,7 +352,7 @@ theta_init3 <- c(seq(0, 1, length.out = p3), rep(0.0, n_beta3))
 ## with stationarity residual ~1e-2 on the free coordinate theta_b[2].  BFGS
 ## + reltol=1e-15 + eps=1e-10 reaches the analytical KKT optimum
 ##   theta_b[2] = n / sum(t)   with theta_b[1] = beta = 0
-## so the pymlt parity assertion at rtol=1e-6 holds.
+## so the mltpy parity assertion at rtol=1e-6 holds.
 result3 <- auglag(
   par           = theta_init3,
   fn            = nll3,

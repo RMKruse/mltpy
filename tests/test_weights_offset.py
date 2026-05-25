@@ -18,15 +18,15 @@ import pathlib
 import numpy as np
 import pytest
 
-from pymlt import MLT, CensoredData
-from pymlt.likelihood import (
+from mltpy import MLT, CensoredData
+from mltpy.likelihood import (
     _validate_weights_offset,
     log_likelihood,
     negative_log_likelihood,
     score_matrix,
 )
-from pymlt.tram import BoxCox, Colr, Coxph
-from pymlt.variables import CensoringType
+from mltpy.tram import BoxCox, Colr, Coxph
+from mltpy.variables import CensoringType
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -561,7 +561,7 @@ def test_r_weights_parity(
     censoring: CensoringType,
     beta_sign: float,
 ) -> None:
-    """Weighted parity with R at both R theta and pymlt's fitted theta."""
+    """Weighted parity with R at both R theta and mltpy's fitted theta."""
     wref = _load_weights_reference(model_name)
     vref = _load_vcov_reference_for_weights(model_name)
     if wref is None or vref is None:
@@ -626,7 +626,7 @@ def test_r_weights_parity(
         base_distribution=base_dist,  # type: ignore[arg-type]
         weights=w,
     )
-    # R estfun convention here is ∂(-ℓ)/∂θ; pymlt score_matrix returns ∂ℓ/∂θ.
+    # R estfun convention here is ∂(-ℓ)/∂θ; mltpy score_matrix returns ∂ℓ/∂θ.
     # BoxCox additionally needs β-sign conversion (negative=TRUE in R).
     estfun_r_converted = -wref["estfun"] * sign_vec[None, :]
     np.testing.assert_allclose(
@@ -637,7 +637,7 @@ def test_r_weights_parity(
         err_msg=f"{model_name}: weighted score matrix mismatch at R theta",
     )
 
-    # Fit-parity check at pymlt's own optimum: objective value should match R.
+    # Fit-parity check at mltpy's own optimum: objective value should match R.
     np.testing.assert_allclose(
         m.result_.log_likelihood,  # type: ignore[union-attr]
         wref["ll"],
@@ -647,7 +647,7 @@ def test_r_weights_parity(
 
     # Constraint-robust score identity at fitted theta:
     # sum_i estfun_i == grad(ℓ) == -grad(NLL).
-    estfun_pymlt = m.estfun()
+    estfun_mltpy = m.estfun()
     _, grad_nll = negative_log_likelihood(
         m.theta_,
         m.basis,
@@ -659,7 +659,7 @@ def test_r_weights_parity(
         weights=w,
     )
     np.testing.assert_allclose(
-        estfun_pymlt.sum(axis=0),
+        estfun_mltpy.sum(axis=0),
         -grad_nll,
         atol=1e-10,
         err_msg=f"{model_name}: estfun column sums must equal -grad(NLL)",

@@ -1,11 +1,11 @@
-"""Tests for pymlt.tram.Survreg and pymlt.basis.LogBernsteinBasis."""
+"""Tests for mltpy.tram.Survreg and mltpy.basis.LogBernsteinBasis."""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from pymlt.variables import CensoredData, CensoringType
+from mltpy.variables import CensoredData, CensoringType
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,29 +39,29 @@ def make_weibull_data(
 
 class TestLogBernsteinBasis:
     def test_import(self):
-        from pymlt.basis import LogBernsteinBasis  # noqa: F401
+        from mltpy.basis import LogBernsteinBasis  # noqa: F401
 
     def test_instantiate(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=4, support=(0.1, 10.0))
         assert basis.order == 4
         assert basis.support == (0.1, 10.0)
 
     def test_invalid_support_nonpositive(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         with pytest.raises(ValueError, match="positive"):
             LogBernsteinBasis(order=4, support=(0.0, 10.0))
 
     def test_invalid_support_order(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         with pytest.raises(ValueError):
             LogBernsteinBasis(order=4, support=(5.0, 1.0))
 
     def test_evaluate_shape(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=4, support=(0.1, 10.0))
         y = np.array([0.5, 1.0, 2.0, 5.0])
@@ -69,7 +69,7 @@ class TestLogBernsteinBasis:
         assert B.shape == (4, 5)  # (n, order+1)
 
     def test_evaluate_rows_sum_to_one(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=6, support=(0.01, 100.0))
         y = np.linspace(0.05, 90.0, 20)
@@ -77,7 +77,7 @@ class TestLogBernsteinBasis:
         np.testing.assert_allclose(B.sum(axis=1), 1.0, atol=1e-12)
 
     def test_derivative_shape(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=4, support=(0.1, 10.0))
         y = np.array([0.5, 1.0, 2.0, 5.0])
@@ -86,7 +86,7 @@ class TestLogBernsteinBasis:
 
     def test_derivative_is_one_over_y_times_log_derivative(self):
         """d/dy B(log y) = (1/y) * d/d(log y) B(log y)."""
-        from pymlt.basis import BernsteinBasis, LogBernsteinBasis
+        from mltpy.basis import BernsteinBasis, LogBernsteinBasis
 
         a, b = 0.5, 20.0
         basis = LogBernsteinBasis(order=4, support=(a, b))
@@ -100,7 +100,7 @@ class TestLogBernsteinBasis:
         np.testing.assert_allclose(dB_log, expected, rtol=1e-12)
 
     def test_evaluate_with_derivative_consistent(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=5, support=(0.1, 50.0))
         y = np.linspace(0.2, 40.0, 10)
@@ -111,7 +111,7 @@ class TestLogBernsteinBasis:
         np.testing.assert_array_equal(dB, dB_ref)
 
     def test_evaluate_outside_support_raises(self):
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=4, support=(0.5, 10.0))
         with pytest.raises(ValueError):
@@ -119,7 +119,7 @@ class TestLogBernsteinBasis:
 
     def test_derivative_numerical_check(self):
         """Numerical finite-difference validation of the log derivative."""
-        from pymlt.basis import LogBernsteinBasis
+        from mltpy.basis import LogBernsteinBasis
 
         basis = LogBernsteinBasis(order=4, support=(0.1, 100.0))
         theta_b = np.array([0.0, 0.5, 1.0, 1.8, 2.5])
@@ -141,40 +141,40 @@ class TestLogBernsteinBasis:
 
 class TestSurvregSmoke:
     def test_import(self):
-        from pymlt.tram import Survreg  # noqa: F401
+        from mltpy.tram import Survreg  # noqa: F401
 
-    def test_import_from_pymlt(self):
-        import pymlt
+    def test_import_from_mltpy(self):
+        import mltpy
 
-        assert hasattr(pymlt, "Survreg")
+        assert hasattr(mltpy, "Survreg")
 
     def test_instantiate_weibull(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         model = Survreg(support=(0.1, 20.0), distribution="weibull")
         assert model.censoring is CensoringType.RIGHT
         assert model.base_distribution == "min_extreme_value"
 
     def test_instantiate_lognormal(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         model = Survreg(support=(0.1, 20.0), distribution="lognormal")
         assert model.base_distribution == "normal"
 
     def test_instantiate_loglogistic(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         model = Survreg(support=(0.1, 20.0), distribution="loglogistic")
         assert model.base_distribution == "logistic"
 
     def test_invalid_distribution(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         with pytest.raises(ValueError, match="distribution"):
             Survreg(support=(0.1, 20.0), distribution="exponential")
 
     def test_fit_lognormal_returns_self(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         t, censored = make_lognormal_data()
         cd = CensoredData.right_censored(t, censored)
@@ -185,7 +185,7 @@ class TestSurvregSmoke:
         assert model.is_fitted_
 
     def test_fit_weibull(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         t, censored = make_weibull_data()
         cd = CensoredData.right_censored(t, censored)
@@ -194,7 +194,7 @@ class TestSurvregSmoke:
         assert model.is_fitted_
 
     def test_fit_loglogistic(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         t, censored = make_lognormal_data()
         cd = CensoredData.right_censored(t, censored)
@@ -211,7 +211,7 @@ class TestSurvregSmoke:
 class TestSurvregPredict:
     @pytest.fixture
     def fitted_lognormal(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         t, censored = make_lognormal_data()
         cd = CensoredData.right_censored(t, censored)
@@ -270,7 +270,7 @@ class TestSurvregPredict:
 
 class TestSurvregCovariates:
     def test_fit_with_covariate(self):
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         rng = np.random.default_rng(42)
         n = 120
@@ -299,7 +299,7 @@ class TestSurvregJacobian:
         Using an lm-equivalent fit (order=1), h(x) is affine so we can
         compute the expected density analytically.
         """
-        from pymlt.tram import Survreg
+        from mltpy.tram import Survreg
 
         # Generate enough data for a clean fit
         rng = np.random.default_rng(7)

@@ -21,13 +21,13 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-from pymlt import (
+from mltpy import (
     ConditionalTransformationModel,
     InteractionBasis,
     OptimizerConfig,
 )
-from pymlt.basis import BernsteinBasis
-from pymlt.likelihood import negative_log_likelihood
+from mltpy.basis import BernsteinBasis
+from mltpy.likelihood import negative_log_likelihood
 
 # ---------------------------------------------------------------------------
 # 1. Hand-computed row-Kronecker for the Bernstein × Bernstein design.
@@ -291,7 +291,7 @@ def test_interaction_basis_bernstein_bernstein_accepted() -> None:
 
 def test_unsupported_x_basis_still_rejected() -> None:
     """Defensive: Polynomial / Legendre x-bases must still raise."""
-    from pymlt.basis import LegendreBasis, PolynomialBasis
+    from mltpy.basis import LegendreBasis, PolynomialBasis
 
     with pytest.raises(ValueError, match="non-negative and a partition"):
         InteractionBasis(

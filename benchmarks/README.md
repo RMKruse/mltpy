@@ -1,6 +1,6 @@
 # Benchmarks
 
-Reproducible runtime comparison of `pymlt.MLT.fit()` against the corresponding
+Reproducible runtime comparison of `mltpy.MLT.fit()` against the corresponding
 R `mlt::mlt()` call across the grid
 
 ```
@@ -19,7 +19,7 @@ The headline numbers and the full grid live in
 
 ```
 benchmarks/
-  bench_python.py   driver — generates input data, times pymlt.MLT.fit()
+  bench_python.py   driver — generates input data, times mltpy.MLT.fit()
   bench_r.R         driver — reads the same data, times R mlt::mlt()
   report.py         aggregates both CSVs into benchmark_report.md
   data/             generated input CSVs (gitignored — regenerated each run)
@@ -47,7 +47,7 @@ python benchmarks/report.py          # reads both CSVs, writes benchmark_report.
 
 ## Prerequisites
 
-- Python with `pymlt` installed in development mode (`pip install -e .`)
+- Python with `mltpy` installed in development mode (`pip install -e .`)
 - R ≥ 4.0 with `mlt`, `basefun`, `variables`, `survival` packages
 
 `bench_python.py` is the source of truth for the input datasets — `bench_r.R`
