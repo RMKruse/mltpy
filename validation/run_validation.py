@@ -96,7 +96,7 @@ _NEW_TERMINAL_COLS: tuple[tuple[str, str, str], ...] = (
 # bugs. They still run and are reported as XFAIL, but do not cause the overall
 # validation run to exit non-zero. See validation/VALIDATION.md for per-case
 # justification.
-EXPECTED_FAILURES: frozenset[str] = frozenset({"case_16_mlt_500_12"})
+EXPECTED_FAILURES: frozenset[str] = frozenset()
 
 # ---------------------------------------------------------------------------
 # Dataclasses
