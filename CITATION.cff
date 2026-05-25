@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use mltpy in scientific work, please cite both the software and the underlying methodology (Hothorn 2020)."
+title: "mltpy: Conditional Transformation Models in Python"
+abstract: >-
+  A Python port of the R mlt package for fitting Conditional
+  Transformation Models. Estimates a monotone Bernstein-polynomial
+  transformation h(y|x) by maximum likelihood, yielding CDFs,
+  densities, quantiles, hazards, and samples from a single fitted
+  object. Supports exact, right-, left-, and interval-censored data.
+type: software
+authors:
+  - family-names: Kruse
+    given-names: René-Marcel
+    email: rene.marcel.kruse@protonmail.com
+version: 0.4.0
+license: MIT
+repository-code: "https://github.com/RMKruse/mltpy"
+url: "https://rmkruse.github.io/mltpy/"
+keywords:
+  - transformation model
+  - survival analysis
+  - censoring
+  - conditional distribution
+references:
+  - type: article
+    title: "Most Likely Transformations: The mlt Package"
+    authors:
+      - family-names: Hothorn
+        given-names: Torsten
+    journal: "Journal of Statistical Software"
+    volume: 92
+    issue: 1
+    start: 1
+    end: 68
+    year: 2020
+    doi: "10.18637/jss.v092.i01"
