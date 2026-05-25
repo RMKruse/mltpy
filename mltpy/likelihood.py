@@ -2994,14 +2994,27 @@ def _ll_interaction_none(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> np.float64:
-    """Log-likelihood for exact data with an InteractionBasis."""
+    """Log-likelihood for exact data with an InteractionBasis.
+
+    On the scaled-interaction path (``scaling is not None``) the parameter
+    vector is ``theta = [vec_C(Θ) | γ]`` and the transformation is
+    ``h(y|x,x_s) = ([a(y)⊗b(x)]ᵀ vec(Θ)) · exp(0.5·x_s·γ)`` (ADR 0003).
+    """
     design, d_design = basis.evaluate_with_derivative(y, X)  # (n, p*q)
-    h_raw = design @ theta
+    theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
+    g = design @ theta_T
+    gp = d_design @ theta_T
+    if f is not None:
+        h_raw = g * f
+        hp = gp * f
+    else:
+        h_raw = g
+        hp = gp
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = d_design @ theta
 
     with np.errstate(invalid="ignore", divide="ignore"):
         log_pdf_h = dist.logpdf(h)
@@ -3009,6 +3022,27 @@ def _ll_interaction_none(
         if weights is not None:
             return np.float64(np.dot(weights, per_obs))
         return np.float64(np.sum(per_obs))
+
+
+def _interaction_baseline_factor(
+    theta: NDArray[np.float64],
+    pq: int,
+    scaling: NDArray[np.float64] | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    """Split ``theta = [vec_C(Θ) | γ]`` and build the scale factor ``f``.
+
+    Returns ``(theta_T, f)`` where ``theta_T`` is the leading ``p·q`` block
+    (``vec_C(Θ)``) and ``f = exp(0.5·x_s·γ)`` (shape ``(n,)``) — or ``None``
+    on the unscaled path, in which case ``theta_T`` is ``theta`` unchanged.
+    The 0.5-in-exponent convention mirrors ADR 0003 Decision 2 / the
+    shift-scaling path (see :func:`_ll_none`).
+    """
+    if scaling is None:
+        return theta, None
+    theta_T = theta[:pq]
+    gamma = theta[pq:]
+    f = np.exp(0.5 * (scaling @ gamma))
+    return theta_T, f
 
 
 def _ll_and_grad_interaction_none(
@@ -3019,18 +3053,36 @@ def _ll_and_grad_interaction_none(
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for exact data with InteractionBasis."""
+    """Combined ℓ and ∂(-ℓ)/∂θ for exact data with InteractionBasis.
+
+    On the scaled path ``theta = [vec_C(Θ) | γ]``; the ``vec(Θ)`` gradient is
+    the unscaled-interaction gradient with each ``design`` row scaled by
+    ``f = exp(0.5·x_s·γ)`` (the ``d_design`` term is unaffected because ``f``
+    cancels in ``∂log(hp)/∂Θ``), and the ``γ`` block is
+    ``0.5·X_sᵀ(w·(ns·g·f − 1))`` — the same form as the shift-scaling path
+    (see :func:`_ll_and_grad_none`).
+    """
     design, d_design = basis.evaluate_with_derivative(y, X)  # (n, p*q)
-    h_raw = design @ theta
+    theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
+    g = design @ theta_T
+    gp = d_design @ theta_T
+    if f is not None:
+        h_raw = g * f
+        hp = gp * f
+    else:
+        h_raw = g
+        hp = gp
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = d_design @ theta
 
     ns = _neg_score(h, dist)
     wns = ns if weights is None else weights * ns
-    ihp = _inverse_hp(hp, weights)
+    # The d_design (log-Jacobian) term uses the *unscaled* gp because the
+    # scale factor f cancels in ∂log(hp)/∂Θ = d_design / gp.
+    ihp0 = _inverse_hp(gp, weights)
 
     with np.errstate(invalid="ignore", divide="ignore"):
         log_pdf_h = dist.logpdf(h)
@@ -3038,8 +3090,18 @@ def _ll_and_grad_interaction_none(
             ll = np.float64(np.dot(weights, log_pdf_h + np.log(hp)))
         else:
             ll = np.float64(np.sum(log_pdf_h) + np.sum(np.log(hp)))
-        grad = design.T @ wns - d_design.T @ ihp
+        if f is not None:
+            grad_T = (design * f[:, None]).T @ wns - d_design.T @ ihp0
+        else:
+            grad_T = design.T @ wns - d_design.T @ ihp0
 
+    if f is None or scaling is None:
+        return ll, grad_T
+    term = ns * g * f - 1.0
+    if weights is not None:
+        term = weights * term
+    grad_g = 0.5 * (scaling.T @ term)
+    grad = np.concatenate([grad_T, grad_g])
     return ll, grad
 
 
@@ -3061,11 +3123,6 @@ def _log_likelihood_from_dist(
     interaction-basis path raise :class:`NotImplementedError` when a
     non-``None`` scaling is supplied.
     """
-    if scaling is not None and isinstance(basis, InteractionBasis):
-        raise NotImplementedError(
-            "scaling= is not supported with InteractionBasis in v0.4 "
-            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-        )
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError(
@@ -3075,7 +3132,14 @@ def _log_likelihood_from_dist(
             np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
         )
         result = _ll_interaction_none(
-            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y_arr,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
         if not np.isfinite(result):
             raise InfeasibleParameterError(
@@ -3173,11 +3237,6 @@ def _negative_log_likelihood_from_dist(
     ``scaling`` is only honoured on the exact / ``CensoringType.NONE`` branch
     in v0.4 (issue #70 tracer slice).
     """
-    if scaling is not None and isinstance(basis, InteractionBasis):
-        raise NotImplementedError(
-            "scaling= is not supported with InteractionBasis in v0.4 "
-            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-        )
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError(
@@ -3188,7 +3247,14 @@ def _negative_log_likelihood_from_dist(
         )
         if not gradient:
             result = _ll_interaction_none(
-                y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+                y_arr,
+                theta,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
             if not np.isfinite(result):
                 raise InfeasibleParameterError(
@@ -3198,7 +3264,14 @@ def _negative_log_likelihood_from_dist(
                 )
             return float(-result)
         ll, grad = _ll_and_grad_interaction_none(
-            y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
+            y_arr,
+            theta,
+            basis,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
         if not np.isfinite(ll):
             raise InfeasibleParameterError(
@@ -3427,16 +3500,29 @@ def _hessian_interaction_fd(
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
     h_fd: float = 1e-5,
 ) -> NDArray[np.float64]:
-    """Finite-difference Hessian of NLL for InteractionBasis models."""
+    """Finite-difference Hessian of NLL for InteractionBasis models.
+
+    On the scaled path ``theta = [vec_C(Θ) | γ]`` and the observed
+    information spans both blocks (ADR 0003 Decision 4) — the same
+    finite-difference Hessian, simply over a longer parameter vector.
+    """
     m = theta.size
     y_arr = np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
 
     def nll(t: NDArray[np.float64]) -> float:
         return float(
             -_ll_interaction_none(
-                y_arr, t, basis, X, dist=dist, weights=weights, offset=offset
+                y_arr,
+                t,
+                basis,
+                X,
+                dist=dist,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
             )
         )
 
@@ -3501,17 +3587,18 @@ def hessian(
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
 
-    if scaling is not None and isinstance(basis, InteractionBasis):
-        raise NotImplementedError(
-            "scaling= is not supported with InteractionBasis "
-            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-        )
-
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError("InteractionBasis requires X for hessian computation.")
         result = _hessian_interaction_fd(
-            theta, basis, y, X, dist=dist, weights=weights, offset=offset
+            theta,
+            basis,
+            y,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
         if not np.all(np.isfinite(result)):
             raise InfeasibleParameterError(
@@ -3599,21 +3686,36 @@ def _score_matrix_interaction(
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64]:
-    """Per-observation score matrix for exact data with InteractionBasis."""
+    """Per-observation score matrix for exact data with InteractionBasis.
+
+    On the scaled path ``theta = [vec_C(Θ) | γ]``; the ``vec(Θ)`` columns
+    scale each ``design`` row by ``f`` (the ``d_design`` term divides by the
+    unscaled ``gp``) and the appended ``γ`` columns are
+    ``0.5·x_s·(1 − ns·g·f)`` — the per-observation form of the ``γ`` score
+    in :func:`_ll_and_grad_interaction_none`.
+    """
     y_arr = np.asarray(y, dtype=float).ravel() if isinstance(y, np.ndarray) else y.exact
     design, d_design = basis.evaluate_with_derivative(y_arr, X)  # (n, p*q)
-    h_raw = design @ theta
+    theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
+    g = design @ theta_T
+    gp = d_design @ theta_T
+    h_raw = (g * f) if f is not None else g
     if offset is not None:
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-    hp = d_design @ theta
 
     ns = _neg_score(h, dist)  # (n,) — negative score of log-density
     with np.errstate(divide="ignore", invalid="ignore"):
-        inv_hp = 1.0 / hp  # (n,)
-    # ∂ℓ_i/∂θ = -ns_i * design_i + inv_hp_i * d_design_i
-    score = -ns[:, None] * design + inv_hp[:, None] * d_design  # (n, p*q)
+        inv_gp = 1.0 / gp  # (n,) — f cancels in ∂log(hp)/∂Θ
+    design_T = (design * f[:, None]) if f is not None else design
+    # ∂ℓ_i/∂Θ = -ns_i · f_i · design_i + inv_gp_i · d_design_i
+    score = -ns[:, None] * design_T + inv_gp[:, None] * d_design  # (n, p*q)
+    if f is not None and scaling is not None:
+        # ∂ℓ_i/∂γ = 0.5 · x_s,i · (1 − ns_i · g_i · f_i)
+        score_g = 0.5 * scaling * (1.0 - ns * g * f)[:, None]  # (n, q_s)
+        score = np.concatenate([score, score_g], axis=1)
     if weights is not None:
         score = weights[:, None] * score
     return score
@@ -3663,19 +3765,20 @@ def score_matrix(
     n = y.n if isinstance(y, CensoredData) else len(np.asarray(y).ravel())
     weights, offset = _validate_weights_offset(weights, offset, n)
 
-    if scaling is not None and isinstance(basis, InteractionBasis):
-        raise NotImplementedError(
-            "scaling= is not supported with InteractionBasis "
-            "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-        )
-
     if isinstance(basis, InteractionBasis):
         if X is None:
             raise ValueError(
                 "InteractionBasis requires X for score_matrix computation."
             )
         result = _score_matrix_interaction(
-            theta, basis, y, X, dist=dist, weights=weights, offset=offset
+            theta,
+            basis,
+            y,
+            X,
+            dist=dist,
+            weights=weights,
+            offset=offset,
+            scaling=scaling,
         )
         if not np.all(np.isfinite(result)):
             raise InfeasibleParameterError(

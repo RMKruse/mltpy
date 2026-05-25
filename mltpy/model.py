@@ -210,20 +210,18 @@ class ConditionalTransformationModel:
         scaling_arr: NDArray[np.float64] | None = None
         scaling_feature_names: list[str] | None = None
         if scaling is not None:
-            # ADR 0002 — non-interaction shift + scaled path supports all four
-            # censoring types (#71) and every base distribution except
-            # ``"exponential"`` (which is rejected because its support
-            # feasibility row becomes non-linear in γ; see Decision 3).
-            if isinstance(basis, InteractionBasis):
-                raise ValueError(
-                    "scaling= is not supported with InteractionBasis "
-                    "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-                )
+            # ADR 0002 — the non-interaction shift + scaled path supports all
+            # four censoring types (#71).  ADR 0003 (#103) integrates scaling
+            # with ``InteractionBasis`` (exact data, normal / min-extreme-value
+            # base only).  Both paths reject ``"exponential"`` because its
+            # support-feasibility row becomes non-linear in γ (ADR 0002
+            # Decision 3 / ADR 0003 Decision 5).
             if base_distribution == "exponential":
                 raise ValueError(
                     "scaling= is not supported with base_distribution="
                     "'exponential' (see docs/adr/0002-scaling-terms.md, "
-                    "Decision 3)."
+                    "Decision 3, and docs/adr/0003-scaling-with-interaction.md, "
+                    "Decision 5)."
                 )
             scaling_feature_names = _extract_feature_names(scaling)
             scaling_arr = np.asarray(scaling, dtype=float)
@@ -322,7 +320,9 @@ class ConditionalTransformationModel:
             return None
         p = self.basis.n_y_params
         q = self.basis.n_x_params
-        return self.theta_.reshape(p, q)
+        # On the scaled-interaction path theta_ = [vec_C(Θ) | γ]; reshape only
+        # the leading p·q block (ADR 0003 Decision 1).
+        return self.theta_[: p * q].reshape(p, q)
 
     @property
     def gamma_coef_(self) -> NDArray[np.float64] | None:
@@ -336,7 +336,10 @@ class ConditionalTransformationModel:
         if self.theta_ is None or self.scaling is None:
             return None
         if isinstance(self.basis, InteractionBasis):
-            return None
+            # Interaction layout is [vec_C(Θ) | γ] — no β shift block
+            # (ADR 0003 Decision 1).  γ is the trailing q_s entries.
+            pq = self.basis.n_y_params * self.basis.n_x_params
+            return self.theta_[pq:]
         p = self.basis.order + 1
         q_d = 0 if self._X_train_ is None else self._X_train_.shape[1]
         return self.theta_[p + q_d :]
@@ -467,6 +470,17 @@ class ConditionalTransformationModel:
             raise ValueError(
                 f"scaling has {self.scaling.shape[0]} rows but y has {n} "
                 "observations; both must match."
+            )
+
+        if self.scaling is not None and isinstance(self.basis, InteractionBasis):
+            # ADR 0003 Decision 7 — mirror R tram's stram "highly experimental"
+            # warning for the combined non-proportional, heteroskedastic CTM.
+            warnings.warn(
+                "scaling= with InteractionBasis is an experimental path; "
+                "validate against your use case (mirrors R tram's stram "
+                "warning).",
+                UserWarning,
+                stacklevel=2,
             )
 
         censoring_arg = CensoringType.NONE if self.censoring is None else self.censoring

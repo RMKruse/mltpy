@@ -1697,3 +1697,91 @@ cat(sprintf("profile_ci_baseline: p=%d rows written\n",
 .write_profile_ci_ref(fit_bc,   "profile_ci_boxcox.txt")
 .write_profile_ci_ref(fit_colr, "profile_ci_colr.txt")
 .write_profile_ci_ref(fit_cx,   "profile_ci_coxph.txt")
+
+# ---------------------------------------------------------------------------
+# Scaling + InteractionBasis (stram) — issue #103, ADR 0003.
+#
+# The non-proportional, heteroskedastic CTM: an interacting Bernstein-y ×
+# Bernstein-x baseline scaled by exp(0.5 · x_s · γ), exact data, Normal base.
+# This is the mltpy analogue of R's no-shift shift-scale model
+# ``y | s ~ 1 | z`` (class ``stram``); R `tram` flags the combination "highly
+# experimental" (see docs/adr/0003-scaling-with-interaction.md).
+#
+# We fit it directly through ``mlt::ctm`` rather than the ``tram`` formula
+# interface — exactly as the ``interaction_bs_bs_*`` fixtures above do — so the
+# response (Bernstein-y) and interacting (Bernstein-x) bases match mltpy's
+# ``InteractionBasis`` term-for-term.  The scale term is a one-column linear
+# basis in ``x_s`` (intercept removed), giving s(x) = x_s and the documented
+# √(exp(s·γ)) = exp(0.5·x_s·γ) factor (mlt's default ``scale_shift = FALSE``).
+#
+# mlt's coefficient vector orders [ baseline (response × interacting) |
+# scaling ]; with no shift block the trailing q_s entries are γ.  γ is sign-
+# AND magnitude-aligned with mltpy (no flip — ADR 0003 Decision 6 / ADR 0002
+# Decision 5), so the Python ratchet compares ``model.gamma_coef_`` to
+# ``stram_*_gamma.txt`` directly.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_normal_``):
+#   *_y_train.txt    — response, length n
+#   *_x_train.txt    — interacting covariate, length n
+#   *_x_s_train.txt  — scaling covariate, length n
+#   *_y_support.txt  — "a b" on one line
+#   *_theta.txt      — full coef(fit): [vec(Θ) (mlt order) | γ], length p*q+q_s
+#   *_gamma.txt      — scale coefficients only, length q_s
+#   *_loglik.txt     — scalar logLik
+#
+# NOTE: this block requires mlt >= 1.7 (the version that added ``scaling`` /
+# ``scale_shift`` to ``ctm``); it was authored against the ADR 0003 design and
+# must be run under R to materialise the .txt fixtures (the Python ratchet
+# skips until they exist).
+# ---------------------------------------------------------------------------
+set.seed(20260525)
+n_st <- 300L
+p_st <- 3L  # number of Bernstein-y functions
+q_st <- 3L  # number of Bernstein-x functions
+x_st   <- runif(n_st, 0, 1)
+x_s_st <- rnorm(n_st)
+# Heteroskedastic conditional response: location shifts mildly with x, spread
+# grows with x_s.  Interior MLE (no stacked active constraints).
+y_st <- 0.5 + 1.0 * x_st + rnorm(n_st, sd = exp(0.5 * 0.3 * x_s_st)) * 0.6
+a_st <- min(y_st) - 0.2
+b_st <- max(y_st) + 0.2
+
+df_st <- data.frame(y = y_st, x = x_st, x_s = x_s_st)
+m_y_st <- numeric_var("y", support = c(a_st, b_st))
+m_x_st <- numeric_var("x", support = c(0, 1))
+b_y_st <- Bernstein_basis(m_y_st, order = p_st - 1L, ui = "increasing")
+b_x_st <- Bernstein_basis(m_x_st, order = q_st - 1L)
+# One-column linear scaling basis in x_s (no intercept) → s(x) = x_s.
+b_s_st <- as.basis(~ x_s, data = df_st, remove_intercept = TRUE)
+
+ctm_st <- ctm(response = b_y_st,
+              interacting = b_x_st,
+              scaling = b_s_st,
+              scale_shift = FALSE,
+              todistr = "Normal")
+fit_st <- mlt(ctm_st, data = df_st)
+
+theta_st <- coef(fit_st)
+ll_st    <- as.numeric(logLik(fit_st))
+# Scaling coefficients are the trailing q_s entries (no shift block); also
+# identifiable by the scaling-basis column name(s).
+scl_names_st <- colnames(model.matrix(b_s_st, data = df_st))
+gamma_st <- theta_st[scl_names_st]
+
+writeLines(format(y_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_y_train.txt"))
+writeLines(format(x_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_x_train.txt"))
+writeLines(format(x_s_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_x_s_train.txt"))
+writeLines(paste(format(a_st, digits = 15), format(b_st, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_normal_y_support.txt"))
+writeLines(format(theta_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_theta.txt"))
+writeLines(format(as.numeric(gamma_st), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_gamma.txt"))
+writeLines(format(ll_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_loglik.txt"))
+
+cat(sprintf("stram_bs_bs normal ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_st, p_st, q_st, length(gamma_st), ll_st))

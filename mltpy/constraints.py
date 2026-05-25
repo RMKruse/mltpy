@@ -224,6 +224,7 @@ class ConstraintMatrices:
 
 def build_constraint_matrices_interaction(
     basis: "InteractionBasis",
+    q_s: int = 0,
 ) -> ConstraintMatrices:
     """Build constraint matrices for an :class:`~mltpy.basis.InteractionBasis`.
 
@@ -235,13 +236,18 @@ def build_constraint_matrices_interaction(
     ----------
     basis:
         The :class:`~mltpy.basis.InteractionBasis` to build constraints for.
+    q_s:
+        Number of scaling-design columns (``γ`` block).  When non-zero, the
+        parameter vector is ``[vec_C(Θ) | γ]`` and ``q_s`` zero columns are
+        appended to every constraint matrix so their width matches; ``γ`` is
+        unconstrained (ADR 0003 Decision 3).
 
     Returns
     -------
     ConstraintMatrices
-        ``A_ineq`` has shape ``((p-1)*q, p*q)``.  ``b_ineq`` is all-zeros.
-        ``C_eq`` is a zero-row matrix (no equality constraints).  ``d_eq``
-        is a zero-length array.
+        ``A_ineq`` has shape ``((p-1)*q, p*q + q_s)``.  ``b_ineq`` is
+        all-zeros.  ``C_eq`` is a zero-row matrix (no equality constraints).
+        ``d_eq`` is a zero-length array.
 
     Raises
     ------
@@ -262,11 +268,19 @@ def build_constraint_matrices_interaction(
         )
     p = basis.n_y_params
     q = basis.n_x_params
-    total = p * q
+    total = p * q + q_s
 
     if p >= 2:
         D = np.diff(np.eye(p), axis=0)  # (p-1, p)
-        A_ineq = np.kron(D, np.eye(q)).astype(np.float64)  # ((p-1)*q, p*q)
+        A_kron = np.kron(D, np.eye(q)).astype(np.float64)  # ((p-1)*q, p*q)
+        if q_s > 0:
+            # γ is unconstrained: pad with q_s zero columns to match the
+            # [vec_C(Θ) | γ] layout (ADR 0003 Decision 3).
+            A_ineq = np.hstack(
+                [A_kron, np.zeros((A_kron.shape[0], q_s), dtype=np.float64)]
+            )
+        else:
+            A_ineq = A_kron
     else:
         A_ineq = np.zeros((0, total), dtype=np.float64)
 

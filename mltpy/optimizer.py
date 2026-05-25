@@ -569,10 +569,13 @@ def optimize(
         config = OptimizerConfig()
 
     if isinstance(basis, InteractionBasis):
-        if scaling is not None:
+        if scaling is not None and base_distribution == "exponential":
+            # ADR 0003, Decision 5 — the exponential link's support row
+            # becomes non-linear in γ per interacting column; carried over
+            # from ADR 0002 Decision 3.
             raise NotImplementedError(
-                "scaling= is not supported with InteractionBasis in v0.4 "
-                "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+                "scaling= is not supported with base_distribution='exponential' "
+                "(see docs/adr/0003-scaling-with-interaction.md, Decision 5)."
             )
         if config.fixed_params:
             # Issue #85 — fixed_params currently lives only on the shift /
@@ -592,6 +595,7 @@ def optimize(
             base_distribution=base_distribution,
             weights=weights,
             offset=offset,
+            scaling=scaling,
         )
 
     q_s = scaling.shape[1] if scaling is not None else 0
@@ -858,6 +862,7 @@ def _optimize_interaction(
     base_distribution: BaseDistribution,
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
+    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """Optimisation path for InteractionBasis (stratified / fully-interacting CTM).
 
@@ -866,6 +871,11 @@ def _optimize_interaction(
     :func:`~mltpy.constraints.build_constraint_matrices_interaction`) in the
     form each solver expects.  X is required — it cannot be ``None`` for an
     interaction model.
+
+    When ``scaling is not None`` the parameter vector is
+    ``[vec_C(Θ) | γ]`` (ADR 0003): the γ block is initialised to zeros, the
+    Kronecker constraint is padded with ``q_s`` zero columns, and perturb-
+    and-project restarts touch only the ``vec(Θ)`` block.
     """
     if X is None:
         raise ValueError(
@@ -874,14 +884,16 @@ def _optimize_interaction(
         )
     x_arr = basis._coerce_x(X)
 
-    cm = build_constraint_matrices_interaction(basis)
+    q_s = scaling.shape[1] if scaling is not None else 0
+    cm = build_constraint_matrices_interaction(basis, q_s=q_s)
 
     p = basis.n_y_params
     q = basis.n_x_params
-    total_params = p * q
+    pq = p * q
+    total_params = pq + q_s
 
     Theta_init = np.outer(np.linspace(0.0, 1.0, p), np.ones(q))
-    theta_init = Theta_init.ravel().copy()
+    theta_init = np.concatenate([Theta_init.ravel(), np.zeros(q_s, dtype=np.float64)])
 
     if isinstance(config.random_state, np.random.Generator):
         rng = config.random_state
@@ -900,16 +912,18 @@ def _optimize_interaction(
                 dist=dist,
                 weights=weights,
                 offset=offset,
+                scaling=scaling,
             )
             return cast(tuple[float, NDArray[np.float64]], result)
         except InfeasibleParameterError:
             return float("inf"), np.zeros(total_params)
 
     def perturb(theta_seed: NDArray[np.float64]) -> NDArray[np.float64]:
-        Theta_try = theta_seed.reshape(p, q) + rng.normal(0.0, 0.1, size=(p, q))
+        # Perturb-and-project only the vec(Θ) block; leave γ untouched.
+        Theta_try = theta_seed[:pq].reshape(p, q) + rng.normal(0.0, 0.1, size=(p, q))
         for j in range(q):
             Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
-        return cast(NDArray[np.float64], Theta_try.ravel())
+        return np.concatenate([Theta_try.ravel(), theta_seed[pq:]])
 
     if config.solver == "auglag":
         return _interaction_auglag(
@@ -925,6 +939,7 @@ def _optimize_interaction(
             weights=weights,
             offset=offset,
             perturb=perturb,
+            scaling=scaling,
         )
 
     return _interaction_scipy(
@@ -939,6 +954,7 @@ def _optimize_interaction(
         weights=weights,
         offset=offset,
         perturb=perturb,
+        scaling=scaling,
     )
 
 
@@ -956,6 +972,7 @@ def _interaction_auglag(
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """PHR augmented-Lagrangian path for the interaction basis."""
     auglag_opts = (
@@ -1011,6 +1028,7 @@ def _interaction_auglag(
                 dist=dist,
                 weights=weights,
                 offset=offset,
+                scaling=scaling,
             ),
         )
         return OptimizationResult(
@@ -1039,7 +1057,7 @@ def _interaction_auglag(
             base_distribution,
             weights,
             offset,
-            None,
+            scaling,
             A_ineq=cm.A_ineq,
         )
         if theta_polished is not None:
@@ -1077,6 +1095,7 @@ def _interaction_scipy(
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """SLSQP / trust-constr path for the interaction basis.
 
@@ -1147,6 +1166,7 @@ def _interaction_scipy(
                 dist=dist,
                 weights=weights,
                 offset=offset,
+                scaling=scaling,
             ),
         )
         return OptimizationResult(
