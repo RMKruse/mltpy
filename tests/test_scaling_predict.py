@@ -315,6 +315,7 @@ def test_predict_X_scale_row_mismatch_raises(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings(r"ignore:predict\(what='quantile'\)")
 def test_simulate_under_scaling_matches_distribution(
     fitted_scaling_model: tuple[MLT, dict],
 ) -> None:

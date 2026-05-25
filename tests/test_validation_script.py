@@ -506,11 +506,28 @@ def test_new_metric_exceedance_is_informational_when_cdf_loglik_ok(
     assert "non-identifiable" in result.failure_reason
 
 
-@pytest.mark.skipif(
-    not (REF_DIR / "case_01_mlt_200_4" / "theta.npy").is_file(),
-    reason="Reference .npy data not available (run convert_references.py first)",
-)
-def test_integration_run_validation_single_case() -> None:
+@pytest.fixture
+def reference_npy_cache() -> None:
+    """Ensure the .npy reference cache for the integration case exists.
+
+    The .npy files are a gitignored local cache regenerated from the committed
+    .csv ground truth (see validation/convert_references.py). Build them on
+    demand so the integration test runs on a fresh checkout / CI instead of
+    skipping. Only skip if the CSV ground truth itself is missing — that means
+    a broken checkout, which cannot be reconstructed here.
+    """
+    case_dir = REF_DIR / "case_01_mlt_200_4"
+    if not case_dir.is_dir() or not list(case_dir.glob("*.csv")):
+        pytest.skip(f"Reference CSV ground truth missing under {case_dir}")
+    if not (case_dir / "theta.npy").is_file():
+        from convert_references import convert_case  # noqa: E402
+
+        convert_case(case_dir)
+
+
+def test_integration_run_validation_single_case(
+    reference_npy_cache: None,
+) -> None:
     """Run the validation script on case_01_mlt_200_4, expect exit code 0."""
     result = subprocess.run(
         [

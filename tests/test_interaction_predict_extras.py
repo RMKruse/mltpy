@@ -167,6 +167,10 @@ def test_quantile_inverts_cdf(label: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+# simulate() draws 10k uniforms; a handful land in the extreme tails where the
+# quantile leaves the finite basis support and is clipped. Expected and benign
+# here — the KS test below confirms the draws still match the analytical CDF.
+@pytest.mark.filterwarnings(r"ignore:predict\(what='quantile'\)")
 @pytest.mark.parametrize("label", ["normal", "logistic"])
 def test_simulate_ks_at_fixed_x(label: str) -> None:
     """``simulate(n, X=x0·ones)`` empirical CDF matches the analytical CDF."""
