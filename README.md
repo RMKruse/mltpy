@@ -72,9 +72,9 @@ print(f"Estimated median: {median:.1f}")
   - `Polr` — proportional-odds ordinal regression
   - `Survreg` — parametric survival on the log-time scale (Weibull / log-normal / log-logistic)
 - Seven selectable base distributions: `normal`, `logistic`, `min_extreme_value` (Cox link), `max_extreme_value` (Lehmann link), `exponential`, `laplace` (median regression), and `cauchy`
-- Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](docs/examples/04_interacting_terms.ipynb)
-- Heteroskedastic / scaled-baseline models via `scaling=X_s` on `BoxCox`, `Coxph`, `Colr`, `Lm`, `Survreg` — `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`, mirroring R `tram::*(scale=~x_s)`; see the [scaling-terms vignette](docs/examples/05_scaling_terms.ipynb)
-- Profile-likelihood confidence intervals via `confint(type="profile")` — inverts the χ²₁ LR test for asymmetric / boundary-bound parameters where the Wald approximation breaks down; see the [profile-likelihood vignette](docs/examples/06_profile_likelihood.ipynb)
+- Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](https://github.com/RMKruse/mltpy/blob/main/docs/examples/04_interacting_terms.ipynb)
+- Heteroskedastic / scaled-baseline models via `scaling=X_s` on `BoxCox`, `Coxph`, `Colr`, `Lm`, `Survreg` — `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`, mirroring R `tram::*(scale=~x_s)`; see the [scaling-terms vignette](https://github.com/RMKruse/mltpy/blob/main/docs/examples/05_scaling_terms.ipynb)
+- Profile-likelihood confidence intervals via `confint(type="profile")` — inverts the χ²₁ LR test for asymmetric / boundary-bound parameters where the Wald approximation breaks down; see the [profile-likelihood vignette](https://github.com/RMKruse/mltpy/blob/main/docs/examples/06_profile_likelihood.ipynb)
 - Full inference suite: variance–covariance (`vcov`), Wald & HC0 sandwich standard errors (`standard_errors` / `sandwich_se`), Wald confidence intervals & delta-method confidence bands (`confint` / `confband`), score / Cox–Snell / deviance residuals (`residuals`), likelihood-ratio model comparison (`anova`), and linear-restriction Wald tests (`wald_test`)
 - Observation weights and offsets threaded through `fit` / `predict` / `score` / `confband` / `residuals`
 - Analytical gradients for fast, stable MLE with automatic restarts on non-convergence
@@ -101,7 +101,7 @@ print(f"Estimated median: {median:.1f}")
 
 Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12.13 + numpy 2.4.4 + scipy 1.17.1. Numbers depend on hardware and R/Python versions; the speedup ratio is the meaningful comparison.
 
-**Reproduce:** `make benchmark` (requires R with `mlt`, `basefun`, `variables`, `survival` installed). The full grid, environment metadata, and IQR per cell live in [`benchmarks/results/benchmark_report.md`](benchmarks/results/benchmark_report.md).
+**Reproduce:** `make benchmark` (requires R with `mlt`, `basefun`, `variables`, `survival` installed). The full grid, environment metadata, and IQR per cell live in [`benchmarks/results/benchmark_report.md`](https://github.com/RMKruse/mltpy/blob/main/benchmarks/results/benchmark_report.md).
 
 ---
 
