@@ -1414,7 +1414,7 @@ class Survreg(_TramModel):
         saturated = False
 
         for i, p in enumerate(probs_arr):
-            cdf_grid = cast(NDArray[np.float64], dist.cdf(h_base_grid + shift[i]))
+            cdf_grid = dist.cdf(h_base_grid + shift[i])
 
             finite = np.isfinite(cdf_grid)
             if not np.any(finite):
@@ -1529,17 +1529,6 @@ class Polr(ConditionalTransformationModel):
         * ``"min_extreme_value"`` — proportional-hazards / cloglog link.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
-
-    Attributes
-    ----------
-    cutpoints_ : NDArray[np.float64]
-        Estimated ``θ_1, ..., θ_{K-1}``.  Available after :meth:`fit`.
-    coef_ : NDArray[np.float64]
-        Estimated regression coefficients ``β`` (length equal to the number
-        of covariate columns).  Empty array when ``X`` is omitted at fit
-        time.  Negate to compare with R ``tram::Polr``.
-    levels_ : tuple
-        The resolved ordered category labels (length ``K``).
 
     Examples
     --------

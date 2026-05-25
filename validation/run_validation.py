@@ -5,6 +5,10 @@ Iterates over all cases in validation/references/, fits the corresponding
 pymlt model, and compares theta, log-likelihood, and CDF predictions
 against the R reference.
 
+The committed reference data is CSV + metadata.json (the R ground truth);
+the .npy files actually loaded here are a git-ignored cache rebuilt on the
+fly from the CSVs when missing or stale (see ``ensure_npy_cache``).
+
 Usage:
     python validation/run_validation.py
     python validation/run_validation.py --case case_01 --verbose
@@ -718,6 +722,70 @@ def compare_results(
 
 
 # ---------------------------------------------------------------------------
+# .npy cache rebuild
+# ---------------------------------------------------------------------------
+
+
+def ensure_npy_cache(ref_dir: Path, verbose: bool = False) -> int:
+    """Rebuild the ``.npy`` cache from the committed CSVs where missing/stale.
+
+    The ``*.csv`` and ``metadata.json`` files are the committed R ground
+    truth; the ``*.npy`` files that :func:`load_reference` reads are a
+    git-ignored local cache (see ``.gitignore`` / ``convert_references.py``).
+    On a fresh clone the cache is absent, and after re-running the R script
+    the CSVs are newer than any stale ``.npy`` — both cases are repaired here
+    by converting only the affected cases, so validation runs without a
+    manual ``python validation/convert_references.py`` step.
+
+    Parameters
+    ----------
+    ref_dir:
+        Path to ``validation/references/``.
+    verbose:
+        If True, print each case whose cache was rebuilt.
+
+    Returns
+    -------
+    int
+        Number of cases whose ``.npy`` cache was (re)generated.
+
+    Raises
+    ------
+    RuntimeError
+        If ``convert_references.convert_case`` cannot be imported.
+    """
+    # convert_references.py is a sibling module; ensure its directory is
+    # importable regardless of how this script was invoked.
+    here = str(Path(__file__).parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        from convert_references import convert_case
+    except ImportError as exc:
+        raise RuntimeError(
+            "Could not import convert_references.convert_case to rebuild the "
+            ".npy cache. Run 'python validation/convert_references.py' first."
+        ) from exc
+
+    converted = 0
+    for case_dir in sorted(d for d in ref_dir.glob("case_*") if d.is_dir()):
+        stale = any(
+            not (npy := csv_path.with_suffix(".npy")).exists()
+            or csv_path.stat().st_mtime > npy.stat().st_mtime
+            for csv_path in case_dir.glob("*.csv")
+        )
+        if stale:
+            convert_case(case_dir)
+            converted += 1
+            if verbose:
+                print(f"  rebuilt .npy cache: {case_dir.name}")
+
+    if converted:
+        print(f"Rebuilt .npy cache for {converted} case(s) from committed CSVs.")
+    return converted
+
+
+# ---------------------------------------------------------------------------
 # run_all_validations
 # ---------------------------------------------------------------------------
 
@@ -998,6 +1066,10 @@ def main() -> None:
     if not case_dirs:
         print(f"ERROR: No case_* directories in {ref_dir}.", file=sys.stderr)
         sys.exit(2)
+
+    # The .npy files are a git-ignored cache; rebuild from the committed CSVs
+    # if absent (fresh clone) or stale (R script re-run) before loading.
+    ensure_npy_cache(ref_dir, verbose=args.verbose)
 
     results = run_all_validations(ref_dir, case_filter=args.case, verbose=args.verbose)
 

@@ -34,7 +34,7 @@ pip install "pymlt[examples]"   # lifelines, jupyter, matplotlib — run the vig
 pip install "pymlt[docs]"       # sphinx, nbsphinx, pydata-sphinx-theme
 ```
 
-**Requirements:** Python ≥ 3.11, numpy ≥ 1.24, scipy ≥ 1.10.
+**Requirements:** Python ≥ 3.12, numpy ≥ 1.24, scipy ≥ 1.10.
 
 ---
 
@@ -75,6 +75,8 @@ print(f"Estimated median: {median:.1f}")
 - Non-proportional / stratified-baseline models via tensor-product `InteractionBasis(y_basis, x_basis)` — see the [interacting-terms vignette](docs/examples/04_interacting_terms.ipynb)
 - Heteroskedastic / scaled-baseline models via `scaling=X_s` on `BoxCox`, `Coxph`, `Colr`, `Lm`, `Survreg` — `h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β`, mirroring R `tram::*(scale=~x_s)`; see the [scaling-terms vignette](docs/examples/05_scaling_terms.ipynb)
 - Profile-likelihood confidence intervals via `confint(type="profile")` — inverts the χ²₁ LR test for asymmetric / boundary-bound parameters where the Wald approximation breaks down; see the [profile-likelihood vignette](docs/examples/06_profile_likelihood.ipynb)
+- Full inference suite: variance–covariance (`vcov`), Wald & HC0 sandwich standard errors (`standard_errors` / `sandwich_se`), Wald confidence intervals & delta-method confidence bands (`confint` / `confband`), score / Cox–Snell / deviance residuals (`residuals`), likelihood-ratio model comparison (`anova`), and linear-restriction Wald tests (`wald_test`)
+- Observation weights and offsets threaded through `fit` / `predict` / `score` / `confband` / `residuals`
 - Analytical gradients for fast, stable MLE with automatic restarts on non-convergence
 - scikit-learn-compatible API: `fit` / `predict` / `score` / `simulate`
 - Lightweight: only numpy and scipy required
@@ -84,20 +86,20 @@ print(f"Estimated median: {median:.1f}")
 
 ## Performance
 
-`pymlt.MLT.fit()` is on geometric mean **1.80× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (10 reps each, median per cell). pymlt is the faster backend in 21 of the 24 cells. Representative slice at **`order = 6`** (full grid in the report linked below):
+`pymlt.MLT.fit()` is on geometric mean **2.52× the speed of R `mlt::mlt()`** across the 24-cell grid `n ∈ {100, 500, 1000, 5000} × order ∈ {4, 6, 8} × censoring ∈ {none, right}` (median per cell over the converged reps). pymlt is the faster backend in all 24 cells (none 2.38×, right 2.68×). Representative slice at **`order = 6`** (full grid in the report linked below):
 
 | n | Censoring | Python (median) | R (median) | Speedup |
 |---:|:---|---:|---:|---:|
-|  100 | none  | 2.70 ms  | 5.48 ms  | 2.03× |
-|  500 | none  | 5.78 ms  | 9.69 ms  | 1.68× |
-| 1000 | none  | 12.99 ms | 14.92 ms | 1.15× |
-| 5000 | none  | 64.86 ms | 67.18 ms | 1.04× |
-|  100 | right | 4.50 ms  | 11.78 ms | 2.62× |
-|  500 | right | 6.48 ms  | 17.94 ms | 2.77× |
-| 1000 | right | 14.84 ms | 40.48 ms | 2.73× |
-| 5000 | right | 76.63 ms | 60.04 ms | 0.78× |
+|  100 | none  | 3.67 ms  | 5.57 ms  | 1.52× |
+|  500 | none  | 5.46 ms  | 10.10 ms | 1.85× |
+| 1000 | none  | 4.93 ms  | 15.56 ms | 3.16× |
+| 5000 | none  | 16.31 ms | 69.84 ms | 4.28× |
+|  100 | right | 6.69 ms  | 12.19 ms | 1.82× |
+|  500 | right | 6.77 ms  | 18.72 ms | 2.77× |
+| 1000 | right | 16.28 ms | 42.38 ms | 2.60× |
+| 5000 | right | 20.90 ms | 62.97 ms | 3.01× |
 
-Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12 + numpy 2.4 + scipy 1.17. Numbers depend on hardware and R/Python versions; the speedup ratio is the meaningful comparison.
+Hardware: Apple M5 Pro, R 4.5.3 + mlt 1.7.4, Python 3.12.13 + numpy 2.4.4 + scipy 1.17.1. Numbers depend on hardware and R/Python versions; the speedup ratio is the meaningful comparison.
 
 **Reproduce:** `make benchmark` (requires R with `mlt`, `basefun`, `variables`, `survival` installed). The full grid, environment metadata, and IQR per cell live in [`benchmarks/results/benchmark_report.md`](benchmarks/results/benchmark_report.md).
 
@@ -191,18 +193,66 @@ model = pymlt.MLT(order=6, support=(0, 1), optimizer_config=cfg)
 
 ## API reference
 
+**Models**
+
 | Symbol | Description |
 |---|---|
-| `MLT(order, support, censoring, optimizer_config)` | Main entry point — Bernstein basis model with sensible defaults |
-| `ConditionalTransformationModel(basis, censoring, optimizer_config)` | Base class for models with a custom `BernsteinBasis` |
+| `MLT(order, support, censoring, base_distribution, optimizer_config)` | Main entry point — Bernstein basis model with sensible defaults |
+| `ConditionalTransformationModel(basis, censoring, base_distribution, optimizer_config)` | Base class for models with a custom basis |
+| `BoxCox` · `Lm` · `Coxph` · `Lehmann` · `Colr` · `Polr` · `Survreg` | `tram`-style regression models (see [Features](#features)) |
+
+**Bases** (pass to `ConditionalTransformationModel(basis=...)`)
+
+| Symbol | Description |
+|---|---|
+| `OrdinalBasis(K)` | Degenerate one-hot cutpoint basis for ordinal responses |
+| `OneHotBasis` · `InterceptBasis` | Non-negative partition-of-unity x-bases for stratified / interaction terms |
+| `PolynomialBasis` · `LegendreBasis` · `LogBasis` | Alternative response-basis families |
+| `InteractionBasis(y_basis, x_basis)` | Tensor-product basis for fully-interacting CTMs |
+
+**Data & configuration**
+
+| Symbol | Description |
+|---|---|
 | `CensoredData.right_censored(y, censored)` | Build a right-censored data container |
 | `CensoredData.left_censored(y, censored)` | Build a left-censored data container |
 | `CensoredData.interval_censored(lower, upper)` | Build an interval-censored data container |
 | `CensoredData.from_exact(y)` | Wrap an exact (uncensored) array |
 | `CensoringType` | Enum: `NONE` · `LEFT` · `RIGHT` · `INTERVAL` |
-| `OptimizerConfig` | Tune solver, iteration limit, restarts, tolerance, gradient use |
+| `OrderedVariable` | Ordered-factor variable for ordinal responses |
+| `OptimizerConfig` | Tune solver, iteration limit, restarts, tolerance, gradient use, `fixed_params` |
+| `AugLagOptions` · `AugLagResult` | Augmented-Lagrangian solver options and result |
+
+**Inference & primitives**
+
+| Symbol | Description |
+|---|---|
+| `anova(*models)` → `AnovaResult` | Likelihood-ratio test for nested models |
+| `WaldTestResult` | Result of `model.wald_test(R, r)` for linear restrictions |
+| `log_likelihood` · `negative_log_likelihood` | Log-likelihood with analytical gradients |
+| `hessian` · `score_matrix` | Observed information and per-observation scores |
+
+**Exceptions & warnings**
+
+| Symbol | Description |
+|---|---|
 | `NotFittedError` | Raised by `predict` / `score` / `simulate` before `fit` |
 | `ConvergenceWarning` | Issued when MLE does not fully converge across all restarts |
+| `InfeasibleParameterError` | Raised when a parameter vector violates the monotonicity constraint |
+
+### Inference & diagnostics methods
+
+Available on every fitted `ConditionalTransformationModel` (and its `tram` subclasses):
+
+| Method | Description |
+|---|---|
+| `vcov(regularize="active")` | Variance–covariance matrix (active-set-constrained bordered-KKT default) |
+| `standard_errors()` · `sandwich_se()` | Wald and HC0 sandwich standard errors |
+| `confint(level, parm, type="wald"\|"profile")` | Wald or profile-likelihood confidence intervals |
+| `confband(y_grid, X, level, what)` | Pointwise delta-method confidence bands |
+| `residuals(type="score"\|"cox-snell"\|"deviance")` | Per-observation diagnostics |
+| `estfun()` / `score_contributions()` | Per-observation score contributions |
+| `wald_test(R, r)` | Wald test for linear restrictions `Rθ = r` |
 
 ### Prediction modes
 

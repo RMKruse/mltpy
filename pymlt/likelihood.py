@@ -6,7 +6,7 @@ Optional per-observation weights and fixed offset are supported.
 
 Mathematical convention
 -----------------------
-Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1):
+Given a Bernstein basis B_k and coefficient vector theta_b (length p = order+1)::
 
     h(y)  = B_k(y) @ theta_b  [+ X @ beta  if covariates are present]
               [+ offset         if offset is provided]
@@ -76,7 +76,7 @@ from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.special import log_ndtr
+from scipy.special import expit, expm1, log1p, log_expit, log_ndtr, ndtr
 from scipy.stats import cauchy as _cauchy
 from scipy.stats import expon as _expon
 from scipy.stats import gumbel_l as _mev
@@ -107,6 +107,11 @@ _VALID_BASE_DISTRIBUTIONS = (
     "cauchy",
 )
 
+# Logarithmic constants used by the closed-form DistOps fast paths.
+_LOG2: float = float(np.log(2.0))
+_LOG_PI: float = float(np.log(np.pi))
+_HALF_LOG_2PI: float = float(0.5 * np.log(2.0 * np.pi))
+
 
 @dataclass(frozen=True)
 class DistOps:
@@ -121,10 +126,22 @@ class DistOps:
     which would previously fall through to the logistic branch in
     :func:`_neg_score` and :func:`_d2_logpdf` and produce wrong gradients.
 
-    The ``__getattr__`` forwarder exposes every scipy distribution method
-    (``logpdf``, ``logcdf``, ``logsf``, ``cdf``, ``pdf``, ``ppf``, ...) so
-    existing call sites that read e.g. ``dist.logpdf(h)`` continue to work
-    without change.
+    The five methods :meth:`logpdf`, :meth:`logcdf`, :meth:`logsf`,
+    :meth:`cdf`, and :meth:`pdf` are defined as closed forms built on
+    :mod:`scipy.special` ufuncs (``log_ndtr``, ``ndtr``, ``expit``,
+    ``log_expit``, ``expm1``, ``log1p``), dispatching on :attr:`kind`.  This
+    avoids the ~20× ``rv_continuous`` wrapper tax of the corresponding
+    ``scipy.stats`` methods in the optimiser's hot loop (issue #94).  Inputs
+    arrive clipped to ``±_H_CLIP``; results match the scipy objects to
+    ``rtol≈1e-10`` (the one intentional divergence is exponential
+    :meth:`logpdf`, which returns ``-h`` on the whole line rather than scipy's
+    ``-inf`` for ``h < 0`` — see :func:`_ll_none`).
+
+    Every *other* method (``ppf``, ``sf``, ``isf``, ...) is exposed unchanged
+    through the ``__getattr__`` forwarder to the underlying scipy distribution.
+    Because methods defined on the class take priority over ``__getattr__``,
+    only those five names are intercepted; existing call sites that read e.g.
+    ``dist.logpdf(h)`` get the fast path for free.
     """
 
     kind: BaseDistribution
@@ -134,6 +151,100 @@ class DistOps:
         # Dataclass attributes (``kind``, ``scipy``) are resolved normally;
         # this method only runs for missing names, so recursion is impossible.
         return getattr(self.scipy, name)
+
+    # -- closed-form fast paths (issue #94) --------------------------------
+    # The naive ``log1p(-exp(-exp(±h)))`` form for gumbel_l logcdf / gumbel_r
+    # logsf loses ~6 digits at h=-30 and returns -inf at h=-40; the
+    # ``log(-expm1(...))`` form below is load-bearing — do not "simplify" it.
+
+    def logpdf(self, h: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Closed-form log density, dispatched on :attr:`kind`."""
+        kind = self.kind
+        if kind == "normal":
+            return -0.5 * h * h - _HALF_LOG_2PI
+        if kind == "logistic":
+            return cast(NDArray[np.float64], log_expit(h) + log_expit(-h))
+        if kind == "min_extreme_value":
+            return h - np.exp(h)
+        if kind == "max_extreme_value":
+            return -h - np.exp(-h)
+        if kind == "exponential":
+            # Full-domain extension log f = -h (scipy returns -inf for h<0).
+            return -h
+        if kind == "laplace":
+            return -np.abs(h) - _LOG2
+        if kind == "cauchy":
+            return cast(NDArray[np.float64], -_LOG_PI - log1p(h * h))
+        raise AssertionError(f"unhandled dist.kind={kind!r}")
+
+    def logcdf(self, h: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Closed-form log CDF, dispatched on :attr:`kind`."""
+        kind = self.kind
+        if kind == "normal":
+            return cast(NDArray[np.float64], log_ndtr(h))
+        if kind == "logistic":
+            return cast(NDArray[np.float64], log_expit(h))
+        if kind == "min_extreme_value":
+            return cast(NDArray[np.float64], np.log(-expm1(-np.exp(h))))
+        if kind == "max_extreme_value":
+            return cast(NDArray[np.float64], -np.exp(-h))
+        if kind == "exponential":
+            return cast(NDArray[np.float64], np.log(-expm1(-h)))
+        if kind == "laplace":
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return cast(
+                    NDArray[np.float64],
+                    np.where(h <= 0.0, h - _LOG2, log1p(-0.5 * np.exp(-h))),
+                )
+        if kind == "cauchy":
+            return cast(NDArray[np.float64], np.log(0.5 + np.arctan(h) / np.pi))
+        raise AssertionError(f"unhandled dist.kind={kind!r}")
+
+    def logsf(self, h: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Closed-form log survival function, dispatched on :attr:`kind`."""
+        kind = self.kind
+        if kind == "normal":
+            return cast(NDArray[np.float64], log_ndtr(-h))
+        if kind == "logistic":
+            return cast(NDArray[np.float64], log_expit(-h))
+        if kind == "min_extreme_value":
+            return cast(NDArray[np.float64], -np.exp(h))
+        if kind == "max_extreme_value":
+            return cast(NDArray[np.float64], np.log(-expm1(-np.exp(-h))))
+        if kind == "exponential":
+            return -h
+        if kind == "laplace":
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return cast(
+                    NDArray[np.float64],
+                    np.where(h >= 0.0, -h - _LOG2, log1p(-0.5 * np.exp(h))),
+                )
+        if kind == "cauchy":
+            return cast(NDArray[np.float64], np.log(0.5 - np.arctan(h) / np.pi))
+        raise AssertionError(f"unhandled dist.kind={kind!r}")
+
+    def cdf(self, h: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Closed-form CDF, dispatched on :attr:`kind`."""
+        kind = self.kind
+        if kind == "normal":
+            return cast(NDArray[np.float64], ndtr(h))
+        if kind == "logistic":
+            return cast(NDArray[np.float64], expit(h))
+        if kind == "min_extreme_value":
+            return cast(NDArray[np.float64], -expm1(-np.exp(h)))
+        if kind == "max_extreme_value":
+            return cast(NDArray[np.float64], np.exp(-np.exp(-h)))
+        if kind == "exponential":
+            return cast(NDArray[np.float64], -expm1(-h))
+        if kind == "laplace":
+            return cast(NDArray[np.float64], np.exp(self.logcdf(h)))
+        if kind == "cauchy":
+            return 0.5 + np.arctan(h) / np.pi
+        raise AssertionError(f"unhandled dist.kind={kind!r}")
+
+    def pdf(self, h: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Closed-form density, ``exp(logpdf(h))`` for every :attr:`kind`."""
+        return cast(NDArray[np.float64], np.exp(self.logpdf(h)))
 
 
 _NORM_OPS = DistOps("normal", norm)
@@ -294,8 +405,8 @@ def _log_diff_ndtr(
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
 
-    # Use log_ndtr for normal (more stable at extreme values); dist.logcdf otherwise
-    _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+    # Closed-form log CDF (normal → log_ndtr) via the DistOps fast path.
+    _logcdf = dist.logcdf
 
     log_Fa = _logcdf(a)  # log F(a)
     log_Fb = _logcdf(b)  # log F(b)
@@ -597,7 +708,7 @@ def _neg_score(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
     if kind == "normal":
         return h
     if kind == "logistic":
-        return cast(NDArray[np.float64], 2.0 * dist.cdf(h) - 1.0)
+        return 2.0 * dist.cdf(h) - 1.0
     if kind == "min_extreme_value":
         return np.exp(h) - 1.0
     if kind == "max_extreme_value":
@@ -646,7 +757,7 @@ def _d2_logpdf(h: NDArray[np.float64], dist: DistOps) -> NDArray[np.float64]:
     if kind == "normal":
         return np.full_like(h, -1.0)
     if kind == "logistic":
-        return cast(NDArray[np.float64], -2.0 * dist.pdf(h))
+        return -2.0 * dist.pdf(h)
     if kind == "min_extreme_value":
         return cast(NDArray[np.float64], -np.exp(h))
     if kind == "max_extreme_value":
@@ -925,7 +1036,7 @@ def _truncation_log_p(ctx: _TruncContext, dist: DistOps) -> NDArray[np.float64]:
     if ctx.both.any():
         log_p[ctx.both] = _log_diff_ndtr(ctx.h_lo_b, ctx.h_hi_b, dist=dist)
     if ctx.only_hi.any():
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         log_p[ctx.only_hi] = _logcdf(ctx.h_hi_o)
     if ctx.only_lo.any():
         log_p[ctx.only_lo] = dist.logsf(ctx.h_lo_o)
@@ -973,7 +1084,7 @@ def _truncation_weights(
         w_lo_b = np.zeros(0, dtype=np.float64)
 
     if ctx.only_hi.any():
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         w_hi_only = np.exp(
             np.minimum(dist.logpdf(ctx.h_hi_o) - _logcdf(ctx.h_hi_o), _LOG_FLOAT_MAX)
         )
@@ -1275,16 +1386,16 @@ def _ll_none(
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        # For exponential, use the analytical formula log f_exp(h) = -h for
-        # all h (matches R mlt; scipy returns -inf for h<0, which would crash
+        # DistOps.logpdf gives exponential log f_exp(h) = -h for all h
+        # (matches R mlt; scipy returns -inf for h<0, which would crash
         # penalty-based optimisers that legitimately evaluate slightly-
         # infeasible iterates).  Support feasibility h >= 0 is enforced
         # separately via build_constraints / build_constraint_matrices.
-        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        log_pdf_h = dist.logpdf(h)
         per_obs = log_pdf_h + np.log(hp)
         if weights is not None:
             return cast(np.float64, np.dot(weights, per_obs))
-        return cast(np.float64, np.sum(per_obs))
+        return np.sum(per_obs)
 
 
 def _ll_right(
@@ -1400,7 +1511,7 @@ def _ll_left(
         o_c = offset[mask_c] if offset is not None else None
         S_c = scaling[mask_c] if scaling is not None else None
         h_c, _, _, _ = _eval_h_censored(y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c)
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         logcdf_c = _logcdf(h_c)
         if w_c is not None:
             ll += np.dot(w_c, logcdf_c)
@@ -1488,7 +1599,7 @@ def _ll_interval(
             log_p[both] = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
         if only_hi.any():
             h_hi_o = _h_at(only_hi, hi[only_hi])
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             log_p[only_hi] = _logcdf(h_hi_o)
         if only_lo.any():
             h_lo_o = _h_at(only_lo, lo[only_lo])
@@ -1693,7 +1804,7 @@ def _grad_left(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
         # ∂(-ℓ)/∂h_c from censored = -inv_mills
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         winv = inv_mills if w_c is None else w_c * inv_mills
         _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
@@ -1787,7 +1898,7 @@ def _grad_interval(
             h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
                 hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
             )
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             inv_mills = np.exp(
                 np.minimum(dist.logpdf(h_hi_o) - _logcdf(h_hi_o), _LOG_FLOAT_MAX)
             )
@@ -1858,7 +1969,7 @@ def _ll_and_grad_none(
     wns = ns if weights is None else weights * ns
     with np.errstate(invalid="ignore", divide="ignore"):
         # Smooth analytical extension for exponential at h<0 — see _ll_none.
-        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        log_pdf_h = dist.logpdf(h)
         if weights is not None:
             ll = np.dot(weights, log_pdf_h + np.log(hp))
         else:
@@ -1992,7 +2103,7 @@ def _ll_and_grad_left(
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         log_Fc = _logcdf(h_c)
         if w_c is not None:
             ll += np.dot(w_c, log_Fc)
@@ -2090,7 +2201,7 @@ def _ll_and_grad_interval(
             h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
                 hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
             )
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             log_Fc = _logcdf(h_hi_o)
             ww_o = w_c[only_hi] if w_c is not None else None
             if ww_o is not None:
@@ -2299,7 +2410,7 @@ def _scores_left(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
         # ∂ℓ_i/∂h = µ(h) = f(h)/F(h)
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         if w_c is not None:
             inv_mills = w_c * inv_mills
@@ -2406,7 +2517,7 @@ def _scores_interval(
             h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
                 hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
             )
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             inv_mills = np.exp(
                 np.minimum(dist.logpdf(h_hi_o) - _logcdf(h_hi_o), _LOG_FLOAT_MAX)
             )
@@ -2663,7 +2774,7 @@ def _hess_left(
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         mu = np.exp(np.minimum(dist.logpdf(h_c) - _logcdf(h_c), _LOG_FLOAT_MAX))
         psi = -_neg_score(h_c, dist)
         w_chain = mu * (mu - psi)
@@ -2825,7 +2936,7 @@ def _hess_interval(
             h_hi_o, B_hi_o, h0_hi_o, f_o = _eval_h_censored(
                 hi[only_hi], basis, theta_b, X_o, beta, S_o, gamma, o_o
             )
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             log_mu = dist.logpdf(h_hi_o) - _logcdf(h_hi_o)
             mu = np.exp(np.minimum(log_mu, _LOG_FLOAT_MAX))
             psi = -_neg_score(h_hi_o, dist)
@@ -2893,7 +3004,7 @@ def _ll_interaction_none(
     hp = d_design @ theta
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        log_pdf_h = dist.logpdf(h)
         per_obs = log_pdf_h + np.log(hp)
         if weights is not None:
             return np.float64(np.dot(weights, per_obs))
@@ -2922,7 +3033,7 @@ def _ll_and_grad_interaction_none(
     ihp = _inverse_hp(hp, weights)
 
     with np.errstate(invalid="ignore", divide="ignore"):
-        log_pdf_h = -h if dist.kind == "exponential" else dist.logpdf(h)
+        log_pdf_h = dist.logpdf(h)
         if weights is not None:
             ll = np.float64(np.dot(weights, log_pdf_h + np.log(hp)))
         else:
@@ -3921,7 +4032,7 @@ def _intercept_score_left(
         if o_c is not None:
             h_raw_c = h_raw_c + o_c
         h_c = np.clip(h_raw_c, -_H_CLIP, _H_CLIP)
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+        _logcdf = dist.logcdf
         log_inv_mills = dist.logpdf(h_c) - _logcdf(h_c)
         vals = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
         if w_c is not None:
@@ -4012,7 +4123,7 @@ def _intercept_score_interval(
             if f_o is not None:
                 h0_hi_o = h0_hi_o * f_o
             h_hi_o = np.clip(h0_hi_o + shift_o, -_H_CLIP, _H_CLIP)
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+            _logcdf = dist.logcdf
             log_inv_mills = dist.logpdf(h_hi_o) - _logcdf(h_hi_o)
             vals = np.exp(np.minimum(log_inv_mills, _LOG_FLOAT_MAX))
             if w_c is not None:

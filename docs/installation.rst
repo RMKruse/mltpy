@@ -2,7 +2,7 @@ Installation
 ============
 
 pymlt is a pure-Python package with only numpy and scipy as required
-dependencies. It targets Python ≥ 3.11.
+dependencies. It targets Python ≥ 3.12.
 
 Basic install
 -------------
