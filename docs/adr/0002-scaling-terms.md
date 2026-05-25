@@ -1,7 +1,7 @@
 # ADR 0002 — Scaling Terms (Heteroskedastic CTMs)
 
 **Date:** 2026-05-21  
-**Status:** Accepted  
+**Status:** Accepted (Decision 2 superseded by [ADR 0003](0003-scaling-with-interaction.md))  
 **Deciders:** RMKruse  
 **Issue:** [#69 Scaling Terms: ADR for scaled-baseline API and monotonicity strategy](https://github.com/RMKruse/mltpy/issues/69)  
 **Parent:** [#28 Scaling Terms (epic)](https://github.com/RMKruse/mltpy/issues/28), [#33 Architectural extensions](https://github.com/RMKruse/mltpy/issues/33)
@@ -159,6 +159,12 @@ in the tracer-bullet slice (#70).  See Decision 6 for backward-compatibility
 expectations.
 
 ### Interaction × Scaling
+
+> **Superseded by [ADR 0003](0003-scaling-with-interaction.md) (2026-05-25).**
+> The "out of scope" deferral below has been resolved: the combination is
+> now a ratified (supported-but-experimental) path with layout
+> `theta_ = [vec_C(Θ) | γ]`.  R `tram` was confirmed to support it.  The
+> paragraph below is retained for historical context only.
 
 Scaling stacks cleanly on top of *shift* models.  Combining `scaling=`
 with an `InteractionBasis` is **out of scope for v0.4** and raises
@@ -378,6 +384,7 @@ land in #73–#77 alongside the per-class convergence tuning.
 
 **Out of scope for v0.4:**
 - `scaling=` combined with `InteractionBasis` (ADR follow-up).
+  **→ Resolved by [ADR 0003](0003-scaling-with-interaction.md).**
 - `scaling=` combined with `base_distribution="exponential"` (requires a
   non-linear constraint extension).
 - `scaling=` on `Polr` (ordinal sign-convention ADR follow-up).
