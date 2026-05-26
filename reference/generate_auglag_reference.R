@@ -15,10 +15,10 @@
 #      monotonicity inequality.  Tests the support-inequality plumbing
 #      added in slice 3.
 #
-# Run with:  Rscript tests/r_scripts/generate_auglag_reference.R
-# Output:    tests/reference_data/auglag/lm_n50_seed42.json
-#            tests/reference_data/auglag/bernstein_bounded_n50_seed42.json
-#            tests/reference_data/auglag/exponential_n50_seed43.json
+# Run with:  Rscript reference/generate_auglag_reference.R
+# Output:    reference/auglag/lm_n50_seed42.json
+#            reference/auglag/bernstein_bounded_n50_seed42.json
+#            reference/auglag/exponential_n50_seed43.json
 #
 # The negative log-likelihood is implemented directly (consistent with mltpy)
 # to avoid dependence on mlt internal APIs.
@@ -139,7 +139,7 @@ out <- list(
   alabama_version = as.character(packageVersion("alabama"))
 )
 
-outfile <- file.path("tests", "reference_data", "auglag", "lm_n50_seed42.json")
+outfile <- file.path("reference", "auglag", "lm_n50_seed42.json")
 write_json(out, outfile, digits = 15, auto_unbox = TRUE)
 cat(sprintf("Written: %s\n", outfile))
 
@@ -249,7 +249,7 @@ out2 <- list(
 )
 
 outfile2 <- file.path(
-  "tests", "reference_data", "auglag", "bernstein_bounded_n50_seed42.json"
+  "reference", "auglag", "bernstein_bounded_n50_seed42.json"
 )
 write_json(out2, outfile2, digits = 15, auto_unbox = TRUE)
 cat(sprintf("Written: %s\n", outfile2))
@@ -394,7 +394,7 @@ out3 <- list(
 )
 
 outfile3 <- file.path(
-  "tests", "reference_data", "auglag", "exponential_n50_seed43.json"
+  "reference", "auglag", "exponential_n50_seed43.json"
 )
 write_json(out3, outfile3, digits = 15, auto_unbox = TRUE)
 cat(sprintf("Written: %s\n", outfile3))

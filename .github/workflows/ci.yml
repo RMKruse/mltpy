@@ -30,10 +30,10 @@ jobs:
         run: python -m pip install .[dev]
 
       - name: ruff check
-        run: ruff check mltpy/ tests/
+        run: ruff check src/ tests/
 
       - name: mypy
-        run: mypy mltpy/ --strict
+        run: mypy src/mltpy --strict
 
   # ---------------------------------------------------------------------------
   # Job 2: Test matrix

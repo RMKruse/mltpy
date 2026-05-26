@@ -139,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reference runs, with XFAIL/XPASS tracking (`validation/`)
 - Gradient verification suite — 79 tests across censoring types, base
   distributions, θ positions, and covariate modes, including narrow-interval
-  Taylor-fallback and converged-optimum sanity checks (`gradient_validation/`)
+  Taylor-fallback and converged-optimum sanity checks
+  (`tests/test_gradient_verification.py`)
 - Reproducible runtime benchmark vs. R `mlt` — Python and R driver scripts
   consuming a shared seeded dataset, median + IQR per cell across the grid
   `n × order × censoring`, and an auto-generated markdown report with

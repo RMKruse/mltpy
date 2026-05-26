@@ -62,7 +62,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["mltpy*"]
 
 [tool.setuptools.package-data]
