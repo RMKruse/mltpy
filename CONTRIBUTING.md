@@ -41,7 +41,7 @@ the latest committed report is at
 | Tool | Command | Notes |
 |------|---------|-------|
 | ruff | `ruff check .` / `ruff format .` | linting + formatting |
-| mypy | `mypy mltpy/` | strict mode; scipy stubs excluded |
+| mypy | `mypy src/mltpy` | strict mode; scipy stubs excluded |
 
 Line length: 88 characters.
 
@@ -76,5 +76,5 @@ pytest tests/test_model.py -k r_reference
 
 - One logical change per PR.
 - All tests must pass: `pytest tests/ -q`
-- No mypy errors: `mypy mltpy/`
+- No mypy errors: `mypy src/mltpy`
 - No ruff warnings: `ruff check .`
