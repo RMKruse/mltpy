@@ -65,6 +65,9 @@ dev = [
 where = ["."]
 include = ["mltpy*"]
 
+[tool.setuptools.package-data]
+mltpy = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [

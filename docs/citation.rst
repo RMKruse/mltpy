@@ -14,7 +14,7 @@ mltpy (software)
      title   = {mltpy: Conditional Transformation Models in Python},
      year    = {2026},
      url     = {https://github.com/RMKruse/mltpy},
-     version = {0.1.0},
+     version = {0.4.0},
    }
 
 Methodology

@@ -22,7 +22,7 @@
     "max_delta_logcumhazard": 2.08264730794383e-07,
     "max_delta_logodds": 2.8315860367555956e-07,
     "converged": true,
-    "runtime_s": 0.024,
+    "runtime_s": 0.0295,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -49,7 +49,7 @@
     "max_delta_logcumhazard": 5.90522364340984e-07,
     "max_delta_logodds": 6.328438568736772e-07,
     "converged": true,
-    "runtime_s": 0.0144,
+    "runtime_s": 0.0161,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -76,7 +76,7 @@
     "max_delta_logcumhazard": 4.899021639914736e-06,
     "max_delta_logodds": 5.04306485460404e-06,
     "converged": true,
-    "runtime_s": 0.0205,
+    "runtime_s": 0.0235,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -103,7 +103,7 @@
     "max_delta_logcumhazard": 3.8747564512497945e-06,
     "max_delta_logodds": 4.7914135867799246e-06,
     "converged": true,
-    "runtime_s": 0.0071,
+    "runtime_s": 0.0084,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -130,7 +130,7 @@
     "max_delta_logcumhazard": 4.7528063107371565e-07,
     "max_delta_logodds": 5.141005969822032e-07,
     "converged": true,
-    "runtime_s": 0.0076,
+    "runtime_s": 0.0084,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -157,7 +157,7 @@
     "max_delta_logcumhazard": 2.2223324769310437e-07,
     "max_delta_logodds": 2.948052879592211e-07,
     "converged": true,
-    "runtime_s": 0.0112,
+    "runtime_s": 0.012,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -211,7 +211,7 @@
     "max_delta_logcumhazard": 0.0003359997616505517,
     "max_delta_logodds": 0.0010584484263147509,
     "converged": true,
-    "runtime_s": 0.0202,
+    "runtime_s": 0.0191,
     "failure_reason": "theta (0.0781 > 0.05; informational); trafo (0.0582 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (10.4420 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -238,7 +238,7 @@
     "max_delta_logcumhazard": 3.571131942736727e-05,
     "max_delta_logodds": 0.00010410243489555882,
     "converged": true,
-    "runtime_s": 0.0055,
+    "runtime_s": 0.005,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -265,7 +265,7 @@
     "max_delta_logcumhazard": 7.280256285446818e-05,
     "max_delta_logodds": 0.0001714289354284304,
     "converged": true,
-    "runtime_s": 0.0104,
+    "runtime_s": 0.0106,
     "failure_reason": "theta (0.2004 > 0.05; informational); trafo (0.1546 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (10.9587 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -292,7 +292,7 @@
     "max_delta_logcumhazard": 1.8113482352255517e-05,
     "max_delta_logodds": 1.8590843419374892e-05,
     "converged": true,
-    "runtime_s": 0.0038,
+    "runtime_s": 0.0035,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -319,7 +319,7 @@
     "max_delta_logcumhazard": 0.000232715430965591,
     "max_delta_logodds": 0.0002489714322340131,
     "converged": true,
-    "runtime_s": 0.0047,
+    "runtime_s": 0.0048,
     "failure_reason": "quantile (0.0688 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -346,7 +346,7 @@
     "max_delta_logcumhazard": 4.234502604116841e-08,
     "max_delta_logodds": 9.337320605595778e-08,
     "converged": true,
-    "runtime_s": 0.0027,
+    "runtime_s": 0.0025,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -373,7 +373,7 @@
     "max_delta_logcumhazard": 0.00024815524885994644,
     "max_delta_logodds": 0.00047708986538474996,
     "converged": true,
-    "runtime_s": 0.0073,
+    "runtime_s": 0.0072,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -427,7 +427,7 @@
     "max_delta_logcumhazard": 2.7572291978472663e-05,
     "max_delta_logodds": 7.130607046823556e-05,
     "converged": true,
-    "runtime_s": 0.0096,
+    "runtime_s": 0.0101,
     "failure_reason": "theta (1.9542 > 0.05; informational); trafo (1.4359 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (48.9725 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -481,7 +481,7 @@
     "max_delta_logcumhazard": 0.0001519342885956121,
     "max_delta_logodds": 0.00015769599156101322,
     "converged": true,
-    "runtime_s": 0.0064,
+    "runtime_s": 0.0063,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -535,7 +535,7 @@
     "max_delta_logcumhazard": 0.001500855935004708,
     "max_delta_logodds": 0.004345341382261836,
     "converged": true,
-    "runtime_s": 0.006,
+    "runtime_s": 0.0064,
     "failure_reason": "theta (0.7009 > 0.05; informational); trafo (0.5720 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (3.2989 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -562,7 +562,7 @@
     "max_delta_logcumhazard": 5.202062601222801e-05,
     "max_delta_logodds": 0.00013408012692250892,
     "converged": true,
-    "runtime_s": 0.012,
+    "runtime_s": 0.0121,
     "failure_reason": "theta (0.3863 > 0.05; informational); trafo (0.3315 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (1.4606 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -616,7 +616,7 @@
     "max_delta_logcumhazard": 0.0027334530973213145,
     "max_delta_logodds": 0.008616825657318028,
     "converged": true,
-    "runtime_s": 0.0155,
+    "runtime_s": 0.0159,
     "failure_reason": "theta (72.6470 > 0.05; informational); trafo (53.4022 > 0.05; non-identifiable \u2014 ll/cdf match); odds (0.1635 > 0.1; non-identifiable \u2014 ll/cdf match); logdensity (1567.7974 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -643,7 +643,7 @@
     "max_delta_logcumhazard": 0.000724490062705474,
     "max_delta_logodds": 0.0007435083626563532,
     "converged": true,
-    "runtime_s": 0.0121,
+    "runtime_s": 0.0122,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -670,7 +670,7 @@
     "max_delta_logcumhazard": 7.195206025167877e-05,
     "max_delta_logodds": 0.00018894685990833437,
     "converged": true,
-    "runtime_s": 0.0084,
+    "runtime_s": 0.0083,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -697,7 +697,7 @@
     "max_delta_logcumhazard": 0.049178634852326986,
     "max_delta_logodds": 0.13355672097057658,
     "converged": true,
-    "runtime_s": 0.136,
+    "runtime_s": 0.1384,
     "failure_reason": "theta (835.1894 > 0.05; informational); pdf (0.0790 > 0.05; non-identifiable \u2014 ll/cdf match); hazard (1.4432 > 0.1; non-identifiable \u2014 ll/cdf match); trafo (732.5719 > 0.05; non-identifiable \u2014 ll/cdf match); cumhazard (0.1225 > 0.1; non-identifiable \u2014 ll/cdf match); odds (1.4800 > 0.1; non-identifiable \u2014 ll/cdf match); logsurvivor (0.1225 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (394.1428 > 0.05; non-identifiable \u2014 ll/cdf match); loghazard (0.2856 > 0.1; non-identifiable \u2014 ll/cdf match); logodds (0.1336 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   },
@@ -751,7 +751,7 @@
     "max_delta_logcumhazard": 1.6316052583231766e-05,
     "max_delta_logodds": 1.678063032795052e-05,
     "converged": true,
-    "runtime_s": 0.0073,
+    "runtime_s": 0.0074,
     "failure_reason": null,
     "expected_failure": false
   },
@@ -778,7 +778,7 @@
     "max_delta_logcumhazard": null,
     "max_delta_logodds": null,
     "converged": true,
-    "runtime_s": 0.0083,
+    "runtime_s": 0.0082,
     "failure_reason": "theta (3.9635 > 0.05; informational); quantile (0.1808 > 0.05; non-identifiable \u2014 ll/cdf match); trafo (3.2187 > 0.05; non-identifiable \u2014 ll/cdf match); logdensity (37.1804 > 0.05; non-identifiable \u2014 ll/cdf match)",
     "expected_failure": false
   }
