@@ -22,7 +22,7 @@
     "max_delta_logcumhazard": 3.8747564512497945e-06,
     "max_delta_logodds": 4.7914135867799246e-06,
     "converged": true,
-    "runtime_s": 0.0089,
+    "runtime_s": 0.0084,
     "failure_reason": null,
     "expected_failure": false
   }

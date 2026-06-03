@@ -621,6 +621,69 @@ def _add_scaled_gamma_blocks_h(
     H[p + q_d : p + q_d + q_s, p + q_d : p + q_d + q_s] += (S_c * c_g[:, None]).T @ S_c
 
 
+def _add_scaled_gamma_blocks_h_interval(
+    H: NDArray[np.float64],
+    B_lo: NDArray[np.float64],
+    B_hi: NDArray[np.float64],
+    X_c: NDArray[np.float64] | None,
+    S_c: NDArray[np.float64],
+    f_c: NDArray[np.float64],
+    h0_lo: NDArray[np.float64],
+    h0_hi: NDArray[np.float64],
+    a: NDArray[np.float64],
+    b: NDArray[np.float64],
+    c: NDArray[np.float64],
+    w_lo: NDArray[np.float64],
+    w_hi: NDArray[np.float64],
+    p: int,
+    q_d: int,
+    q_s: int,
+) -> None:
+    """In-place add (θ_b, γ), (β, γ), (γ, γ) NLL Hessian blocks for a
+    both-finite interval-censored sub-group.
+
+    Two-endpoint sibling of :func:`_add_scaled_gamma_blocks_h`.  A genuine
+    interval ``[h_l, h_u]`` couples both endpoints, so the chain runs through
+    a 2×2 endpoint Hessian rather than the single-endpoint kernel — this needs
+    its own helper and cannot reuse :func:`_add_scaled_gamma_blocks_h`.
+
+    The (already row-weighted) entries of the 2×2 Hessian of ``log p`` w.r.t.
+    ``(h_l, h_u)`` are ``a = ∂²/∂h_l²``, ``c = ∂²/∂h_u²``,
+    ``b = ∂²/∂h_l ∂h_u``; the NLL gradient coefficients are ``+w_lo`` (lower)
+    and ``-w_hi`` (upper), also row-weighted.  Writing
+    ``α_lo = a·h0_lo + b·h0_hi`` and ``α_hi = b·h0_lo + c·h0_hi``::
+
+        (θ_b, γ):  0.5·f·(w_lo − f·α_lo)·B_lo X_s'
+                 − 0.5·f·(w_hi + f·α_hi)·B_hi X_s'
+        (β,   γ): −0.5·f·(α_lo + α_hi)·X_d X_s'              (chain only)
+        (γ,   γ): −0.25·f²·(a·h0_lo² + 2b·h0_lo·h0_hi + c·h0_hi²)·X_s X_s'
+                 + 0.25·f·(w_lo·h0_lo − w_hi·h0_hi)·X_s X_s'
+
+    The (θ_b, θ_b), (θ_b, β), (β, β) sub-blocks are handled by the caller via
+    :func:`_outer` with ``B̃ = f·B``.
+    """
+    g0, g1 = p + q_d, p + q_d + q_s
+    alpha_lo = a * h0_lo + b * h0_hi
+    alpha_hi = b * h0_lo + c * h0_hi
+    # (θ_b, γ): 2D chain (−0.5·f²·α·B) plus bias (+0.5·f·w·B), per endpoint.
+    coef_b_lo = 0.5 * f_c * (w_lo - f_c * alpha_lo)
+    coef_b_hi = -0.5 * f_c * (w_hi + f_c * alpha_hi)
+    H_bg = (B_lo * coef_b_lo[:, None]).T @ S_c + (B_hi * coef_b_hi[:, None]).T @ S_c
+    H[:p, g0:g1] += H_bg
+    H[g0:g1, :p] += H_bg.T
+    # (β, γ): chain only (no bias — ∂²h/∂β∂γ = 0).
+    if X_c is not None and q_d > 0:
+        coef_dg = -0.5 * f_c * (alpha_lo + alpha_hi)
+        H_dg = (X_c * coef_dg[:, None]).T @ S_c
+        H[p:g0, g0:g1] += H_dg
+        H[g0:g1, p:g0] += H_dg.T
+    # (γ, γ): chain plus bias.
+    coef_gg = -0.25 * f_c * f_c * (
+        a * h0_lo * h0_lo + 2.0 * b * h0_lo * h0_hi + c * h0_hi * h0_hi
+    ) + 0.25 * f_c * (w_lo * h0_lo - w_hi * h0_hi)
+    H[g0:g1, g0:g1] += (S_c * coef_gg[:, None]).T @ S_c
+
+
 def _add_grad_censored(
     grad: NDArray[np.float64],
     B_c: NDArray[np.float64],
@@ -2496,33 +2559,26 @@ def _hess_interval(
             H[: p + q_d, : p + q_d] -= block  # NLL = -log p
 
             if S_b is not None and f_b is not None:
-                # 2D chain through γ Jacobian + bias term.
-                # alpha_i := row of (a b; b c) · (h_0(lo), h_0(hi))
-                alpha_lo = a * h0_lo_b + b * h0_hi_b
-                alpha_hi = b * h0_lo_b + c * h0_hi_b
-                # (θ_b, γ): NLL chain = -0.5·f²·X_s·(α_lo·B_lo + α_hi·B_hi)'
-                #          NLL bias  = +0.5·f·X_s·(w_lo·B_lo - w_hi·B_hi)'
-                coef_b_lo = 0.5 * f_b * (w_lo_w - f_b * alpha_lo)
-                coef_b_hi = -0.5 * f_b * (w_hi_w + f_b * alpha_hi)
-                H_bg = (B_lo_b * coef_b_lo[:, None]).T @ S_b + (
-                    B_hi_b * coef_b_hi[:, None]
-                ).T @ S_b
-                H[:p, p + q_d :] += H_bg
-                H[p + q_d :, :p] += H_bg.T
-                # (β, γ): chain only = -0.5·f·X_d·X_s'·(α_lo + α_hi)
-                if X_b is not None and q_d > 0:
-                    coef_dg = -0.5 * f_b * (alpha_lo + alpha_hi)
-                    H_dg = (X_b * coef_dg[:, None]).T @ S_b
-                    H[p : p + q_d, p + q_d :] += H_dg
-                    H[p + q_d :, p : p + q_d] += H_dg.T
-                # (γ, γ): chain = -0.25·f²·(a·h0_lo² + 2b·h0_lo·h0_hi + c·h0_hi²)
-                #         bias  = +0.25·f·(w_lo·h0_lo - w_hi·h0_hi)
-                coef_gg = -0.25 * f_b * f_b * (
-                    a * h0_lo_b * h0_lo_b
-                    + 2.0 * b * h0_lo_b * h0_hi_b
-                    + c * h0_hi_b * h0_hi_b
-                ) + 0.25 * f_b * (w_lo_w * h0_lo_b - w_hi_w * h0_hi_b)
-                H[p + q_d :, p + q_d :] += (S_b * coef_gg[:, None]).T @ S_b
+                # Two-endpoint γ-Hessian (2D chain + bias); see the helper for
+                # the per-block algebra.
+                _add_scaled_gamma_blocks_h_interval(
+                    H,
+                    B_lo_b,
+                    B_hi_b,
+                    X_b,
+                    S_b,
+                    f_b,
+                    h0_lo_b,
+                    h0_hi_b,
+                    a,
+                    b,
+                    c,
+                    w_lo_w,
+                    w_hi_w,
+                    p,
+                    q_d,
+                    q_s,
+                )
 
         if only_hi.any():
             # Left-open: same Hessian form as _hess_left at h_hi.
