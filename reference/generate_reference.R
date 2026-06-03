@@ -1475,6 +1475,102 @@ fit_v_bc <- tram::BoxCox(y ~ x_d | x_s, data = df_v_bc,
                    y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc,
                    support = c(a_v_bc, b_v_bc))
 
+# ---------------------------------------------------------------------------
+# confband reference — *scaling* BoxCox fit (heteroskedastic baseline).
+#
+# Reuses the interior seed-770 BoxCox(y ~ x_d | x_s) fit above (so the θ_b
+# block of vcov is well-conditioned and matches mltpy's ``inv(H)``; a
+# boundary fit would need R's active-set vcov penalty and would not match a
+# bare delta-method band).  Builds the pointwise Wald band by the delta
+# method on the *full* ``[θ_b | β | γ]`` parameter vector, exercising the γ
+# columns of the Jacobian:
+#
+#   h(y|x_d,x_s) = h_0(y)·s + x_d·β,   s = exp(0.5·x_s·γ),   h' = h_0'·s
+#
+# Sign convention: ``coef(as.mlt(fit))`` and ``vcov(as.mlt(fit))`` are in
+# R's ``h − x_d·β_R`` parameterisation, so the β column of the Jacobian is
+# ``∂h/∂β_R = −x_d`` and the back-transformed curve uses ``h = h_0·s −
+# x_d·β_R`` — this matches mltpy's ``h + x_d·β`` curve because mltpy stores
+# β = −β_R (ADR 0002, Decision 5).  The resulting band is parameterisation-
+# invariant, so the mltpy parity test compares directly without any flip.
+#
+# Writes (m = grid length):
+#   reference/confband_scaling_y_grid.txt  — m-point grid
+#   reference/confband_scaling_profile.txt — "x_d0 x_s0" (single profile)
+#   reference/confband_scaling_<what>.txt  — (m, 3) row-major [est, lwr, upr]
+# ---------------------------------------------------------------------------
+m_cbs   <- as.mlt(fit_v_bc)
+cf_cbs  <- coef(m_cbs)
+V_cbs   <- as.matrix(vcov(m_cbs))
+p_cbs   <- 5L
+nm_cbs  <- names(cf_cbs)
+theta_b_cbs <- cf_cbs[1:p_cbs]
+beta_r_cbs  <- cf_cbs[grep("x_d", nm_cbs)]
+gamma_r_cbs <- cf_cbs[grep("scl", nm_cbs)]
+
+# Single covariate / scaling profile and an interior grid (avoid endpoints
+# where h' -> 0 on the Bernstein basis).
+xd0_cbs <- 0.6
+xs0_cbs <- 0.7
+yg_cbs  <- seq(a_v_bc + 0.3, b_v_bc - 0.3, length.out = 15)
+
+bb_cbs <- Bernstein_basis(numeric_var("y", support = c(a_v_bc, b_v_bc)),
+                          order = 4, ui = "increasing")
+B_cbs  <- model.matrix(bb_cbs, data = data.frame(y = yg_cbs))
+D_cbs  <- model.matrix(bb_cbs, data = data.frame(y = yg_cbs), deriv = c(y = 1L))
+
+s_cbs   <- as.numeric(exp(0.5 * xs0_cbs * gamma_r_cbs))
+h0_cbs  <- as.numeric(B_cbs %*% theta_b_cbs)
+hp0_cbs <- as.numeric(D_cbs %*% theta_b_cbs)
+h_cbs   <- h0_cbs * s_cbs - xd0_cbs * beta_r_cbs   # = mltpy's h_0·s + x_d·β
+hp_cbs  <- hp0_cbs * s_cbs
+qn_cbs  <- qnorm(0.975)
+
+# Jacobian in [θ_b | β_R | γ] order (matching V_cbs).  `with_loghp` adds the
+# ∂(log h')/∂θ contribution present in the density / hazard linear predictors.
+.cbs_jac <- function(coeff, with_loghp) {
+  J <- matrix(0, length(yg_cbs), p_cbs + 2L)
+  J[, 1:p_cbs] <- if (with_loghp) coeff * (s_cbs * B_cbs) + D_cbs / hp0_cbs
+                  else coeff * (s_cbs * B_cbs)
+  J[, p_cbs + 1L] <- coeff * (-xd0_cbs)                       # ∂h/∂β_R = -x_d
+  J[, p_cbs + 2L] <- if (with_loghp) 0.5 * xs0_cbs * (coeff * h0_cbs * s_cbs + 1)
+                     else coeff * h0_cbs * s_cbs * 0.5 * xs0_cbs
+  J
+}
+.cbs_var <- function(J) rowSums((J %*% V_cbs) * J)
+
+# trafo / distribution / survivor (η = h; coeff = 1, no log h' term).
+se_h_cbs <- sqrt(.cbs_var(.cbs_jac(1, FALSE)))
+lo_cbs   <- h_cbs - qn_cbs * se_h_cbs
+hi_cbs   <- h_cbs + qn_cbs * se_h_cbs
+.write_band(h_cbs, lo_cbs, hi_cbs, "confband_scaling_trafo.txt")
+.write_band(pnorm(h_cbs), pnorm(lo_cbs), pnorm(hi_cbs),
+            "confband_scaling_distribution.txt")
+.write_band(1 - pnorm(h_cbs), 1 - pnorm(hi_cbs), 1 - pnorm(lo_cbs),
+            "confband_scaling_survivor.txt")
+
+# density (η = log f(h) + log h'; coeff = ψ(h) = -h for N(0,1)).
+psi_cbs   <- -h_cbs
+se_d_cbs  <- sqrt(.cbs_var(.cbs_jac(psi_cbs, TRUE)))
+eta_d_cbs <- dnorm(h_cbs, log = TRUE) + log(hp_cbs)
+.write_band(exp(eta_d_cbs), exp(eta_d_cbs - qn_cbs * se_d_cbs),
+            exp(eta_d_cbs + qn_cbs * se_d_cbs), "confband_scaling_density.txt")
+
+# hazard (η = log f(h) + log h' - log S(h); coeff = ψ(h) + λ(h)).
+lam_cbs   <- dnorm(h_cbs) / pnorm(h_cbs, lower.tail = FALSE)
+se_z_cbs  <- sqrt(.cbs_var(.cbs_jac(psi_cbs + lam_cbs, TRUE)))
+eta_z_cbs <- dnorm(h_cbs, log = TRUE) + log(hp_cbs) -
+             pnorm(h_cbs, lower.tail = FALSE, log.p = TRUE)
+.write_band(exp(eta_z_cbs), exp(eta_z_cbs - qn_cbs * se_z_cbs),
+            exp(eta_z_cbs + qn_cbs * se_z_cbs), "confband_scaling_hazard.txt")
+
+writeLines(format(yg_cbs, digits = 15),
+           con = file.path(out_dir, "confband_scaling_y_grid.txt"))
+writeLines(paste(format(xd0_cbs, digits = 15), format(xs0_cbs, digits = 15)),
+           con = file.path(out_dir, "confband_scaling_profile.txt"))
+cat(sprintf("confband scaling refs: p=%d, m=%d, profile=(%.2f, %.2f)\n",
+            p_cbs, length(yg_cbs), xd0_cbs, xs0_cbs))
+
 # Dedicated Colr vcov fit — n=200, order=4, seed=770 gives an interior MLE.
 set.seed(770)
 n_v_co <- 200

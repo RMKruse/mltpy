@@ -22,6 +22,7 @@ import pathlib
 import numpy as np
 import pytest
 from scipy.optimize import approx_fprime
+from scipy.stats import norm
 
 from mltpy import (
     MLT,
@@ -32,7 +33,8 @@ from mltpy import (
     score_matrix,
 )
 from mltpy.basis import BernsteinBasis
-from mltpy.tram import Colr, Coxph
+from mltpy.likelihood import _get_dist
+from mltpy.tram import BoxCox, Colr, Coxph
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
@@ -888,3 +890,277 @@ def test_coxsnell_residuals_scaling_only_apply_scale_factor() -> None:
     # residual computed at h_0(y) alone would differ from r_cs.
     gamma = model.gamma_coef_
     assert gamma is not None and np.max(np.abs(gamma)) > 0.05
+
+
+def _fit_scaled_model(
+    n: int = 60, p: int = 5, q_d: int = 2, q_s: int = 1, seed: int = 3
+) -> tuple[MLT, dict]:
+    """Fit a small exact-data scaled MLT and return (model, problem)."""
+    prob = _toy_scaled_problem(n=n, p=p, q_d=q_d, q_s=q_s, seed=seed)
+    model = MLT(
+        order=prob["p"] - 1,
+        support=prob["basis"].support,
+        scaling=prob["X_s"],
+    )
+    if q_d > 0:
+        model.fit(prob["y"], X=prob["X"])
+    else:
+        model.fit(prob["y"])
+    return model, prob
+
+
+def _eta_of_theta(
+    model: MLT,
+    theta: np.ndarray,
+    y: np.ndarray,
+    x_d: np.ndarray | None,
+    x_s: np.ndarray | None,
+    what: str,
+    dist,
+) -> np.ndarray:
+    """η(y; θ) on the scaled model, as a pure function of the full θ vector.
+
+    Mirrors the linear-predictor definitions of :meth:`confband` so that an
+    independent finite-difference Jacobian can validate the analytical one,
+    including the γ block.
+    """
+    p = model.basis.order + 1
+    q_s = 0 if model.scaling is None else model.scaling.shape[1]
+    q_d = theta.size - p - q_s
+    theta_b = theta[:p]
+    beta = theta[p : p + q_d] if q_d > 0 else None
+    gamma = theta[p + q_d :] if q_s > 0 else None
+
+    B = model.basis.evaluate(y)
+    D = model.basis.derivative(y, order=1)
+    s = float(np.exp(0.5 * (x_s @ gamma))) if (gamma is not None) else 1.0
+    h = (B @ theta_b) * s
+    hp = (D @ theta_b) * s
+    if beta is not None and x_d is not None:
+        h = h + x_d @ beta
+    if what in ("trafo", "distribution", "survivor"):
+        return h
+    if what == "density":
+        return dist.logpdf(h) + np.log(hp)
+    return dist.logpdf(h) + np.log(hp) - dist.logsf(h)  # hazard
+
+
+@pytest.mark.parametrize(
+    "what", ["trafo", "distribution", "survivor", "density", "hazard"]
+)
+def test_confband_scaling_matches_finite_difference_delta(what: str) -> None:
+    """Scaling-aware ``confband`` equals an independent FD delta-method band.
+
+    Finite-differences η (a pure function of the full ``[θ_b | β | γ]``
+    vector) to form the delta-method Jacobian, applies the model's own
+    ``vcov`` and the same back-transforms / ``z`` as :meth:`confband`, and
+    asserts agreement.  This exercises the γ columns of the analytical
+    Jacobian, which the old shift-only code omitted entirely.
+    """
+    model, prob = _fit_scaled_model()
+    dist = _get_dist(model.base_distribution)
+    x_d = prob["X"][0]
+    x_s = prob["X_s"][0]
+    # Interior grid keeps |h| well below the ±30 clip on every `what`.
+    grid = np.linspace(prob["y"].min() + 0.1, prob["y"].max() - 0.1, 12)
+
+    band = model.confband(
+        grid, X=x_d[None, :], what=what, X_scale=x_s[None, :], level=0.95
+    )
+
+    theta = model.theta_
+    V = model.vcov()
+    z = norm.ppf(0.5 * (1.0 + 0.95))
+
+    def eta_fn(t: np.ndarray) -> np.ndarray:
+        return _eta_of_theta(model, t, grid, x_d, x_s, what, dist)
+
+    eta0 = eta_fn(theta)
+    # FD Jacobian J[i, j] = ∂η_i/∂θ_j.
+    J = np.empty((grid.size, theta.size))
+    step = 1e-6
+    for j in range(theta.size):
+        tp = theta.copy()
+        tp[j] += step
+        J[:, j] = (eta_fn(tp) - eta0) / step
+    se = np.sqrt(np.maximum(np.einsum("ij,jk,ik->i", J, V, J), 0.0))
+    lo_eta, hi_eta = eta0 - z * se, eta0 + z * se
+
+    if what == "trafo":
+        est_ref, lo_ref, hi_ref = eta0, lo_eta, hi_eta
+    elif what == "distribution":
+        est_ref, lo_ref, hi_ref = dist.cdf(eta0), dist.cdf(lo_eta), dist.cdf(hi_eta)
+    elif what == "survivor":
+        est_ref, lo_ref, hi_ref = dist.sf(eta0), dist.sf(hi_eta), dist.sf(lo_eta)
+    else:  # density / hazard
+        est_ref, lo_ref, hi_ref = np.exp(eta0), np.exp(lo_eta), np.exp(hi_eta)
+
+    np.testing.assert_allclose(band[:, 0], est_ref, rtol=1e-6, atol=1e-9)
+    np.testing.assert_allclose(band[:, 1], lo_ref, rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(band[:, 2], hi_ref, rtol=1e-5, atol=1e-7)
+
+
+@pytest.mark.parametrize("what", ["distribution", "survivor", "density"])
+def test_confband_scaling_estimate_matches_point_prediction(what: str) -> None:
+    """The band's central column equals the scaling-aware point prediction.
+
+    Guards specifically against the old bug of omitting the
+    ``exp(0.5·x_s·γ)`` factor on ``h``: if the factor were dropped the
+    centre curve would disagree with :meth:`predict`.
+    """
+    model, prob = _fit_scaled_model()
+    x_d = prob["X"][0]
+    x_s = prob["X_s"][0]
+    grid = np.linspace(prob["y"].min() + 0.1, prob["y"].max() - 0.1, 15)
+
+    band = model.confband(grid, X=x_d[None, :], what=what, X_scale=x_s[None, :])
+    pred_what = {
+        "distribution": "distribution",
+        "survivor": "survivor",
+        "density": "density",
+    }[what]
+    X_rep = np.repeat(x_d[None, :], grid.size, axis=0)
+    Xs_rep = np.repeat(x_s[None, :], grid.size, axis=0)
+    point = model.predict(grid, X_new=X_rep, what=pred_what, X_scale_new=Xs_rep)
+    np.testing.assert_allclose(band[:, 0], point, rtol=1e-9, atol=1e-11)
+
+
+def test_confband_scaling_factor_actually_shifts_band() -> None:
+    """A non-zero γ profile changes the band — it is not scaling-blind.
+
+    Two different ``X_scale`` profiles must yield different bands; if the γ
+    block were ignored (the old bug) both calls would return the same curve.
+    """
+    model, prob = _fit_scaled_model()
+    x_d = prob["X"][0]
+    grid = np.linspace(prob["y"].min() + 0.1, prob["y"].max() - 0.1, 10)
+
+    band_a = model.confband(
+        grid, X=x_d[None, :], what="survivor", X_scale=np.array([[1.5]])
+    )
+    band_b = model.confband(
+        grid, X=x_d[None, :], what="survivor", X_scale=np.array([[-1.5]])
+    )
+    # The fitted γ is meaningfully non-zero, so the two profiles diverge.
+    assert model.gamma_coef_ is not None
+    assert np.max(np.abs(model.gamma_coef_)) > 0.02
+    assert not np.allclose(band_a, band_b)
+
+
+def test_confband_scaling_only_no_shift_covariates() -> None:
+    """Scaling-only fit (q_d == 0): X must be None, X_scale required."""
+    model, prob = _fit_scaled_model(q_d=0, q_s=1, seed=11)
+    x_s = prob["X_s"][0]
+    grid = np.linspace(prob["y"].min() + 0.1, prob["y"].max() - 0.1, 8)
+
+    band = model.confband(grid, what="distribution", X_scale=x_s[None, :])
+    assert band.shape == (grid.size, 3)
+    # Central column matches the scaling-only point prediction.
+    Xs_rep = np.repeat(x_s[None, :], grid.size, axis=0)
+    point = model.predict(grid, what="distribution", X_scale_new=Xs_rep)
+    np.testing.assert_allclose(band[:, 0], point, rtol=1e-9, atol=1e-11)
+
+    with pytest.raises(ValueError, match="without shift covariates"):
+        model.confband(grid, X=np.array([[0.0, 0.0]]), X_scale=x_s[None, :])
+
+
+def test_confband_scaling_argument_validation() -> None:
+    """X_scale presence/shape is validated against the fitted scaling layout."""
+    model, prob = _fit_scaled_model()
+    x_d = prob["X"][0]
+    x_s = prob["X_s"][0]
+    grid = np.linspace(prob["y"].min() + 0.1, prob["y"].max() - 0.1, 6)
+
+    # Missing X_scale on a scaling fit.
+    with pytest.raises(ValueError, match="X_scale is required"):
+        model.confband(grid, X=x_d[None, :], what="survivor")
+
+    # Wrong X_scale width.
+    with pytest.raises(ValueError, match="X_scale has shape"):
+        model.confband(
+            grid, X=x_d[None, :], what="survivor", X_scale=np.array([[0.1, 0.2]])
+        )
+
+    # X_scale supplied to a non-scaling model is rejected.
+    plain = MLT(order=prob["p"] - 1, support=prob["basis"].support)
+    plain.fit(prob["y"], X=prob["X"])
+    with pytest.raises(ValueError, match="without scaling"):
+        plain.confband(grid, X=x_d[None, :], what="survivor", X_scale=x_s[None, :])
+
+
+# ---------------------------------------------------------------------------
+# R parity: scaling-aware confband vs hand-built delta-method band from
+# tram::BoxCox(y ~ x_d | x_s).  The reference is produced by
+# reference/generate_reference.R (confband_scaling_* block) from the *same*
+# interior seed-770 BoxCox fit as the scaling_vcov_boxcox vcov fixture, so
+# mltpy's bare vcov matches R's and the band agrees end-to-end.  See
+# docs/adr/0002-scaling-terms.md.
+# ---------------------------------------------------------------------------
+
+_CONFBAND_SCALING_WHAT = ["trafo", "distribution", "survivor", "density", "hazard"]
+
+
+def _load_confband_scaling_ref() -> dict | None:
+    """Load the R confband-scaling fixtures, or None if not materialised."""
+    needed = [
+        REF_DIR / "scaling_vcov_boxcox_y.txt",
+        REF_DIR / "scaling_vcov_boxcox_x_d.txt",
+        REF_DIR / "scaling_vcov_boxcox_x_s.txt",
+        REF_DIR / "scaling_vcov_boxcox_support.txt",
+        REF_DIR / "confband_scaling_y_grid.txt",
+        REF_DIR / "confband_scaling_profile.txt",
+        *[REF_DIR / f"confband_scaling_{w}.txt" for w in _CONFBAND_SCALING_WHAT],
+    ]
+    if not all(p.exists() for p in needed):
+        return None
+    y = np.loadtxt(REF_DIR / "scaling_vcov_boxcox_y.txt")
+    x_d = np.loadtxt(REF_DIR / "scaling_vcov_boxcox_x_d.txt")
+    x_s = np.loadtxt(REF_DIR / "scaling_vcov_boxcox_x_s.txt")
+    support = tuple(np.loadtxt(REF_DIR / "scaling_vcov_boxcox_support.txt"))
+    y_grid = np.loadtxt(REF_DIR / "confband_scaling_y_grid.txt")
+    xd0, xs0 = np.loadtxt(REF_DIR / "confband_scaling_profile.txt")
+    bands = {
+        w: np.loadtxt(REF_DIR / f"confband_scaling_{w}.txt").reshape(y_grid.size, 3)
+        for w in _CONFBAND_SCALING_WHAT
+    }
+    return {
+        "y": y,
+        "x_d": x_d,
+        "x_s": x_s,
+        "support": support,
+        "y_grid": y_grid,
+        "xd0": float(xd0),
+        "xs0": float(xs0),
+        "bands": bands,
+    }
+
+
+@pytest.mark.parametrize("what", _CONFBAND_SCALING_WHAT)
+def test_confband_scaling_matches_R(what: str) -> None:
+    """Scaling-aware ``confband`` matches R's delta-method band end-to-end.
+
+    Uses the interior seed-770 ``BoxCox(y ~ x_d | x_s)`` fit (same data as
+    the ``scaling_vcov_boxcox`` fixture), so mltpy's ``inv(H)`` vcov equals
+    R's ``vcov(as.mlt(fit))`` and the comparison reflects the band formula
+    and γ-Jacobian rather than an optimiser/active-set vcov gap.  The band is
+    parameterisation-invariant, so no β sign flip is needed despite mltpy and
+    R differing on β's sign internally.
+    """
+    ref = _load_confband_scaling_ref()
+    if ref is None:
+        pytest.skip("confband_scaling_* reference fixtures not materialised")
+
+    model = BoxCox(order=4, support=ref["support"], scaling=ref["x_s"][:, None]).fit(
+        ref["y"], X=ref["x_d"][:, None]
+    )
+    band = model.confband(
+        ref["y_grid"],
+        X=np.array([[ref["xd0"]]]),
+        what=what,
+        X_scale=np.array([[ref["xs0"]]]),
+        level=0.95,
+    )
+    # Tolerance absorbs the small optimiser drift between mltpy's and R's
+    # auglag (Δθ ≈ 1e-5) propagated through the non-linear band; the centre
+    # column is tighter than the SE-driven endpoints.
+    np.testing.assert_allclose(band, ref["bands"][what], rtol=5e-3, atol=2e-3)

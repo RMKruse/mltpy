@@ -2299,6 +2299,7 @@ class ConditionalTransformationModel:
             "trafo", "distribution", "survivor", "density", "hazard"
         ] = "distribution",
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Pointwise delta-method confidence band for a predicted curve.
 
@@ -2325,16 +2326,25 @@ class ConditionalTransformationModel:
         * ``"hazard"``       — ``η = log f(h) + log h' − log S(h)``;
           back-transform = ``exp(·)``
 
+        For models fitted with ``scaling=`` (ADR 0002) the transformation is
+        ``h(y|x_d, x_s) = h_0(y)·s + x_d·β`` with the strictly-positive
+        scale factor ``s = exp(0.5·x_s·γ)`` and derivative ``h' = h_0'·s``
+        (so ``log h' = log h_0' + 0.5·x_s·γ``).  The delta-method Jacobian
+        therefore gains a ``γ`` block; supply the scaling profile via
+        ``X_scale``.  The fitted ``vcov()`` already returns the full
+        ``[θ_b | β | γ]`` block, so the band is the correct asymptotic
+        interval, not a baseline-only approximation.
+
         Parameters
         ----------
         y_grid:
             Response values at which to evaluate the band.  Must lie within
             ``basis.support``.
         X:
-            Covariate profile for a single curve.  Accepts a 1D array of
-            length ``q`` or a 2D ``(1, q)`` array; broadcast across
-            ``y_grid``.  Required when the model was fit with covariates;
-            must be ``None`` when it was not.
+            Shift-covariate profile for a single curve.  Accepts a 1D array
+            of length ``q_d`` or a 2D ``(1, q_d)`` array; broadcast across
+            ``y_grid``.  Required when the model was fit with shift
+            covariates; must be ``None`` when it was not.
         level:
             Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
         what:
@@ -2344,6 +2354,11 @@ class ConditionalTransformationModel:
             Optional per-grid-point offset of shape ``(len(y_grid),)``.
             Added to ``h`` before computing the band; does not affect the
             delta-method Jacobian (offset is constant w.r.t. ``theta``).
+        X_scale:
+            Scaling-covariate profile for a single curve, shape ``(q_s,)``
+            or ``(1, q_s)``, broadcast across ``y_grid``.  Required when the
+            model was fitted with ``scaling=`` and must be ``None``
+            otherwise.
 
         Returns
         -------
@@ -2357,8 +2372,8 @@ class ConditionalTransformationModel:
             If called before :meth:`fit`.
         ValueError
             If ``level`` is outside ``(0, 1)``, ``what`` is not supported,
-            or the shape/presence of ``X`` is inconsistent with the fitted
-            model.
+            or the shape/presence of ``X`` / ``X_scale`` is inconsistent
+            with the fitted model.
         RuntimeError
             Propagated from :meth:`vcov` on singular Hessians, or if the
             fitted basis violates monotonicity at a grid point
@@ -2398,32 +2413,72 @@ class ConditionalTransformationModel:
                 f"what={what!r} is invalid. Allowed: {_VALID_CONFBAND_WHAT}."
             )
 
+        # Parameter layout: theta_ = [theta_b (p) | beta (q_d, shift) |
+        # gamma (q_s, scaling)] (ADR 0002).  q_s is fixed by the scaling
+        # design supplied at fit; the remaining tail after theta_b and gamma
+        # is the shift block.  vcov() returns the matching full block, so the
+        # Jacobian below is assembled in the same [theta_b | beta | gamma]
+        # column order.
         p = self.basis.order + 1
-        q = self.theta_.size - p
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        n_par = p + q_d + q_s
         theta_b = self.theta_[:p]
-        beta = self.theta_[p:] if q > 0 else None
+        beta = self.theta_[p : p + q_d] if q_d > 0 else None
+        gamma = self.theta_[p + q_d :] if q_s > 0 else None
 
-        # Validate X versus the fitted parameter layout
-        if q == 0:
+        # Validate X (shift profile) versus the fitted parameter layout.
+        if q_d == 0:
             if X is not None:
                 raise ValueError(
-                    "The model was fitted without covariates; X must be None."
+                    "The model was fitted without shift covariates; X must be None."
                 )
             x_row: NDArray[np.float64] | None = None
         else:
             if X is None:
                 raise ValueError(
-                    f"The model was fitted with {q} covariates; X is "
-                    "required (shape (q,) or (1, q))."
+                    f"The model was fitted with {q_d} shift covariates; X is "
+                    "required (shape (q_d,) or (1, q_d))."
                 )
             X_arr = np.asarray(X, dtype=float)
             if X_arr.ndim == 1:
                 X_arr = X_arr[None, :]
-            if X_arr.shape != (1, q):
+            if X_arr.shape != (1, q_d):
                 raise ValueError(
-                    f"X has shape {X_arr.shape}, expected (q,) or (1, q) with q={q}."
+                    f"X has shape {X_arr.shape}, expected (q_d,) or (1, q_d) "
+                    f"with q_d={q_d}."
                 )
             x_row = X_arr[0]
+
+        # Validate X_scale (scaling profile) versus the fitted layout.
+        if q_s == 0:
+            if X_scale is not None:
+                raise ValueError(
+                    "The model was fitted without scaling=; X_scale must be None."
+                )
+            xs_row: NDArray[np.float64] | None = None
+        else:
+            if X_scale is None:
+                raise ValueError(
+                    f"The model was fitted with scaling= ({q_s} columns); "
+                    "X_scale is required (shape (q_s,) or (1, q_s))."
+                )
+            Xs_arr = np.asarray(X_scale, dtype=float)
+            if Xs_arr.ndim == 1:
+                Xs_arr = Xs_arr[None, :]
+            if Xs_arr.shape != (1, q_s):
+                raise ValueError(
+                    f"X_scale has shape {Xs_arr.shape}, expected (q_s,) or "
+                    f"(1, q_s) with q_s={q_s}."
+                )
+            xs_row = Xs_arr[0]
+
+        # Scale factor s = exp(0.5·x_s·γ) > 0 (constant across y_grid for a
+        # single profile); s = 1 on the shift-only path.
+        if xs_row is not None and gamma is not None:
+            s = float(np.exp(0.5 * (xs_row @ gamma)))
+        else:
+            s = 1.0
 
         y_arr = np.asarray(y_grid, dtype=float).ravel()
         m = y_arr.size
@@ -2434,15 +2489,19 @@ class ConditionalTransformationModel:
 
         B = self.basis.evaluate(y_arr)  # (m, p)
         D = self.basis.derivative(y_arr, order=1)  # (m, p)
-        h = B @ theta_b
-        hp = D @ theta_b
+        h0 = B @ theta_b  # baseline transformation h_0(y)
+        hp0 = D @ theta_b  # baseline derivative h_0'(y)
+        # Scaled transformation and its y-derivative: h = h_0·s + x_d·β,
+        # h' = h_0'·s.  s = 1 reduces to the shift-only model exactly.
+        h = h0 * s
+        hp = hp0 * s
         if x_row is not None and beta is not None:
             h = h + float(x_row @ beta)
 
         if offset_arr is not None:
             h = h + offset_arr
 
-        # Assemble per-grid-point Jacobian J of shape (m, p+q).
+        # Assemble per-grid-point Jacobian J of shape (m, n_par).
         # For scales whose η involves log h', also validate h' > 0.
         if what in ("density", "hazard") and np.any(hp <= 0.0):
             raise RuntimeError(
@@ -2455,12 +2514,16 @@ class ConditionalTransformationModel:
         dist = _get_dist(self.base_distribution)
 
         if what in ("trafo", "distribution", "survivor"):
-            # η = h;  J_b = B(y),  J_β = x_row  (broadcast)
-            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
-            J = np.empty((m, p + q), dtype=np.float64)
-            J[:, :p] = B
-            if q > 0 and x_row is not None:
-                J[:, p:] = x_row[None, :]
+            # η = h = h_0·s + x_d·β.  Jacobian columns, in [θ_b | β | γ] order:
+            #   ∂η/∂θ_b = s · B(y)
+            #   ∂η/∂β   = x_d                       (broadcast across y_grid)
+            #   ∂η/∂γ_k = h_0 · s · 0.5 · x_s,k     (since ∂s/∂γ_k = 0.5·x_s,k·s)
+            J = np.empty((m, n_par), dtype=np.float64)
+            J[:, :p] = s * B
+            if q_d > 0 and x_row is not None:
+                J[:, p : p + q_d] = x_row[None, :]
+            if q_s > 0 and xs_row is not None:
+                J[:, p + q_d :] = (0.5 * s * h0)[:, None] * xs_row[None, :]
             eta = h
         else:
             # "density" or "hazard":
@@ -2468,11 +2531,15 @@ class ConditionalTransformationModel:
             #   hazard :  η = log f(h) + log h' - log S(h)
             #   ∂/∂h  of log f(h)   = ψ(h)
             #   ∂/∂h  of (-log S(h)) = λ(h) = f(h)/S(h)
-            # So:
-            #   dη/dθ_b = coeff * B(y) + D(y) / h'
-            #   dη/dβ   = coeff * x_row
+            # With h = h_0·s + x_d·β and log h' = log h_0' + 0.5·x_s·γ,
+            # the chain rule gives (columns in [θ_b | β | γ] order):
+            #   dη/dθ_b = coeff · s · B(y) + D(y) / h_0'
+            #   dη/dβ   = coeff · x_d
+            #   dη/dγ_k = 0.5 · x_s,k · (coeff · h_0 · s + 1)
+            #             └ from log f(h) ┘   └ from log h' ┘
             # with coeff = ψ(h)         (density)
             #      coeff = ψ(h) + λ(h)  (hazard)
+            # The "+1" on the γ term is ∂(0.5·x_s·γ)/∂γ_k from log h'.
             # At extreme |h|, logsf(h) → -∞ for light-tailed bases (normal,
             # min/max extreme value), so ψ and λ = exp(logpdf − logsf) can
             # overflow and propagate inf into J and η.  Clip to ±_H_CLIP
@@ -2497,11 +2564,15 @@ class ConditionalTransformationModel:
             else:
                 coeff = psi
 
-            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
-            J = np.empty((m, p + q), dtype=np.float64)
-            J[:, :p] = coeff[:, None] * B + D / hp[:, None]
-            if q > 0 and x_row is not None:
-                J[:, p:] = coeff[:, None] * x_row[None, :]
+            # Empty β/γ blocks are simply skipped (n_par == p when both absent).
+            J = np.empty((m, n_par), dtype=np.float64)
+            J[:, :p] = coeff[:, None] * (s * B) + D / hp0[:, None]
+            if q_d > 0 and x_row is not None:
+                J[:, p : p + q_d] = coeff[:, None] * x_row[None, :]
+            if q_s > 0 and xs_row is not None:
+                J[:, p + q_d :] = (0.5 * (coeff * h0 * s + 1.0))[:, None] * xs_row[
+                    None, :
+                ]
 
             if what == "density":
                 eta = dist.logpdf(h_c) + np.log(hp)
