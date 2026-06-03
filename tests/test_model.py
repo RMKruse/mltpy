@@ -1663,8 +1663,8 @@ class TestScalingStub:
     """ADR 0002 surface: scaling= kwarg behaviour on supported / unsupported
     paths.  After #71 closes the censoring + base-distribution coverage,
     every censoring type and every link except ``"exponential"`` accepts
-    ``scaling=`` (InteractionBasis combinations remain out of scope and
-    raise at construction).
+    ``scaling=``.  InteractionBasis combinations are covered by ADR 0003
+    (exact data only — see ``tests/test_interaction_scaling.py``).
     """
 
     def test_scaling_none_is_default_and_byte_identical(self):

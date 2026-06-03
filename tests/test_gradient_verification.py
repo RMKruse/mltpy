@@ -57,7 +57,7 @@ ORDER = 5
 P = ORDER + 1  # number of Bernstein coefficients
 
 # Data generation parameters
-N = 40          # sample size
+N = 40  # sample size
 N_COVARIATES = 2
 SUPPORT = (0.0, 1.0)
 
@@ -211,9 +211,7 @@ def _build_theta(
     elif position == "perturbed":
         theta_b = _perturbed_theta_b(seed)
     elif position == "converged":
-        return _converged_theta(
-            case.y, case.X, case.censoring, case.base_distribution
-        )
+        return _converged_theta(case.y, case.X, case.censoring, case.base_distribution)
     else:
         raise ValueError(f"unknown position: {position}")
 
@@ -304,9 +302,7 @@ def _assert_gradients_match(
     argmax = int(np.argmax(abs_diff))
 
     try:
-        np.testing.assert_allclose(
-            analytical, finite_diff, rtol=RTOL, atol=ATOL
-        )
+        np.testing.assert_allclose(analytical, finite_diff, rtol=RTOL, atol=ATOL)
     except AssertionError as exc:
         msg = (
             f"\n{label}: gradient mismatch\n"
@@ -453,9 +449,7 @@ def test_narrow_interval_triggers_taylor_branch(
     # Exponential's constant score amplifies Taylor-vs-wide drift on
     # small-magnitude components — widen the absolute floor for that link.
     atol = 1e-1 if base_distribution == "exponential" else 1e-4
-    np.testing.assert_allclose(
-        analytical, finite_diff, rtol=5e-2, atol=atol
-    )
+    np.testing.assert_allclose(analytical, finite_diff, rtol=5e-2, atol=atol)
 
 
 @pytest.mark.parametrize("censoring", CENSORING_TYPES)

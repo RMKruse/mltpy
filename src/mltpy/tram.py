@@ -318,28 +318,6 @@ class _TramModel(MLT):
         return B @ theta_b
 
     @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::*(..., scale=~x_s)``'s scaling block
-        (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
     def feature_names_scaling_(self) -> list[str]:
         """Column names of the scaling-design matrix supplied at fit time.
 
@@ -580,7 +558,11 @@ class Coxph(_SurvivalMixin):
         :meth:`survival`, :meth:`hazard`, and :meth:`predict` methods
         require ``X_scale`` / ``X_scale_new``.  Sign-aligned with R
         (ADR 0002, Decision 5).  Not supported together with
-        ``interacting=`` (ADR 0002, Decision 2).
+        ``interacting=`` on this class: the combined scaled-interaction
+        path (ADR 0003, issue #103) covers exact data only, while
+        ``Coxph`` implies right-censored survival data.  Use
+        ``ConditionalTransformationModel(basis=InteractionBasis(...),
+        scaling=...)`` for the exact-data combination.
 
     Examples
     --------
@@ -605,9 +587,16 @@ class Coxph(_SurvivalMixin):
         scaling: NDArray[np.float64] | None = None,
     ) -> None:
         if scaling is not None and interacting is not None:
+            # ADR 0003 lifts the blanket rejection for *exact* data on the
+            # base-class path, but Coxph implies right-censored survival
+            # data, which the scaled-interaction likelihood does not cover.
             raise ValueError(
-                "scaling= and interacting= cannot be combined "
-                "(see docs/adr/0002-scaling-terms.md, Decision 2)."
+                "scaling= and interacting= cannot be combined on Coxph: the "
+                "scaled-interaction path supports exact data only (see "
+                "docs/adr/0003-scaling-with-interaction.md), while Coxph "
+                "fits right-censored data. Use "
+                "ConditionalTransformationModel(basis=InteractionBasis(...), "
+                "scaling=...) for exact data."
             )
 
         if interacting is None:

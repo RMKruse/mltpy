@@ -1,7 +1,7 @@
 # ADR 0002 — Scaling Terms (Heteroskedastic CTMs)
 
 **Date:** 2026-05-21  
-**Status:** Accepted  
+**Status:** Accepted (Decision 2 superseded by [ADR 0003](0003-scaling-with-interaction.md))  
 **Deciders:** RMKruse  
 **Issue:** [#69 Scaling Terms: ADR for scaled-baseline API and monotonicity strategy](https://github.com/RMKruse/mltpy/issues/69)  
 **Parent:** [#28 Scaling Terms (epic)](https://github.com/RMKruse/mltpy/issues/28), [#33 Architectural extensions](https://github.com/RMKruse/mltpy/issues/33)
@@ -116,8 +116,10 @@ when `scaling is None`; the new `γ` block is strictly appended.
 ### `coef_`, `feature_names_in_`, `n_free_params_`
 
 - `coef_` returns the same vector as today (the `β` block).  A new
-  property `gamma_coef_` returns the `γ` block; `None` when scaling is
-  inactive.  `theta_b` is exposed as `basis_coef_` (already informally
+  property `gamma_` returns the `γ` block; it raises `ValueError` when
+  scaling is inactive and `NotFittedError` before fit (matching the
+  `coef_`/`sigma_`/`intercept_` contract — see the 2026 accessor-vocabulary
+  consolidation).  `theta_b` is exposed as `basis_coef_` (already informally
   accessible via `theta_[:p]`).
 - `feature_names_in_` continues to name the `β` columns.  A second
   attribute `scaling_feature_names_in_` is populated symmetrically from
@@ -159,6 +161,12 @@ in the tracer-bullet slice (#70).  See Decision 6 for backward-compatibility
 expectations.
 
 ### Interaction × Scaling
+
+> **Superseded by [ADR 0003](0003-scaling-with-interaction.md) (2026-05-25).**
+> The "out of scope" deferral below has been resolved: the combination is
+> now a ratified (supported-but-experimental) path with layout
+> `theta_ = [vec_C(Θ) | γ]`.  R `tram` was confirmed to support it.  The
+> paragraph below is retained for historical context only.
 
 Scaling stacks cleanly on top of *shift* models.  Combining `scaling=`
 with an `InteractionBasis` is **out of scope for v0.4** and raises
@@ -315,7 +323,7 @@ any further sign manipulation.
 
 A unit test in #70 ratchets this convention: it fits the same toy data
 under R and mltpy and asserts `np.allclose(mltpy.coef_, -r.beta)` AND
-`np.allclose(mltpy.gamma_coef_, r.gamma)`.  If the test fails, the
+`np.allclose(mltpy.gamma_, r.gamma)`.  If the test fails, the
 convention is wrong, not the implementation.
 
 ---
@@ -378,6 +386,7 @@ land in #73–#77 alongside the per-class convergence tuning.
 
 **Out of scope for v0.4:**
 - `scaling=` combined with `InteractionBasis` (ADR follow-up).
+  **→ Resolved by [ADR 0003](0003-scaling-with-interaction.md).**
 - `scaling=` combined with `base_distribution="exponential"` (requires a
   non-linear constraint extension).
 - `scaling=` on `Polr` (ordinal sign-convention ADR follow-up).

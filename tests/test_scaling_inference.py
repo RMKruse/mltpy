@@ -888,8 +888,8 @@ def test_coxsnell_residuals_scaling_only_apply_scale_factor() -> None:
     # Guard against a degenerate γ≈0 fit that would make the omitted-factor
     # bug invisible: the scaling block must be meaningfully non-zero, so a
     # residual computed at h_0(y) alone would differ from r_cs.
-    gamma = model.gamma_coef_
-    assert gamma is not None and np.max(np.abs(gamma)) > 0.05
+    gamma = model.gamma_
+    assert np.max(np.abs(gamma)) > 0.05
 
 
 def _fit_scaled_model(
@@ -1042,8 +1042,7 @@ def test_confband_scaling_factor_actually_shifts_band() -> None:
         grid, X=x_d[None, :], what="survivor", X_scale=np.array([[-1.5]])
     )
     # The fitted γ is meaningfully non-zero, so the two profiles diverge.
-    assert model.gamma_coef_ is not None
-    assert np.max(np.abs(model.gamma_coef_)) > 0.02
+    assert np.max(np.abs(model.gamma_)) > 0.02
     assert not np.allclose(band_a, band_b)
 
 
