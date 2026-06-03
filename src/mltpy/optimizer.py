@@ -19,7 +19,7 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint, minimize
 
-from mltpy._auglag import AugLagOptions, AugLagResult, auglag_minimize
+from mltpy._auglag import AugLagOptions, auglag_minimize
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import (
     build_constraint_matrices,
@@ -514,6 +514,137 @@ def _perturb_and_project(
     return theta_b
 
 
+def _restart_loop(
+    theta_init: NDArray[np.float64],
+    config: OptimizerConfig,
+    perturb_fn: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    run_fn: Callable[[NDArray[np.float64]], Any],
+    success_fn: Callable[[Any], bool],
+    *,
+    label: str = "optimizer.py",
+    message_fn: Callable[[Any], str] | None = None,
+) -> tuple[Any, int]:
+    """Run the shared perturb-and-project restart loop and return the best result.
+
+    Every solver path (auglag / SLSQP / trust-constr, shift and interaction
+    bases) wraps the same skeleton: attempt 0 starts from ``theta_init``;
+    each subsequent attempt perturbs and re-projects the start, retrying up to
+    ``config.max_restarts`` extra times.  A :class:`numpy.linalg.LinAlgError`
+    from any attempt is caught and (optionally) warned, then skipped.  The best
+    result by objective value (``.fun``) is retained even when convergence is
+    never reported, so the caller can return ``converged=False`` with the
+    closest fit rather than nothing.
+
+    Parameters
+    ----------
+    theta_init : NDArray[np.float64]
+        Feasible starting point.  Attempt 0 uses ``theta_init.copy()``; later
+        attempts call ``perturb_fn(theta_init)``.
+    config : OptimizerConfig
+        Supplies ``max_restarts`` and ``verbose``.
+    perturb_fn : Callable[[NDArray[np.float64]], NDArray[np.float64]]
+        Maps the (unperturbed) ``theta_init`` to a fresh feasible start for a
+        restart attempt.
+    run_fn : Callable[[NDArray[np.float64]], Any]
+        Runs the underlying solver on a trial start and returns a result object
+        exposing a ``.fun`` attribute.  May raise ``LinAlgError`` to signal a
+        recoverable numerical failure.
+    success_fn : Callable[[Any], bool]
+        Predicate marking a result as converged (``r.success`` for scipy,
+        ``r.converged`` for auglag).  A truthy value breaks the loop.
+    label : str, default="optimizer.py"
+        Prefix for the ``RuntimeWarning`` messages (e.g.
+        ``"optimizer.py (interaction)"``).
+    message_fn : Callable[[Any], str] | None, default=None
+        When provided *and* ``config.verbose``, emits a "did not converge"
+        warning carrying ``message_fn(result)`` after each unsuccessful
+        attempt.  ``None`` suppresses that warning (the interaction paths).
+
+    Returns
+    -------
+    tuple[Any, int]
+        ``(best_result, n_restarts_used)``.  ``best_result`` is ``None`` only
+        when every attempt raised ``LinAlgError``.
+    """
+    best_result: Any = None
+    best_nll = float("inf")
+    n_restarts_used = 0
+
+    for attempt in range(config.max_restarts + 1):
+        if attempt == 0:
+            theta_try = theta_init.copy()
+        else:
+            n_restarts_used = attempt
+            theta_try = perturb_fn(theta_init)
+
+        try:
+            result = run_fn(theta_try)
+        except LinAlgError as exc:
+            if config.verbose:
+                warnings.warn(
+                    f"{label}: attempt {attempt + 1} hit {exc!r}; retrying",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            continue
+
+        if result.fun < best_nll:
+            best_nll = float(result.fun)
+            best_result = result
+
+        if success_fn(result):
+            break
+
+        if config.verbose and message_fn is not None:
+            warnings.warn(
+                f"{label}: attempt {attempt + 1}/{config.max_restarts + 1} "
+                f"did not converge — {message_fn(result)}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    return best_result, n_restarts_used
+
+
+def _fallback_result(
+    theta_init: NDArray[np.float64],
+    n_restarts_used: int,
+    message: str,
+    compute_nll: Callable[[], float],
+) -> OptimizationResult:
+    """Build the ``converged=False`` result when every restart raised LinAlgError.
+
+    Returns ``theta_init`` (the only feasible point we are certain of) with its
+    log-likelihood, leaving the auglag-only diagnostic fields at their ``None``
+    defaults.  The caller (``model.py``) decides whether to warn or raise.
+
+    Parameters
+    ----------
+    theta_init : NDArray[np.float64]
+        Feasible starting point returned as the fallback ``theta``.
+    n_restarts_used : int
+        Number of restarts attempted before giving up.
+    message : str
+        ``solver_message`` describing why the fit fell back.
+    compute_nll : Callable[[], float]
+        Thunk returning the negative log-likelihood at ``theta_init``.  Deferred
+        so the (path-specific) likelihood call is only made on the failure path.
+
+    Returns
+    -------
+    OptimizationResult
+        Fallback result with ``converged=False`` and ``n_iter=0``.
+    """
+    return OptimizationResult(
+        theta=theta_init,
+        log_likelihood=float(-compute_nll()),
+        converged=False,
+        n_iter=0,
+        n_restarts=n_restarts_used,
+        solver_message=message,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -635,9 +766,55 @@ def optimize(
             scaling=scaling,
         )
 
-    # ------------------------------------------------------------------
-    # SLSQP / trust-constr path
-    # ------------------------------------------------------------------
+    return _optimize_scipy(
+        basis=basis,
+        y=y,
+        X=X,
+        censoring=censoring,
+        config=config,
+        dist=dist,
+        base_distribution=base_distribution,
+        weights=weights,
+        offset=offset,
+        n_params=n_params,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        rng=rng,
+        theta_init=theta_init,
+        scaling=scaling,
+    )
+
+
+def _optimize_scipy(
+    *,
+    basis: BernsteinBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    config: OptimizerConfig,
+    dist: DistOps,
+    base_distribution: BaseDistribution,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    n_params: int,
+    total_params: int,
+    nonneg_lower: bool,
+    rng: np.random.Generator,
+    theta_init: NDArray[np.float64],
+    scaling: NDArray[np.float64] | None = None,
+) -> OptimizationResult:
+    """SLSQP / trust-constr optimisation path for the shift basis.
+
+    Sibling of :func:`_optimize_auglag` and :func:`_optimize_interaction`:
+    builds the linear constraints, applies the issue-#86 ``fixed_params``
+    reduction (pinned indices eliminated from the free subvector), and drives
+    the shared :func:`_restart_loop`.  The inner solver is scipy's ``minimize``
+    with ``method=config.solver``.
+    """
+    # This path only ever runs for the two scipy solvers; narrow the type so
+    # the overloaded ``build_constraints`` matches (auglag is dispatched away
+    # before we get here).
+    solver = cast("Literal['slsqp', 'trust-constr']", config.solver)
     # Exponential has support [0, ∞); enforce h(y|x) >= 0.  Without covariates
     # this reduces to theta_b[0] >= 0; with covariates we add one linear
     # inequality per training row: theta_b[0] + X_i @ beta >= 0.
@@ -645,7 +822,7 @@ def optimize(
         n_params,
         lower=config.lower,
         upper=config.upper,
-        solver=config.solver,
+        solver=solver,
         total_params=total_params,
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
@@ -742,89 +919,61 @@ def optimize(
 
             constraints_used = [_slice_lc(lc) for lc in constraints]
 
-    best_scipy_result = None
-    best_nll = float("inf")
-    n_restarts_used = 0
+    def _perturb(t: NDArray[np.float64]) -> NDArray[np.float64]:
+        theta_try_full = _perturb_and_project(
+            t, n_params, rng, nonneg_lower=nonneg_lower
+        )
+        if fixed_idx is not None:
+            # Perturbation projects theta_b onto the monotone cone, which may
+            # shift pinned entries.  Re-applying the pins here keeps the reduced
+            # theta_try aligned with the constraint slicing (lb/ub were shifted
+            # by ``A[:, fixed_idx] @ fixed_vals``).
+            theta_try_full[fixed_idx] = fixed_vals
+        return theta_try_full
 
-    for attempt in range(config.max_restarts + 1):
-        if attempt == 0:
-            theta_try_full = theta_init.copy()
-        else:
-            n_restarts_used = attempt
-            theta_try_full = _perturb_and_project(
-                theta_init,
-                n_params,
-                rng,
-                nonneg_lower=nonneg_lower,
-            )
-            if fixed_idx is not None:
-                # Perturbation projects theta_b onto the monotone cone, which
-                # may shift pinned entries.  Re-applying the pins here keeps
-                # the reduced theta_try aligned with the constraint slicing
-                # (lb/ub were shifted by ``A[:, fixed_idx] @ fixed_vals``).
-                theta_try_full[fixed_idx] = fixed_vals
-
+    def _run(theta_try_full: NDArray[np.float64]) -> Any:
         theta_try = theta_try_full[free_idx] if free_idx is not None else theta_try_full
+        return minimize(
+            obj_used,
+            theta_try,
+            method=config.solver,
+            jac=jac,
+            constraints=constraints_used,
+            options=options,
+        )
 
-        try:
-            scipy_result = minimize(
-                obj_used,
-                theta_try,
-                method=config.solver,
-                jac=jac,
-                constraints=constraints_used,
-                options=options,
-            )
-        except LinAlgError as exc:
-            if config.verbose:
-                warnings.warn(
-                    f"optimizer.py: attempt {attempt + 1} hit {exc!r}; retrying",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            continue
-
-        if scipy_result.fun < best_nll:
-            best_nll = float(scipy_result.fun)
-            best_scipy_result = scipy_result
-
-        if scipy_result.success:
-            break
-
-        if config.verbose:
-            warnings.warn(
-                f"optimizer.py: attempt {attempt + 1}/{config.max_restarts + 1} "
-                f"did not converge — {scipy_result.message}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+    best_scipy_result, n_restarts_used = _restart_loop(
+        theta_init,
+        config,
+        _perturb,
+        _run,
+        lambda r: bool(r.success),
+        message_fn=lambda r: str(r.message),
+    )
 
     if best_scipy_result is None:
         # Every attempt hit a numerical linear-algebra failure — return the
         # initial point as fallback so the caller can surface a
         # ConvergenceWarning rather than re-raising.
-        _nll = cast(
-            float,
-            _negative_log_likelihood_from_dist(
-                theta_init,
-                basis,
-                y,
-                X,
-                censoring,
-                gradient=False,
-                dist=dist,
-                weights=weights,
-                offset=offset,
-                scaling=scaling,
+        return _fallback_result(
+            theta_init,
+            n_restarts_used,
+            "All optimisation attempts raised LinAlgError.",
+            lambda: cast(
+                float,
+                _negative_log_likelihood_from_dist(
+                    theta_init,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=False,
+                    dist=dist,
+                    weights=weights,
+                    offset=offset,
+                    scaling=scaling,
+                ),
             ),
-        )
-        return OptimizationResult(
-            theta=theta_init,
-            log_likelihood=float(-_nll),
-            converged=False,
-            n_iter=0,
-            n_restarts=n_restarts_used,
-            solver_message="All optimisation attempts raised LinAlgError.",
         )
 
     # Reduction path returns the optimum on the free subvector; lift it back
@@ -962,71 +1111,47 @@ def _interaction_auglag(
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
 
-    best_result: AugLagResult | None = None
-    best_nll = float("inf")
-    n_restarts_used = 0
-
-    for attempt in range(config.max_restarts + 1):
-        theta_try = theta_init.copy() if attempt == 0 else perturb(theta_init)
-        if attempt > 0:
-            n_restarts_used = attempt
-
-        try:
-            result = auglag_minimize(
-                obj,
-                theta_try,
-                A_ineq=cm.A_ineq,
-                b_ineq=cm.b_ineq,
-                C_eq=cm.C_eq,
-                d_eq=cm.d_eq,
-                options=auglag_opts,
-            )
-        except LinAlgError as exc:
-            if config.verbose:
-                warnings.warn(
-                    f"optimizer.py (interaction): attempt {attempt + 1} "
-                    f"hit {exc!r}; retrying",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            continue
-
-        if result.fun < best_nll:
-            best_nll = result.fun
-            best_result = result
-
-        if result.converged:
-            break
+    best_result, n_restarts_used = _restart_loop(
+        theta_init,
+        config,
+        perturb,
+        lambda t: auglag_minimize(
+            obj,
+            t,
+            A_ineq=cm.A_ineq,
+            b_ineq=cm.b_ineq,
+            C_eq=cm.C_eq,
+            d_eq=cm.d_eq,
+            options=auglag_opts,
+        ),
+        lambda r: bool(r.converged),
+        label="optimizer.py (interaction)",
+    )
 
     if best_result is None:
-        _nll = cast(
-            float,
-            _negative_log_likelihood_from_dist(
-                theta_init,
-                basis,
-                y,
-                x_arr,
-                CensoringType.NONE,
-                gradient=False,
-                dist=dist,
-                weights=weights,
-                offset=offset,
+        return _fallback_result(
+            theta_init,
+            n_restarts_used,
+            "All interaction-model auglag attempts raised LinAlgError.",
+            lambda: cast(
+                float,
+                _negative_log_likelihood_from_dist(
+                    theta_init,
+                    basis,
+                    y,
+                    x_arr,
+                    CensoringType.NONE,
+                    gradient=False,
+                    dist=dist,
+                    weights=weights,
+                    offset=offset,
+                ),
             ),
-        )
-        return OptimizationResult(
-            theta=theta_init,
-            log_likelihood=float(-_nll),
-            converged=False,
-            n_iter=0,
-            n_restarts=n_restarts_used,
-            solver_message="All interaction-model auglag attempts raised LinAlgError.",
-            n_outer_iter=None,
-            kkt_residual=None,
         )
 
     # Newton-CG polish: only when all Kronecker-constraint multipliers are inactive
     ia_final_theta = best_result.theta
-    ia_final_nll = best_nll
+    ia_final_nll = best_result.fun
     if config.polish and np.all(best_result.mu_ineq < 1e-6):
         theta_polished = _ncg_polish(
             best_result.theta,
@@ -1100,62 +1225,42 @@ def _interaction_scipy(
         constraints = [LinearConstraint(A_ineq, lb=0.0, ub=np.inf)]
 
     options = _scipy_options(config)
-    best_scipy_result = None
-    best_nll = float("inf")
-    n_restarts_used = 0
 
-    for attempt in range(config.max_restarts + 1):
-        theta_try = theta_init.copy() if attempt == 0 else perturb(theta_init)
-        if attempt > 0:
-            n_restarts_used = attempt
-        try:
-            scipy_result = minimize(
-                obj,
-                theta_try,
-                method=config.solver,
-                jac=True,
-                constraints=constraints,
-                options=options,
-            )
-        except LinAlgError as exc:
-            if config.verbose:
-                warnings.warn(
-                    f"optimizer.py (interaction): attempt {attempt + 1} "
-                    f"hit {exc!r}; retrying",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            continue
-
-        if scipy_result.fun < best_nll:
-            best_nll = float(scipy_result.fun)
-            best_scipy_result = scipy_result
-
-        if scipy_result.success:
-            break
+    best_scipy_result, n_restarts_used = _restart_loop(
+        theta_init,
+        config,
+        perturb,
+        lambda t: minimize(
+            obj,
+            t,
+            method=config.solver,
+            jac=True,
+            constraints=constraints,
+            options=options,
+        ),
+        lambda r: bool(r.success),
+        label="optimizer.py (interaction)",
+    )
 
     if best_scipy_result is None:
-        _nll = cast(
-            float,
-            _negative_log_likelihood_from_dist(
-                theta_init,
-                basis,
-                y,
-                x_arr,
-                CensoringType.NONE,
-                gradient=False,
-                dist=dist,
-                weights=weights,
-                offset=offset,
+        return _fallback_result(
+            theta_init,
+            n_restarts_used,
+            "All interaction-model scipy attempts raised LinAlgError.",
+            lambda: cast(
+                float,
+                _negative_log_likelihood_from_dist(
+                    theta_init,
+                    basis,
+                    y,
+                    x_arr,
+                    CensoringType.NONE,
+                    gradient=False,
+                    dist=dist,
+                    weights=weights,
+                    offset=offset,
+                ),
             ),
-        )
-        return OptimizationResult(
-            theta=theta_init,
-            log_likelihood=float(-_nll),
-            converged=False,
-            n_iter=0,
-            n_restarts=n_restarts_used,
-            solver_message=("All interaction-model scipy attempts raised LinAlgError."),
         )
 
     return OptimizationResult(
@@ -1318,88 +1423,50 @@ def _optimize_auglag(
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
 
-    best_auglag_result: AugLagResult | None = None
-    best_nll = float("inf")
-    n_restarts_used = 0
-
-    for attempt in range(config.max_restarts + 1):
-        if attempt == 0:
-            theta_try = theta_init.copy()
-        else:
-            n_restarts_used = attempt
-            theta_try = _perturb_and_project(
-                theta_init,
-                n_params,
-                rng,
-                nonneg_lower=nonneg_lower,
-            )
-
-        try:
-            result = auglag_minimize(
-                obj,
-                theta_try,
-                A_ineq=cm.A_ineq,
-                b_ineq=cm.b_ineq,
-                C_eq=cm.C_eq,
-                d_eq=cm.d_eq,
-                options=auglag_opts,
-            )
-        except LinAlgError as exc:
-            if config.verbose:
-                warnings.warn(
-                    f"optimizer.py: attempt {attempt + 1} hit {exc!r}; retrying",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            continue
-
-        if result.fun < best_nll:
-            best_nll = result.fun
-            best_auglag_result = result
-
-        if result.converged:
-            break
-
-        if config.verbose:
-            warnings.warn(
-                f"optimizer.py: attempt {attempt + 1}/{config.max_restarts + 1} "
-                f"did not converge — {result.message}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+    best_auglag_result, n_restarts_used = _restart_loop(
+        theta_init,
+        config,
+        lambda t: _perturb_and_project(t, n_params, rng, nonneg_lower=nonneg_lower),
+        lambda t: auglag_minimize(
+            obj,
+            t,
+            A_ineq=cm.A_ineq,
+            b_ineq=cm.b_ineq,
+            C_eq=cm.C_eq,
+            d_eq=cm.d_eq,
+            options=auglag_opts,
+        ),
+        lambda r: bool(r.converged),
+        message_fn=lambda r: str(r.message),
+    )
 
     if best_auglag_result is None:
-        _nll = cast(
-            float,
-            _negative_log_likelihood_from_dist(
-                theta_init,
-                basis,
-                y,
-                X,
-                censoring,
-                gradient=False,
-                dist=dist,
-                weights=weights,
-                offset=offset,
-                scaling=scaling,
+        return _fallback_result(
+            theta_init,
+            n_restarts_used,
+            "All auglag attempts raised LinAlgError.",
+            lambda: cast(
+                float,
+                _negative_log_likelihood_from_dist(
+                    theta_init,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=False,
+                    dist=dist,
+                    weights=weights,
+                    offset=offset,
+                    scaling=scaling,
+                ),
             ),
-        )
-        return OptimizationResult(
-            theta=theta_init,
-            log_likelihood=float(-_nll),
-            converged=False,
-            n_iter=0,
-            n_restarts=n_restarts_used,
-            solver_message="All auglag attempts raised LinAlgError.",
-            n_outer_iter=None,
-            kkt_residual=None,
         )
 
     # Newton-CG polish: only for interior-MLE fits (no active inequalities, no
     # equality constraints — the unconstrained trust-ncg would violate lower/upper
     # boundary pins if cm.C_eq has rows).
     final_theta = best_auglag_result.theta
-    final_nll = best_nll
+    final_nll = best_auglag_result.fun
     if (
         config.polish
         and cm.C_eq.shape[0] == 0
