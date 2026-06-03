@@ -325,6 +325,39 @@ class InfeasibleParameterError(ValueError):
     """
 
 
+_INFEASIBLE_CAUSES = (
+    "Possible causes: theta violates monotonicity (h'(y) ≤ 0), observations "
+    "outside basis support, or extreme h values despite clipping."
+)
+
+
+def _check_finite_ll(value: float | np.float64) -> None:
+    """Raise :class:`InfeasibleParameterError` if a log-likelihood is non-finite.
+
+    Shared guard for the scalar log-likelihood entry points; ``value`` is
+    interpolated into the message so the caller sees the offending ``nan`` /
+    ``inf``.
+    """
+    if not np.isfinite(value):
+        raise InfeasibleParameterError(
+            f"log_likelihood returned {value}.  {_INFEASIBLE_CAUSES}"
+        )
+
+
+def _check_finite_result(result: NDArray[np.float64], what: str) -> None:
+    """Raise :class:`InfeasibleParameterError` if any entry of ``result`` is
+    non-finite.
+
+    Shared guard for the matrix-valued entry points (``hessian``,
+    ``score_matrix``, ``intercept_score``); ``what`` names the producing
+    function for the message (e.g. ``"hessian()"``).
+    """
+    if not np.all(np.isfinite(result)):
+        raise InfeasibleParameterError(
+            f"{what} produced non-finite entries.  {_INFEASIBLE_CAUSES}"
+        )
+
+
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
@@ -1888,9 +1921,7 @@ def _ll_and_grad_interval(
                 hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
                 if ww_o is not None:
                     hazard = ww_o * hazard
-                _add_grad_censored(
-                    grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d
-                )
+                _add_grad_censored(grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d)
 
     return ll, grad
 
@@ -2730,12 +2761,7 @@ def _log_likelihood_from_dist(
         result = _ll_interaction_none(
             y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
-        if not np.isfinite(result):
-            raise InfeasibleParameterError(
-                f"log_likelihood returned {result}.  Possible causes: theta "
-                "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-                "support, or extreme h values despite clipping."
-            )
+        _check_finite_ll(result)
         return float(result)
 
     if isinstance(y, np.ndarray):
@@ -2800,12 +2826,7 @@ def _log_likelihood_from_dist(
             ctx = _build_truncation_context(y, theta, basis, X, offset)
             result = result + _truncation_ll(ctx, dist, weights)
 
-    if not np.isfinite(result):
-        raise InfeasibleParameterError(
-            f"log_likelihood returned {result}.  Possible causes: theta "
-            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-            "support, or extreme h values despite clipping."
-        )
+    _check_finite_ll(result)
     return float(result)
 
 
@@ -2843,22 +2864,12 @@ def _negative_log_likelihood_from_dist(
             result = _ll_interaction_none(
                 y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
             )
-            if not np.isfinite(result):
-                raise InfeasibleParameterError(
-                    f"log_likelihood returned {result}.  Possible causes: theta "
-                    "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-                    "support, or extreme h values despite clipping."
-                )
+            _check_finite_ll(result)
             return float(-result)
         ll_i, grad_i = _ll_and_grad_interaction_none(
             y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
-        if not np.isfinite(ll_i):
-            raise InfeasibleParameterError(
-                f"log_likelihood returned {ll_i}.  Possible causes: theta "
-                "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-                "support, or extreme h values despite clipping."
-            )
+        _check_finite_ll(ll_i)
         return float(-ll_i), grad_i
 
     if not gradient:
@@ -2946,12 +2957,7 @@ def _negative_log_likelihood_from_dist(
         ll = ll + _truncation_ll(ctx, dist, weights)
         grad = grad + _truncation_grad_nll(ctx, dist, weights, p, q)
 
-    if not np.isfinite(ll):
-        raise InfeasibleParameterError(
-            f"log_likelihood returned {ll}.  Possible causes: theta "
-            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-            "support, or extreme h values despite clipping."
-        )
+    _check_finite_ll(ll)
 
     return float(-ll), grad
 
@@ -3241,12 +3247,7 @@ def hessian(
         ctx = _build_truncation_context(y, theta, basis, X, offset)
         result = result + _truncation_hess_nll(ctx, dist, weights, p, q)
 
-    if not np.all(np.isfinite(result)):
-        raise InfeasibleParameterError(
-            "hessian() produced non-finite entries.  Possible causes: theta "
-            "violates monotonicity (h'(y) ≤ 0), observations outside basis "
-            "support, or extreme h values despite clipping."
-        )
+    _check_finite_result(result, "hessian()")
     return result
 
 
@@ -3405,12 +3406,7 @@ def score_matrix(
         ctx = _build_truncation_context(y, theta, basis, X, offset)
         result = result - _truncation_scores(ctx, dist, weights, n, p, q)
 
-    if not np.all(np.isfinite(result)):
-        raise InfeasibleParameterError(
-            "score_matrix() produced non-finite entries.  Possible causes: "
-            "theta violates monotonicity (h'(y) ≤ 0), observations outside "
-            "basis support, or extreme h values despite clipping."
-        )
+    _check_finite_result(result, "score_matrix()")
     return result
 
 
@@ -3556,12 +3552,7 @@ def intercept_score(
         ctx = _build_truncation_context(y, theta, basis, X, offset)
         result = result - _truncation_intercept_score(ctx, dist, weights, n)
 
-    if not np.all(np.isfinite(result)):
-        raise InfeasibleParameterError(
-            "intercept_score() produced non-finite entries.  Possible causes: "
-            "theta violates monotonicity (h'(y) ≤ 0), observations outside "
-            "basis support, or extreme h values despite clipping."
-        )
+    _check_finite_result(result, "intercept_score()")
     return result
 
 
