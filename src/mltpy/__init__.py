@@ -2,6 +2,7 @@
 
 from mltpy._auglag import AugLagOptions, AugLagResult
 from mltpy.basis import (
+    BasisLike,
     BernsteinBasis,
     InteractionBasis,
     InterceptBasis,
@@ -11,6 +12,7 @@ from mltpy.basis import (
     OneHotBasis,
     OrdinalBasis,
     PolynomialBasis,
+    XBasisLike,
 )
 from mltpy.likelihood import (
     BaseDistribution,
@@ -74,6 +76,9 @@ __all__ = [
     "LogBasis",
     "InterceptBasis",
     "InteractionBasis",
+    # Basis structural contracts
+    "BasisLike",
+    "XBasisLike",
     # Config
     "OptimizerConfig",
     "OptimizationResult",

@@ -4,11 +4,85 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.special import betainc, comb
+
+# ---------------------------------------------------------------------------
+# Structural contracts (Protocols)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class BasisLike(Protocol):
+    """Structural contract for a *response* (y) basis.
+
+    Every y-basis maps observations to a design matrix and supplies analytical
+    derivatives and a running integral on a compact ``support``.  This is the
+    interface the likelihood / optimisation layers duck-type against;
+    declaring it as a ``@runtime_checkable`` :class:`~typing.Protocol` lets
+    ``mypy --strict`` verify conformance and lets callers ``isinstance``-check
+    at runtime.
+
+    Satisfied by :class:`BernsteinBasis`, :class:`LogBernsteinBasis`,
+    :class:`PolynomialBasis`, :class:`LegendreBasis`, :class:`LogBasis`,
+    :class:`InterceptBasis`, and :class:`OrdinalBasis`.  *Not* satisfied by
+    :class:`OneHotBasis` (an x-only basis without ``derivative`` /
+    ``integrate`` / ``support``) — see :class:`XBasisLike`.
+    """
+
+    # Read-only properties: the concrete bases expose these either as dataclass
+    # fields (``BernsteinBasis``) or as ``@property`` (``OrdinalBasis``); a
+    # read-only protocol member is satisfied by both, a writable one is not.
+    @property
+    def order(self) -> int: ...
+
+    @property
+    def support(self) -> tuple[float, float]: ...
+
+    def evaluate(self, y: NDArray[np.float64], /) -> NDArray[np.float64]: ...
+
+    def derivative(
+        self, y: NDArray[np.float64], order: int = 1
+    ) -> NDArray[np.float64]: ...
+
+    def evaluate_with_derivative(
+        self, y: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+
+    def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]: ...
+
+
+@runtime_checkable
+class XBasisLike(Protocol):
+    """Structural contract for a *covariate* (x) basis in :class:`InteractionBasis`.
+
+    The tensor-product path only ever calls ``evaluate`` (the x-basis is never
+    differentiated — derivatives are taken w.r.t. ``y`` alone) and reads
+    ``order`` for parameter-count bookkeeping, so the contract is deliberately
+    narrower than :class:`BasisLike`.  This is what makes :class:`OneHotBasis`
+    a valid x-basis despite not being a full :class:`BasisLike`.
+
+    Structural conformance is necessary but **not sufficient** to be used as an
+    x-basis: the closed-form column-wise monotonicity guarantee additionally
+    requires the basis to be non-negative and a partition of unity, which is a
+    mathematical property checked at runtime against
+    :data:`_SUPPORTED_X_BASIS_TYPES` (see ADR 0001, Decision 3).
+    """
+
+    # Read-only property (see :class:`BasisLike`): satisfied by both the
+    # dataclass-field and ``@property`` forms of ``order``.
+    @property
+    def order(self) -> int: ...
+
+    # Positional-only: the concrete x-bases disagree on the parameter name
+    # (``BernsteinBasis``/``OrdinalBasis``/``InterceptBasis`` call it ``y``,
+    # ``OneHotBasis`` calls it ``x``), so the name must not be part of the
+    # contract — only the position is.
+    def evaluate(self, x: NDArray[np.float64], /) -> NDArray[np.float64]: ...
+
 
 # ---------------------------------------------------------------------------
 # Private helper
@@ -1307,6 +1381,24 @@ _SUPPORTED_X_BASIS_TYPES: tuple[type, ...] = (
 )
 
 
+def _kron_rows(M: NDArray[np.float64], B: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Row-wise Kronecker product of two design matrices.
+
+    For ``M`` of shape ``(n, p)`` and ``B`` of shape ``(n, q)`` returns the
+    ``(n, p*q)`` matrix whose row ``i`` is ``np.kron(M[i], B[i])`` — i.e.
+    ``out[i, a*q + b] = M[i, a] · B[i, b]`` (row-major / C-order layout,
+    matching ``vec_C(Θ)``).  This is the single shared implementation of the
+    tensor-product expansion used by every :class:`InteractionBasis` method.
+    """
+    n, p = M.shape
+    q = B.shape[1]
+    # (n, p, 1) * (n, 1, q) → (n, p, q) → (n, p*q)
+    return cast(
+        NDArray[np.float64],
+        (M[:, :, None] * B[:, None, :]).reshape(n, p * q),
+    )
+
+
 @dataclass
 class InteractionBasis:
     """Tensor-product basis a(y) ⊗ b(x) for fully-interacting CTMs.
@@ -1324,7 +1416,8 @@ class InteractionBasis:
     design rationale.
 
     **Supported x-basis types (initial release):**
-    :class:`BernsteinBasis`, :class:`OrdinalBasis`, :class:`InterceptBasis`.
+    :class:`BernsteinBasis`, :class:`OrdinalBasis`, :class:`InterceptBasis`,
+    :class:`OneHotBasis`.
     Other x-basis types raise ``ValueError`` at constraint-building time
     because the closed-form column-wise monotonicity guarantee requires the
     x-basis to be non-negative and a partition of unity.
@@ -1349,23 +1442,16 @@ class InteractionBasis:
     See ``docs/adr/0001-tensor-product-interaction-basis.md``.
     """
 
-    y_basis: (
-        BernsteinBasis
-        | LogBernsteinBasis
-        | PolynomialBasis
-        | LegendreBasis
-        | LogBasis
-        | InterceptBasis
-        | OrdinalBasis
-    )
-    x_basis: BernsteinBasis | OrdinalBasis | InterceptBasis
+    y_basis: BasisLike
+    x_basis: XBasisLike
 
     def __post_init__(self) -> None:
         if not isinstance(self.x_basis, _SUPPORTED_X_BASIS_TYPES):
             raise ValueError(
                 f"InteractionBasis requires an x-basis that is non-negative and "
-                f"a partition of unity (BernsteinBasis, OrdinalBasis, or "
-                f"InterceptBasis). Got {type(self.x_basis).__name__}. "
+                f"a partition of unity (BernsteinBasis, OrdinalBasis, "
+                f"InterceptBasis, or OneHotBasis). Got "
+                f"{type(self.x_basis).__name__}. "
                 f"See docs/adr/0001-tensor-product-interaction-basis.md, "
                 f"Decision 3."
             )
@@ -1424,13 +1510,7 @@ class InteractionBasis:
         x = self._coerce_x(X)
         A = self.y_basis.evaluate(y)  # (n, p)
         B = self.x_basis.evaluate(x)  # (n, q)
-        n, p = A.shape
-        q = B.shape[1]
-        # Row-wise Kronecker: (n, p, 1) * (n, 1, q) → (n, p, q) → (n, p*q)
-        return cast(
-            NDArray[np.float64],
-            (A[:, :, None] * B[:, None, :]).reshape(n, p * q),
-        )
+        return _kron_rows(A, B)
 
     def derivative(
         self,
@@ -1465,12 +1545,7 @@ class InteractionBasis:
         x = self._coerce_x(X)
         dA = self.y_basis.derivative(y, order=1)  # (n, p)
         B = self.x_basis.evaluate(x)  # (n, q)
-        n, p = dA.shape
-        q = B.shape[1]
-        return cast(
-            NDArray[np.float64],
-            (dA[:, :, None] * B[:, None, :]).reshape(n, p * q),
-        )
+        return _kron_rows(dA, B)
 
     def evaluate_with_derivative(
         self,
@@ -1494,11 +1569,7 @@ class InteractionBasis:
         x = self._coerce_x(X)
         A, dA = self.y_basis.evaluate_with_derivative(y)  # (n, p), (n, p)
         B = self.x_basis.evaluate(x)  # (n, q)
-        n, p = A.shape
-        q = B.shape[1]
-        design = (A[:, :, None] * B[:, None, :]).reshape(n, p * q)
-        d_design = (dA[:, :, None] * B[:, None, :]).reshape(n, p * q)
-        return cast(NDArray[np.float64], design), cast(NDArray[np.float64], d_design)
+        return _kron_rows(A, B), _kron_rows(dA, B)
 
     def integrate(
         self,
@@ -1523,9 +1594,4 @@ class InteractionBasis:
         x = self._coerce_x(X)
         iA = self.y_basis.integrate(y)  # (n, p)
         B = self.x_basis.evaluate(x)  # (n, q)
-        n, p = iA.shape
-        q = B.shape[1]
-        return cast(
-            NDArray[np.float64],
-            (iA[:, :, None] * B[:, None, :]).reshape(n, p * q),
-        )
+        return _kron_rows(iA, B)

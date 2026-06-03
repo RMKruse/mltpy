@@ -222,6 +222,101 @@ class ConstraintMatrices:
     d_eq: NDArray[np.float64]
 
 
+def _assemble_constraint_arrays(
+    n_params: int,
+    *,
+    total_params: int | None,
+    nonneg_lower: bool,
+    X: NDArray[np.float64] | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    """Build the inequality rows shared by both constraint builders.
+
+    Returns the padded monotonicity matrix ``D`` (shape
+    ``(n_params-1, total)``) and the optional support-feasibility rows
+    ``support_rows`` (shape ``(n_rows, total)`` or ``None``).  This is the
+    block that :func:`build_constraints` and :func:`build_constraint_matrices`
+    previously duplicated character-for-character; both now consume its output
+    — :func:`build_constraints` keeps ``D`` and ``support_rows`` as separate
+    inequality blocks (SLSQP dict / ``LinearConstraint`` per block), while
+    :func:`build_constraint_matrices` stacks them into a single ``A_ineq``.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients (= ``BernsteinBasis.order + 1``).
+    total_params:
+        Total parameter-vector length including regression coefficients.
+        When ``total_params > n_params`` the monotonicity matrix and the
+        support rows are padded with zero columns for the ``beta`` block.
+        Defaults to ``n_params``.
+    nonneg_lower:
+        If ``True``, append support-feasibility rows enforcing
+        ``h(y|x) >= 0`` (exponential support).  See :func:`build_constraints`.
+    X:
+        Covariate matrix, shape ``(n, q)``.  Only consulted when
+        ``nonneg_lower=True``.
+
+    Returns
+    -------
+    D : NDArray of shape ``(n_params-1, total)``
+        Padded forward-difference (monotonicity) matrix.
+    support_rows : NDArray of shape ``(n_rows, total)`` or None
+        Support-feasibility inequality rows, or ``None`` when
+        ``nonneg_lower=False``.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` has invalid shape, if ``X`` columns do not match
+        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted.
+    """
+    total = total_params if total_params is not None else n_params
+    D = MonotonicityConstraint(n_params).as_matrix()  # (n_params-1, n_params)
+
+    if total > n_params:
+        D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
+
+    # Support-feasibility rows.  No covariates: one row [1, 0, ..., 0].
+    # With covariates: n rows [1, 0, ..., 0 | X_i].
+    support_rows: NDArray[np.float64] | None = None
+    if nonneg_lower:
+        if X is None:
+            if total > n_params:
+                raise ValueError(
+                    "X must be provided when nonneg_lower=True and "
+                    "total_params > n_params so support-feasibility "
+                    "constraints can include the regression coefficients."
+                )
+            support_rows = np.zeros((1, total), dtype=np.float64)
+            support_rows[0, 0] = 1.0
+        else:
+            X_arr = np.asarray(X, dtype=np.float64)
+            if X_arr.ndim != 2:
+                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
+            if total_params is None:
+                raise ValueError(
+                    "total_params must be provided when nonneg_lower=True and "
+                    "X is passed. Expected full parameter length "
+                    "n_params + X.shape[1]."
+                )
+            if X_arr.shape[1] != total - n_params:
+                raise ValueError(
+                    f"X has {X_arr.shape[1]} columns but total_params - "
+                    f"n_params = {total - n_params}"
+                )
+            if X_arr.shape[1] == 0:
+                support_rows = np.zeros((1, total), dtype=np.float64)
+                support_rows[0, 0] = 1.0
+            else:
+                n_obs = X_arr.shape[0]
+                support_rows = np.zeros((n_obs, total), dtype=np.float64)
+                support_rows[:, 0] = 1.0
+                support_rows[:, n_params:] = X_arr
+
+    return D, support_rows
+
+
 def build_constraint_matrices_interaction(
     basis: "InteractionBasis",
 ) -> ConstraintMatrices:
@@ -342,49 +437,9 @@ def build_constraint_matrices(
         but ``total_params`` is omitted.
     """
     total = total_params if total_params is not None else n_params
-    mono = MonotonicityConstraint(n_params)
-    D = mono.as_matrix()  # shape (n_params-1, n_params)
-
-    if total > n_params:
-        D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
-
-    # Support-feasibility rows for the exponential base distribution.  Same
-    # layout as in build_constraints: one row [1, 0, ..., 0] when no
-    # covariates, or one row [1, 0, ..., 0 | X_i] per training observation.
-    support_rows: NDArray[np.float64] | None = None
-    if nonneg_lower:
-        if X is None:
-            if total > n_params:
-                raise ValueError(
-                    "X must be provided when nonneg_lower=True and "
-                    "total_params > n_params so support-feasibility "
-                    "constraints can include the regression coefficients."
-                )
-            support_rows = np.zeros((1, total), dtype=np.float64)
-            support_rows[0, 0] = 1.0
-        else:
-            X_arr = np.asarray(X, dtype=np.float64)
-            if X_arr.ndim != 2:
-                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
-            if total_params is None:
-                raise ValueError(
-                    "total_params must be provided when nonneg_lower=True and "
-                    "X is passed. Expected full parameter length "
-                    "n_params + X.shape[1]."
-                )
-            if X_arr.shape[1] != total - n_params:
-                raise ValueError(
-                    f"X has {X_arr.shape[1]} columns but total_params - "
-                    f"n_params = {total - n_params}"
-                )
-            if X_arr.shape[1] == 0:
-                support_rows = np.zeros((1, total), dtype=np.float64)
-                support_rows[0, 0] = 1.0
-            else:
-                n_obs = X_arr.shape[0]
-                support_rows = np.zeros((n_obs, total), dtype=np.float64)
-                support_rows[:, 0] = 1.0
-                support_rows[:, n_params:] = X_arr
+    D, support_rows = _assemble_constraint_arrays(
+        n_params, total_params=total_params, nonneg_lower=nonneg_lower, X=X
+    )
 
     if support_rows is not None:
         A_ineq = np.vstack([D, support_rows])
@@ -528,50 +583,9 @@ def build_constraints(
     ``solver="trust-constr"``.
     """
     total = total_params if total_params is not None else n_params
-    mono = MonotonicityConstraint(n_params)
-    D = mono.as_matrix()  # shape (n_params-1, n_params)
-
-    # Pad D with zero columns for regression coefficients
-    if total > n_params:
-        D = np.hstack([D, np.zeros((D.shape[0], total - n_params))])
-
-    # Support-feasibility rows for nonneg_lower.  Shape (n_rows, total).
-    # No covariates: one row [1, 0, ..., 0].
-    # With covariates: n rows [1, 0, ..., 0 | X_i].
-    support_rows: NDArray[np.float64] | None = None
-    if nonneg_lower:
-        if X is None:
-            if total > n_params:
-                raise ValueError(
-                    "X must be provided when nonneg_lower=True and "
-                    "total_params > n_params so support-feasibility "
-                    "constraints can include the regression coefficients."
-                )
-            support_rows = np.zeros((1, total))
-            support_rows[0, 0] = 1.0
-        else:
-            X_arr = np.asarray(X, dtype=np.float64)
-            if X_arr.ndim != 2:
-                raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
-            if total_params is None:
-                raise ValueError(
-                    "total_params must be provided when nonneg_lower=True and "
-                    "X is passed. Expected full parameter length "
-                    "n_params + X.shape[1]."
-                )
-            if X_arr.shape[1] != total - n_params:
-                raise ValueError(
-                    f"X has {X_arr.shape[1]} columns but total_params - "
-                    f"n_params = {total - n_params}"
-                )
-            if X_arr.shape[1] == 0:
-                support_rows = np.zeros((1, total))
-                support_rows[0, 0] = 1.0
-            else:
-                n_obs = X_arr.shape[0]
-                support_rows = np.zeros((n_obs, total))
-                support_rows[:, 0] = 1.0
-                support_rows[:, n_params:] = X_arr
+    D, support_rows = _assemble_constraint_arrays(
+        n_params, total_params=total_params, nonneg_lower=nonneg_lower, X=X
+    )
 
     if solver == "slsqp":
         result: list[dict[str, Any]] = [
