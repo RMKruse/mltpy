@@ -1630,13 +1630,25 @@ class ConditionalTransformationModel:
         # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per
         # observation.  Pick the point per censoring status of each row.
         y_eval = self._cox_snell_eval_points()
+        # Parameter layout: theta_ = [theta_b (p) | beta (q_d, shift) |
+        # gamma (q_s, scaling)].  Split exactly as predict()/transform() do so
+        # the scaling block is honoured rather than mis-read as shift
+        # coefficients (ADR 0002).
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        beta_fit = self.theta_[p : p + q_d] if q_d > 0 else None
+        gamma_fit = self.theta_[p + q_d :] if q_s > 0 else None
         B = self.basis.evaluate(y_eval)
         h = B @ theta_b
-        if self._X_train_ is not None and len(self.theta_) > p:
-            beta = self.theta_[p:]
-            h = h + self._X_train_ @ beta
+        # Scaling factor f_i = exp(0.5 · x_s,i · γ); same convention as
+        # transform() and likelihood._ll_none.  Applies to h_0 before the
+        # shift and offset are added.
+        if gamma_fit is not None and self.scaling is not None:
+            h = h * np.exp(0.5 * (self.scaling @ gamma_fit))
+        if beta_fit is not None and self._X_train_ is not None:
+            h = h + self._X_train_ @ beta_fit
         if self._offset_train_ is not None:
             h = h + self._offset_train_
         h_c = np.clip(h, -_H_CLIP, _H_CLIP)

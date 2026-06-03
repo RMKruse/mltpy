@@ -833,3 +833,58 @@ def test_scaled_intercept_score_matches_closed_form_exact_normal() -> None:
         scaling=prob["X_s"],
     )
     np.testing.assert_allclose(got, expected, rtol=1e-10, atol=1e-12)
+
+
+def test_coxsnell_residuals_shift_and_scaling_match_cumhazard() -> None:
+    """Cox-Snell residuals on a shift+scaling fit equal the model's own
+    cumulative hazard ``-log S(y)``.
+
+    For an exact observation the Cox-Snell residual is ``-log S(y|x)``,
+    which ``predict(what='cumhazard', ...)`` returns via the
+    scaling-correct h evaluation ``h = h_0(y)·exp(0.5·x_s·γ) + x_d·β``.
+    Before the fix the residuals() Cox-Snell path split ``theta[p:]`` as if
+    it were all shift coefficients, so with shift *and* scaling covariates
+    it multiplied ``X_d`` (q_d cols) by ``[β | γ]`` (q_d + q_s entries) and
+    raised a shape-mismatch ``ValueError``.
+    """
+    prob = _toy_scaled_problem(n=60, p=5, q_d=2, q_s=1, seed=11)
+    model = MLT(
+        order=prob["p"] - 1,
+        support=prob["basis"].support,
+        scaling=prob["X_s"],
+    )
+    model.fit(prob["y"], X=prob["X"])
+
+    r_cs = model.residuals(type="cox-snell")
+    oracle = model.predict(
+        prob["y"], X_new=prob["X"], what="cumhazard", X_scale_new=prob["X_s"]
+    )
+    assert r_cs.shape == (prob["y"].size,)
+    np.testing.assert_allclose(r_cs, oracle, rtol=1e-10, atol=1e-12)
+
+
+def test_coxsnell_residuals_scaling_only_apply_scale_factor() -> None:
+    """Cox-Snell residuals on a scaling-only fit (no shift covariates)
+    include the ``exp(0.5·x_s·γ)`` factor.
+
+    With no shift covariates the old code did not crash but silently
+    omitted the scaling factor, evaluating ``h_0(y)`` instead of
+    ``h_0(y)·exp(0.5·x_s·γ)``.  The cumhazard oracle, which applies the
+    factor, would then disagree.
+    """
+    prob = _toy_scaled_problem(n=50, p=5, q_d=0, q_s=1, seed=7)
+    model = MLT(
+        order=prob["p"] - 1,
+        support=prob["basis"].support,
+        scaling=prob["X_s"],
+    )
+    model.fit(prob["y"])
+
+    r_cs = model.residuals(type="cox-snell")
+    oracle = model.predict(prob["y"], what="cumhazard", X_scale_new=prob["X_s"])
+    np.testing.assert_allclose(r_cs, oracle, rtol=1e-10, atol=1e-12)
+    # Guard against a degenerate γ≈0 fit that would make the omitted-factor
+    # bug invisible: the scaling block must be meaningfully non-zero, so a
+    # residual computed at h_0(y) alone would differ from r_cs.
+    gamma = model.gamma_coef_
+    assert gamma is not None and np.max(np.abs(gamma)) > 0.05
