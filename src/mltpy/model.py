@@ -34,9 +34,11 @@ from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.likelihood import (
     _H_CLIP,
     BaseDistribution,
+    DistOps,
     InfeasibleParameterError,
     _get_dist,
     _neg_score,
+    _split_theta_scaled,
     _validate_offset,
     _validate_weights_offset,
     log_likelihood,
@@ -142,6 +144,110 @@ _SIMULATE_U_EPS = 1e-10
 
 # `what` values whose formula involves h'(y) and therefore require hp > 0.
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
+
+
+def _apply_what(
+    what: str,
+    h: NDArray[np.float64],
+    hp: NDArray[np.float64],
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    """Map a transformation ``h`` and its derivative ``h'`` to a predict target.
+
+    Single source of truth for the ``predict()`` dispatch ladder, shared by
+    the shift-basis and interaction-basis paths so the two cannot drift apart.
+    Every probability-scale target is computed in log-space (``logpdf``,
+    ``logsf``, ``logcdf``) per the CLAUDE.md numerical-stability mandate, and
+    ``h`` is clipped to ``±_H_CLIP`` before any distribution call.
+
+    Parameters
+    ----------
+    what:
+        One of the non-``quantile`` members of :data:`_VALID_WHAT`.  ``"trafo"``
+        returns ``h`` unclipped; every other value is a distribution-scale
+        target.
+    h:
+        Transformation values ``h(y|x)`` of shape ``(m,)``.
+    hp:
+        Derivative ``h'(y|x) = ∂h/∂y`` of shape ``(m,)``.  Only consulted for
+        the density/hazard family (:data:`_HP_REQUIRING_WHAT`).
+    dist:
+        Base distribution providing ``cdf``/``sf``/``pdf``/``logpdf``/
+        ``logsf``/``logcdf`` and ``kind``.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        The requested target evaluated at every point, shape ``(m,)``.
+
+    Raises
+    ------
+    InfeasibleParameterError
+        If ``what`` requires ``h'(y) > 0`` (density, hazard, and their logs)
+        but ``hp`` is non-positive at one or more points.
+
+    Notes
+    -----
+    Emits a :class:`UserWarning` (``stacklevel=3``, so it points at the
+    caller of ``predict``) when ``|h|`` exceeds ``_H_CLIP`` and the clip
+    therefore saturates the returned values.
+    """
+    _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+
+    if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
+        raise InfeasibleParameterError(
+            f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
+            f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
+            "one or more requested points.  This indicates a non-monotone "
+            "transformation — fit() should have rejected this parameter; "
+            "if you see this, the model state is inconsistent."
+        )
+
+    if what == "trafo":
+        return h
+
+    # Clip h to ±_H_CLIP before distribution calls — the same bound
+    # likelihood.py and confband() use everywhere else — and warn when the
+    # clip actually bites so the caller knows the returned values at those
+    # points are saturated at a floor/ceiling rather than the true
+    # asymptotic limit.
+    if np.any(np.abs(h) > _H_CLIP):
+        warnings.warn(
+            f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
+            "one or more points; clipping for numerical stability. "
+            "Values at these points are saturated, not the true "
+            "asymptotic limit.",
+            stacklevel=3,
+        )
+    h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+
+    if what == "distribution":
+        return dist.cdf(h_c)
+    if what == "logdistribution":
+        return cast(NDArray[np.float64], _logcdf(h_c))
+    if what == "survivor":
+        return cast(NDArray[np.float64], dist.sf(h_c))
+    if what == "logsurvivor":
+        return dist.logsf(h_c)
+    if what == "density":
+        return dist.pdf(h_c) * hp
+    if what == "logdensity":
+        return dist.logpdf(h_c) + np.log(hp)
+    if what == "hazard":
+        return cast(
+            NDArray[np.float64],
+            np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
+        )
+    if what == "loghazard":
+        return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
+    if what == "cumhazard":
+        return -dist.logsf(h_c)
+    if what == "logcumhazard":
+        return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
+    if what == "odds":
+        return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
+    # logodds
+    return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
 
 
 def _extract_feature_names(X: object) -> list[str] | None:
@@ -337,9 +443,62 @@ class ConditionalTransformationModel:
             return None
         if isinstance(self.basis, InteractionBasis):
             return None
+        _, _, gamma, _, _, _ = self._split_fitted_theta()
+        return gamma
+
+    def _split_fitted_theta(
+        self,
+    ) -> tuple[
+        NDArray[np.float64],
+        NDArray[np.float64] | None,
+        NDArray[np.float64] | None,
+        int,
+        int,
+        int,
+    ]:
+        """Decompose the fitted ``theta_`` into its ``[theta_b | β | γ]`` blocks.
+
+        Single source of truth for the shift-path parameter layout
+        ``theta_ = [theta_b (p) | β (q_d, shift) | γ (q_s, scaling)]``
+        (ADR 0002).  The actual slicing is delegated to
+        :func:`mltpy.likelihood._split_theta_scaled`, the same helper the
+        likelihood path uses, so the predict / Cox-Snell / confband / summary
+        call sites cannot drift apart (the failure mode behind the confband
+        and Cox-Snell scaling bugs fixed in this codebase's history).
+
+        Returns
+        -------
+        tuple
+            ``(theta_b, beta, gamma, p, q_d, q_s)``.  ``beta`` is ``None`` when
+            there are no shift covariates (``q_d == 0``); ``gamma`` is ``None``
+            when the model was fitted without ``scaling=`` (``q_s == 0``).  The
+            three integer sizes are returned alongside so callers that also
+            need the counts (Jacobian assembly, ``X``-shape validation) do not
+            re-derive them.
+
+        Raises
+        ------
+        RuntimeError
+            If ``theta_`` is missing (model not fitted).
+        NotImplementedError
+            If called on an :class:`~mltpy.basis.InteractionBasis` model, whose
+            layout is ``[vec_C(Θ) | γ]`` with no contiguous shift block.
+        """
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are unexpectedly missing; the model "
+                "must be fitted before its parameter blocks can be split."
+            )
+        if isinstance(self.basis, InteractionBasis):
+            raise NotImplementedError(
+                "_split_fitted_theta() is only valid on the shift-basis path; "
+                "InteractionBasis uses the [vec_C(Theta) | gamma] layout."
+            )
         p = self.basis.order + 1
-        q_d = 0 if self._X_train_ is None else self._X_train_.shape[1]
-        return self.theta_[p + q_d :]
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        theta_b, beta, gamma = _split_theta_scaled(self.theta_, p, q_d, q_s)
+        return theta_b, beta, gamma, p, q_d, q_s
 
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
@@ -735,64 +894,16 @@ class ConditionalTransformationModel:
             if offset_arr is not None:
                 h = h + offset_arr
 
+            # `what` is already validated against _VALID_WHAT at the top of
+            # predict(), and "quantile" returned above — so every remaining
+            # value is a distribution-scale target the shared ladder handles.
             dist = _get_dist(self.base_distribution)
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-
-            if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
-                raise InfeasibleParameterError(
-                    f"predict(what={what!r}) requires h'(y) > 0."
-                )
-            if what == "trafo":
-                return h
-            if np.any(np.abs(h) > _H_CLIP):
-                warnings.warn(
-                    f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
-                    "one or more points; clipping for numerical stability.",
-                    stacklevel=2,
-                )
-            h_c = np.clip(h, -_H_CLIP, _H_CLIP)
-            if what == "distribution":
-                return dist.cdf(h_c)
-            if what == "logdistribution":
-                return cast(NDArray[np.float64], _logcdf(h_c))
-            if what == "survivor":
-                return cast(NDArray[np.float64], dist.sf(h_c))
-            if what == "logsurvivor":
-                return dist.logsf(h_c)
-            if what == "density":
-                return dist.pdf(h_c) * hp
-            if what == "logdensity":
-                with np.errstate(divide="ignore"):
-                    return dist.logpdf(h_c) + np.log(hp)
-            if what == "hazard":
-                return cast(NDArray[np.float64], dist.pdf(h_c) * hp / dist.sf(h_c))
-            if what == "loghazard":
-                return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
-            if what == "cumhazard":
-                return -dist.logsf(h_c)
-            if what == "logcumhazard":
-                return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
-            if what == "odds":
-                return cast(NDArray[np.float64], dist.cdf(h_c) / dist.sf(h_c))
-            if what == "logodds":
-                return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
-            raise ValueError(
-                f"what={what!r} is not supported for InteractionBasis predict."
-            )
+            return _apply_what(what, h, hp, dist)
 
         # ------------------------------------------------------------------
         # Standard (shift) basis path
         # ------------------------------------------------------------------
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-        q_s = 0 if self.scaling is None else self.scaling.shape[1]
-        q_d = self.theta_.size - p - q_s
-        beta_fit: NDArray[np.float64] | None = (
-            self.theta_[p : p + q_d] if q_d > 0 else None
-        )
-        gamma_fit: NDArray[np.float64] | None = (
-            self.theta_[p + q_d :] if q_s > 0 else None
-        )
+        theta_b, beta_fit, gamma_fit, p, q_d, q_s = self._split_fitted_theta()
 
         if what == "quantile":
             xbeta: NDArray[np.float64] | None = None
@@ -851,61 +962,7 @@ class ConditionalTransformationModel:
             h = h + offset_arr
 
         dist = _get_dist(self.base_distribution)
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
-            raise InfeasibleParameterError(
-                f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
-                f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
-                "one or more requested points.  This indicates a non-monotone "
-                "transformation — fit() should have rejected this parameter; "
-                "if you see this, the model state is inconsistent."
-            )
-
-        if what == "trafo":
-            return h
-
-        # Clip h to ±_H_CLIP before distribution calls — the same bound
-        # likelihood.py and confband() use everywhere else — and warn when
-        # the clip actually bites so the caller knows the returned values
-        # at those points are saturated at a floor/ceiling rather than the
-        # true asymptotic limit.
-        if np.any(np.abs(h) > _H_CLIP):
-            warnings.warn(
-                f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
-                "one or more points; clipping for numerical stability. "
-                "Values at these points are saturated, not the true "
-                "asymptotic limit.",
-                stacklevel=2,
-            )
-        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
-
-        if what == "distribution":
-            return dist.cdf(h_c)
-        if what == "logdistribution":
-            return cast(NDArray[np.float64], _logcdf(h_c))
-        if what == "survivor":
-            return cast(NDArray[np.float64], dist.sf(h_c))
-        if what == "logsurvivor":
-            return dist.logsf(h_c)
-        if what == "density":
-            return dist.pdf(h_c) * hp
-        if what == "logdensity":
-            return dist.logpdf(h_c) + np.log(hp)
-        if what == "hazard":
-            return cast(
-                NDArray[np.float64],
-                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
-            )
-        if what == "loghazard":
-            return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
-        if what == "cumhazard":
-            return -dist.logsf(h_c)
-        if what == "logcumhazard":
-            return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
-        if what == "odds":
-            return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
-        # logodds
-        return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
+        return _apply_what(what, h, hp, dist)
 
     def _predict_quantile(
         self,
@@ -1232,8 +1289,15 @@ class ConditionalTransformationModel:
         -------
         NDArray of shape ``(m,)`` with values in ``basis.support``.
         """
-        assert isinstance(self.basis, InteractionBasis)
-        assert self.theta_ is not None
+        if not isinstance(self.basis, InteractionBasis):
+            raise RuntimeError(
+                "_predict_quantile_interaction requires an InteractionBasis; "
+                "this is an internal invariant violation."
+            )
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are missing; fit() must run first."
+            )
         a, b = self.basis.support
         probs_arr = np.asarray(probs, dtype=np.float64)
         m = probs_arr.shape[0]
@@ -1634,12 +1698,7 @@ class ConditionalTransformationModel:
         # gamma (q_s, scaling)].  Split exactly as predict()/transform() do so
         # the scaling block is honoured rather than mis-read as shift
         # coefficients (ADR 0002).
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-        q_s = 0 if self.scaling is None else self.scaling.shape[1]
-        q_d = self.theta_.size - p - q_s
-        beta_fit = self.theta_[p : p + q_d] if q_d > 0 else None
-        gamma_fit = self.theta_[p + q_d :] if q_s > 0 else None
+        theta_b, beta_fit, gamma_fit, _, _, _ = self._split_fitted_theta()
         B = self.basis.evaluate(y_eval)
         h = B @ theta_b
         # Scaling factor f_i = exp(0.5 · x_s,i · γ); same convention as
@@ -2414,18 +2473,11 @@ class ConditionalTransformationModel:
             )
 
         # Parameter layout: theta_ = [theta_b (p) | beta (q_d, shift) |
-        # gamma (q_s, scaling)] (ADR 0002).  q_s is fixed by the scaling
-        # design supplied at fit; the remaining tail after theta_b and gamma
-        # is the shift block.  vcov() returns the matching full block, so the
-        # Jacobian below is assembled in the same [theta_b | beta | gamma]
-        # column order.
-        p = self.basis.order + 1
-        q_s = 0 if self.scaling is None else self.scaling.shape[1]
-        q_d = self.theta_.size - p - q_s
+        # gamma (q_s, scaling)] (ADR 0002).  vcov() returns the matching full
+        # block, so the Jacobian below is assembled in the same
+        # [theta_b | beta | gamma] column order.
+        theta_b, beta, gamma, p, q_d, q_s = self._split_fitted_theta()
         n_par = p + q_d + q_s
-        theta_b = self.theta_[:p]
-        beta = self.theta_[p : p + q_d] if q_d > 0 else None
-        gamma = self.theta_[p + q_d :] if q_s > 0 else None
 
         # Validate X (shift profile) versus the fitted parameter layout.
         if q_d == 0:
