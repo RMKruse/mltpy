@@ -13,10 +13,16 @@ BoxCox
     Box-Cox transformation model for continuous outcomes with exact observations.
 Coxph
     Cox proportional hazards model for right-censored survival data.
+Lehmann
+    Lehmann (proportional reverse-time hazards) model for right-censored data.
 Colr
     Continuous outcome logistic regression — uses a logistic base distribution.
 Lm
     Normal linear regression as a CTM (order=1 Bernstein, normal base).
+Survreg
+    Parametric survival model on the log-time scale (R ``tram::Survreg``).
+Polr
+    Proportional-odds ordinal regression for ordered responses (R ``tram::Polr``).
 """
 
 from __future__ import annotations
@@ -272,6 +278,185 @@ class _TramModel(MLT):
             return ax_cdf
         return [ax_cdf, ax_pdf]
 
+    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Evaluate the baseline transformation h(y) = B_k(y) @ theta_b.
+
+        This is the monotone function that maps the observed response scale
+        to the latent scale of the base distribution.  Useful for
+        visualising the shape of the estimated transformation.
+
+        Parameters
+        ----------
+        y:
+            Response values within ``basis.support``.
+
+        Returns
+        -------
+        NDArray of shape ``(len(y),)``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        NotImplementedError
+            If the model uses an :class:`~mltpy.basis.InteractionBasis`,
+            which has no contiguous ``theta_b`` block.
+        """
+        self._check_is_fitted()
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
+        if not isinstance(self.basis, BernsteinBasis):
+            raise NotImplementedError(
+                "fitted_transformation() is only defined for the shift-basis "
+                "(BernsteinBasis) path; it is not available for "
+                "InteractionBasis models."
+            )
+        p = self.basis.order + 1
+        theta_b = self.theta_[:p]
+        y_arr = np.asarray(y, dtype=float).ravel()
+        B = self.basis.evaluate(y_arr)  # (m, p)
+        return B @ theta_b
+
+    @property
+    def gamma_(self) -> NDArray[np.float64]:
+        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
+
+        Sign-aligned with R ``tram::*(..., scale=~x_s)``'s scaling block
+        (ADR 0002, Decision 5).
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
+        gamma = self.gamma_coef_
+        if gamma is None:
+            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
+        return gamma
+
+    @property
+    def feature_names_scaling_(self) -> list[str]:
+        """Column names of the scaling-design matrix supplied at fit time.
+
+        Populated from a ``pandas.DataFrame`` column index when available,
+        otherwise ``["X1", "X2", ...]``.
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
+        """
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError(
+                "Model was not fitted with scaling=; "
+                "feature_names_scaling_ is undefined."
+            )
+        names = self.scaling_feature_names_in_
+        if names is None:
+            q_s = self.scaling.shape[1]
+            return [f"X{j + 1}" for j in range(q_s)]
+        return names
+
+
+class _SurvivalMixin(_TramModel):
+    """Survival/hazard accessors shared by the time-to-event tram models.
+
+    Provides :meth:`survival` and :meth:`hazard` for :class:`Coxph`,
+    :class:`Lehmann`, and :class:`Survreg`.  All three accept an optional
+    ``X_scale`` argument so the public surface is coherent across the
+    family; for models fitted without ``scaling=`` a non-``None``
+    ``X_scale`` is rejected by :meth:`predict`.  Not part of the public
+    API.
+    """
+
+    def survival(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the survival function S(y) = 1 − F(y|x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``basis.support``.
+        X:
+            Optional covariate matrix of shape ``(m, q_d)``.
+        offset:
+            Optional per-observation offset added to ``h``.
+        X_scale:
+            New-data scaling-design matrix of shape ``(m, q_s)``, required
+            when the model was fitted with ``scaling=`` and rejected
+            otherwise.  Threaded through to :meth:`predict` as
+            ``X_scale_new``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        return 1.0 - self.predict(
+            y,
+            X_new=X,
+            what="distribution",
+            offset_new=offset,
+            X_scale_new=X_scale,
+        )
+
+    def hazard(
+        self,
+        y: NDArray[np.float64],
+        X: NDArray[np.float64] | None = None,
+        offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
+    ) -> NDArray[np.float64]:
+        """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
+
+        Parameters
+        ----------
+        y:
+            Time points within ``basis.support``.
+        X:
+            Optional covariate matrix of shape ``(m, q_d)``.
+        offset:
+            Optional per-observation offset added to ``h``.
+        X_scale:
+            New-data scaling-design matrix of shape ``(m, q_s)``, required
+            when the model was fitted with ``scaling=`` and rejected
+            otherwise.  Threaded through to :meth:`predict` as
+            ``X_scale_new``.
+
+        Returns
+        -------
+        NDArray of shape ``(m,)`` with non-negative values.
+
+        Raises
+        ------
+        NotFittedError
+            If called before :meth:`fit`.
+        """
+        return self.predict(
+            y,
+            X_new=X,
+            what="hazard",
+            offset_new=offset,
+            X_scale_new=X_scale,
+        )
+
 
 # ---------------------------------------------------------------------------
 # BoxCox
@@ -341,97 +526,13 @@ class BoxCox(_TramModel):
             scaling=scaling,
         )
 
-    @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::BoxCox(..., scale=~x_s)``'s scaling
-        block (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
-    def feature_names_scaling_(self) -> list[str]:
-        """Column names of the scaling-design matrix supplied at fit time.
-
-        Populated from a ``pandas.DataFrame`` column index when available,
-        otherwise ``["X1", "X2", ...]``.
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError(
-                "Model was not fitted with scaling=; "
-                "feature_names_scaling_ is undefined."
-            )
-        names = self.scaling_feature_names_in_
-        if names is None:
-            q_s = self.scaling.shape[1]
-            return [f"X{j + 1}" for j in range(q_s)]
-        return names
-
-    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Evaluate the raw fitted transformation h(y) = B_k(y) @ theta_b.
-
-        This is the monotone function that maps the observed response scale
-        to the latent standard-normal scale.  Useful for visualising the
-        shape of the estimated transformation.
-
-        Parameters
-        ----------
-        y:
-            Response values within ``basis.support``.
-
-        Returns
-        -------
-        NDArray of shape ``(len(y),)``.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        self._check_is_fitted()
-        if self.theta_ is None:
-            raise RuntimeError("Unexpected None theta_ for fitted model")
-        if not isinstance(self.basis, BernsteinBasis):
-            raise NotImplementedError(
-                "fitted_transformation() is only defined for the shift-basis "
-                "(BernsteinBasis) path; it is not available for "
-                "InteractionBasis models."
-            )
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-        y_arr = np.asarray(y, dtype=float).ravel()
-        B = self.basis.evaluate(y_arr)  # (m, p)
-        return B @ theta_b
-
 
 # ---------------------------------------------------------------------------
 # Coxph
 # ---------------------------------------------------------------------------
 
 
-class Coxph(_TramModel):
+class Coxph(_SurvivalMixin):
     """Cox proportional hazards model for right-censored survival data.
 
     Fits a monotone transformation h(t) under right-censoring using the
@@ -532,139 +633,13 @@ class Coxph(_TramModel):
         self._order = order
         self._support = support
 
-    @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::Coxph(..., scale=~x_s)``'s scaling
-        block (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
-    def feature_names_scaling_(self) -> list[str]:
-        """Column names of the scaling-design matrix supplied at fit time.
-
-        Populated from a ``pandas.DataFrame`` column index when available,
-        otherwise ``["X1", "X2", ...]``.
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError(
-                "Model was not fitted with scaling=; "
-                "feature_names_scaling_ is undefined."
-            )
-        names = self.scaling_feature_names_in_
-        if names is None:
-            q_s = self.scaling.shape[1]
-            return [f"X{j + 1}" for j in range(q_s)]
-        return names
-
-    def survival(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-        X_scale: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the survival function S(y) = 1 − F(y|x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``basis.support``.
-        X:
-            Optional covariate matrix of shape ``(m, q_d)``.
-        offset:
-            Optional per-observation offset added to ``h``.
-        X_scale:
-            New-data scaling-design matrix of shape ``(m, q_s)``, required
-            when the model was fitted with ``scaling=``.  Threaded through
-            to :meth:`predict` as ``X_scale_new``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        return 1.0 - self.predict(
-            y,
-            X_new=X,
-            what="distribution",
-            offset_new=offset,
-            X_scale_new=X_scale,
-        )
-
-    def hazard(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-        X_scale: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``basis.support``.
-        X:
-            Optional covariate matrix of shape ``(m, q_d)``.
-        offset:
-            Optional per-observation offset added to ``h``.
-        X_scale:
-            New-data scaling-design matrix of shape ``(m, q_s)``, required
-            when the model was fitted with ``scaling=``.  Threaded through
-            to :meth:`predict` as ``X_scale_new``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with non-negative values.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        return self.predict(
-            y,
-            X_new=X,
-            what="hazard",
-            offset_new=offset,
-            X_scale_new=X_scale,
-        )
-
 
 # ---------------------------------------------------------------------------
 # Lehmann
 # ---------------------------------------------------------------------------
 
 
-class Lehmann(_TramModel):
+class Lehmann(_SurvivalMixin):
     """Lehmann (proportional reverse-time hazards) model for right-censored data.
 
     Dual of :class:`Coxph`.  Fits a monotone transformation h(t) under
@@ -711,62 +686,6 @@ class Lehmann(_TramModel):
             optimizer_config=optimizer_config,
             base_distribution="max_extreme_value",
         )
-
-    def survival(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the survival function S(y) = 1 − F(y|x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``basis.support``.
-        X:
-            Optional covariate matrix of shape ``(m, q)``.
-        offset:
-            Optional per-observation offset added to ``h``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        return 1.0 - self.predict(y, X_new=X, what="distribution", offset_new=offset)
-
-    def hazard(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the hazard rate h(y) = f(y|x) / S(y|x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``basis.support``.
-        X:
-            Optional covariate matrix of shape ``(m, q)``.
-        offset:
-            Optional per-observation offset added to ``h``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with non-negative values.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        return self.predict(y, X_new=X, what="hazard", offset_new=offset)
 
 
 # ---------------------------------------------------------------------------
@@ -829,54 +748,6 @@ class Colr(_TramModel):
             base_distribution="logistic",
             scaling=scaling,
         )
-
-    @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::Colr(..., scale=~x_s)``'s scaling
-        block (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
-    def feature_names_scaling_(self) -> list[str]:
-        """Column names of the scaling-design matrix supplied at fit time.
-
-        Populated from a ``pandas.DataFrame`` column index when available,
-        otherwise ``["X1", "X2", ...]``.
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError(
-                "Model was not fitted with scaling=; "
-                "feature_names_scaling_ is undefined."
-            )
-        names = self.scaling_feature_names_in_
-        if names is None:
-            q_s = self.scaling.shape[1]
-            return [f"X{j + 1}" for j in range(q_s)]
-        return names
 
 
 # ---------------------------------------------------------------------------
@@ -1069,86 +940,6 @@ class Lm(_TramModel):
         beta_ctm = self.theta_[2:]
         return -self.sigma_ * beta_ctm
 
-    @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::Lm(..., scale=~x_s)``'s scaling block
-        (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
-    def feature_names_scaling_(self) -> list[str]:
-        """Column names of the scaling-design matrix supplied at fit time.
-
-        Populated from a ``pandas.DataFrame`` column index when available,
-        otherwise ``["X1", "X2", ...]``.
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError(
-                "Model was not fitted with scaling=; "
-                "feature_names_scaling_ is undefined."
-            )
-        names = self.scaling_feature_names_in_
-        if names is None:
-            q_s = self.scaling.shape[1]
-            return [f"X{j + 1}" for j in range(q_s)]
-        return names
-
-    def fitted_transformation(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Evaluate the fitted affine transformation h(y) = B(y) @ theta_b.
-
-        Parameters
-        ----------
-        y:
-            Response values within ``basis.support``.
-
-        Returns
-        -------
-        NDArray of shape ``(len(y),)``.
-
-        Raises
-        ------
-        NotFittedError
-            If called before :meth:`fit`.
-        """
-        self._check_is_fitted()
-        if self.theta_ is None:
-            raise RuntimeError("Unexpected None theta_ for fitted model")
-        if not isinstance(self.basis, BernsteinBasis):
-            raise NotImplementedError(
-                "fitted_transformation() is only defined for the shift-basis "
-                "(BernsteinBasis) path; it is not available for "
-                "InteractionBasis models."
-            )
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-        y_arr = np.asarray(y, dtype=float).ravel()
-        B = self.basis.evaluate(y_arr)
-        return B @ theta_b
-
 
 # ---------------------------------------------------------------------------
 # Survreg — parametric survival (log-scale models)
@@ -1163,7 +954,7 @@ _SURVREG_DIST_MAP: dict[str, str] = {
 }
 
 
-class Survreg(_TramModel):
+class Survreg(_SurvivalMixin):
     """Parametric survival model on the log-time scale (R ``tram::Survreg``).
 
     Fits a monotone transformation h(log t) such that h(log T | X) follows a
@@ -1248,125 +1039,9 @@ class Survreg(_TramModel):
         self._support = support
         self._distribution = distribution
 
-    @property
-    def gamma_(self) -> NDArray[np.float64]:
-        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
-
-        Sign-aligned with R ``tram::Survreg(..., scale=~x_s)``'s scaling
-        block (ADR 0002, Decision 5).
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
-        gamma = self.gamma_coef_
-        if gamma is None:
-            raise RuntimeError("Unexpected None gamma_coef_ for fitted model")
-        return gamma
-
-    @property
-    def feature_names_scaling_(self) -> list[str]:
-        """Column names of the scaling-design matrix supplied at fit time.
-
-        Populated from a ``pandas.DataFrame`` column index when available,
-        otherwise ``["X1", "X2", ...]``.
-
-        Raises
-        ------
-        NotFittedError
-            If accessed before :meth:`fit`.
-        ValueError
-            If the model was constructed without ``scaling=``.
-        """
-        self._check_is_fitted()
-        if self.scaling is None:
-            raise ValueError(
-                "Model was not fitted with scaling=; "
-                "feature_names_scaling_ is undefined."
-            )
-        names = self.scaling_feature_names_in_
-        if names is None:
-            q_s = self.scaling.shape[1]
-            return [f"X{j + 1}" for j in range(q_s)]
-        return names
-
     # ------------------------------------------------------------------
     # Survival / hazard convenience methods (mirrors Coxph)
     # ------------------------------------------------------------------
-
-    def survival(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-        X_scale: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the survival function S(t) = 1 − F(t | x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``support``.
-        X:
-            Optional covariate matrix of shape ``(m, q)``.
-        offset:
-            Optional per-observation offset.
-        X_scale:
-            New-data scaling-design matrix of shape ``(m, q_s)``, required
-            when the model was fitted with ``scaling=``.  Threaded through
-            to :meth:`predict` as ``X_scale_new``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with values in ``[0, 1]``.
-        """
-        return 1.0 - self.predict(
-            y,
-            X_new=X,
-            what="distribution",
-            offset_new=offset,
-            X_scale_new=X_scale,
-        )
-
-    def hazard(
-        self,
-        y: NDArray[np.float64],
-        X: NDArray[np.float64] | None = None,
-        offset: NDArray[np.float64] | None = None,
-        X_scale: NDArray[np.float64] | None = None,
-    ) -> NDArray[np.float64]:
-        """Estimate the hazard rate h_T(t) = f(t | x) / S(t | x).
-
-        Parameters
-        ----------
-        y:
-            Time points within ``support``.
-        X:
-            Optional covariate matrix.
-        offset:
-            Optional per-observation offset.
-        X_scale:
-            New-data scaling-design matrix of shape ``(m, q_s)``, required
-            when the model was fitted with ``scaling=``.  Threaded through
-            to :meth:`predict` as ``X_scale_new``.
-
-        Returns
-        -------
-        NDArray of shape ``(m,)`` with non-negative values.
-        """
-        return self.predict(
-            y,
-            X_new=X,
-            what="hazard",
-            offset_new=offset,
-            X_scale_new=X_scale,
-        )
 
     # ------------------------------------------------------------------
     # Quantile prediction override
