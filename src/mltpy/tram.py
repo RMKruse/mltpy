@@ -165,9 +165,7 @@ class _TramModel(MLT):
             return None
         if isinstance(self.basis, InteractionBasis):
             return None
-        p = self.basis.order + 1
-        q_s = 0 if self.scaling is None else self.scaling.shape[1]
-        q_d = self.theta_.size - p - q_s
+        _, beta, gamma, p, q_d, q_s = self._split_fitted_theta()
         if q_d <= 0 and q_s <= 0:
             return None
 
@@ -177,19 +175,15 @@ class _TramModel(MLT):
             return "  [Standard errors not available: Hessian matrix is singular.]"
 
         sections: list[str] = []
-        if q_d > 0:
+        if q_d > 0 and beta is not None:
             names = self.feature_names_in_ or [f"X{j + 1}" for j in range(q_d)]
-            sections.append(
-                _format_wald_table(names, self.theta_[p : p + q_d], se[p : p + q_d])
-            )
-        if q_s > 0:
+            sections.append(_format_wald_table(names, beta, se[p : p + q_d]))
+        if q_s > 0 and gamma is not None:
             s_names = self.scaling_feature_names_in_ or [
                 f"X{j + 1}" for j in range(q_s)
             ]
             sections.append("Scaling coefficients:")
-            sections.append(
-                _format_wald_table(s_names, self.theta_[p + q_d :], se[p + q_d :])
-            )
+            sections.append(_format_wald_table(s_names, gamma, se[p + q_d :]))
         return "\n".join(sections)
 
     def plot(
@@ -419,7 +413,12 @@ class BoxCox(_TramModel):
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError("Unexpected None theta_ for fitted model")
-        assert isinstance(self.basis, BernsteinBasis)
+        if not isinstance(self.basis, BernsteinBasis):
+            raise NotImplementedError(
+                "fitted_transformation() is only defined for the shift-basis "
+                "(BernsteinBasis) path; it is not available for "
+                "InteractionBasis models."
+            )
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -1138,7 +1137,12 @@ class Lm(_TramModel):
         self._check_is_fitted()
         if self.theta_ is None:
             raise RuntimeError("Unexpected None theta_ for fitted model")
-        assert isinstance(self.basis, BernsteinBasis)
+        if not isinstance(self.basis, BernsteinBasis):
+            raise NotImplementedError(
+                "fitted_transformation() is only defined for the shift-basis "
+                "(BernsteinBasis) path; it is not available for "
+                "InteractionBasis models."
+            )
         p = self.basis.order + 1
         theta_b = self.theta_[:p]
         y_arr = np.asarray(y, dtype=float).ravel()
@@ -1405,7 +1409,11 @@ class Survreg(_TramModel):
 
         # Right-censored: R-compatible grid+spline inversion on positive time grid.
         # Start at a (not 0) since log(0) = -inf for LogBernsteinBasis.
-        assert not isinstance(self.basis, InteractionBasis)
+        if isinstance(self.basis, InteractionBasis):
+            raise RuntimeError(
+                "Survreg quantile inversion does not support InteractionBasis; "
+                "this is an internal invariant violation."
+            )
         q_grid = np.linspace(a, b, _QMLT_GRID_POINTS, dtype=np.float64)
         h_base_grid: NDArray[np.float64] = self.basis.evaluate(q_grid) @ theta_b
 
