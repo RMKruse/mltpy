@@ -565,6 +565,34 @@ def _split_theta_scaled(
     return theta_b, beta, gamma
 
 
+def _slice_optional(
+    mask: NDArray[np.bool_],
+    X: NDArray[np.float64] | None,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    fourth: NDArray[np.float64] | None,
+) -> tuple[
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+]:
+    """Slice the optional per-row design arrays by a boolean row ``mask``.
+
+    Returns ``(X[mask], weights[mask], offset[mask], fourth[mask])``, leaving
+    any entry as ``None`` when its input is ``None``.  ``fourth`` is the
+    scaling design (``scaling``) for the likelihood / score / Hessian families
+    or the pre-computed ``scale_factor`` for the intercept-score family — both
+    are row-sliced identically.
+    """
+    return (
+        X[mask] if X is not None else None,
+        weights[mask] if weights is not None else None,
+        offset[mask] if offset is not None else None,
+        fourth[mask] if fourth is not None else None,
+    )
+
+
 def _eval_h_censored(
     y_c: NDArray[np.float64],
     basis: BernsteinBasis,
@@ -1681,10 +1709,7 @@ def _ll_and_grad_right(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         ll_e, grad_e = _ll_and_grad_none(
             y_e,
             theta,
@@ -1703,10 +1728,7 @@ def _ll_and_grad_right(
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -1749,10 +1771,7 @@ def _ll_and_grad_left(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         ll_e, grad_e = _ll_and_grad_none(
             y_e,
             theta,
@@ -1771,10 +1790,7 @@ def _ll_and_grad_left(
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -1817,10 +1833,7 @@ def _ll_and_grad_interval(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         ll_e, grad_e = _ll_and_grad_none(
             y_e,
             theta,
@@ -1840,10 +1853,7 @@ def _ll_and_grad_interval(
     if mask_c.any():
         lo = cd.lower[mask_c]
         hi = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
@@ -2024,10 +2034,7 @@ def _scores_right(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         scores[mask_e] = _scores_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2035,10 +2042,7 @@ def _scores_right(
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -2082,10 +2086,7 @@ def _scores_left(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         scores[mask_e] = _scores_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2093,10 +2094,7 @@ def _scores_left(
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -2146,10 +2144,7 @@ def _scores_interval(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         scores[mask_e] = _scores_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2159,10 +2154,7 @@ def _scores_interval(
         idx_c = np.flatnonzero(mask_c)
         lo = cd.lower[mask_c]
         hi = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
@@ -2384,10 +2376,7 @@ def _hess_right(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         H += _hess_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2395,10 +2384,7 @@ def _hess_right(
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -2447,10 +2433,7 @@ def _hess_left(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         H += _hess_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2458,10 +2441,7 @@ def _hess_left(
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         h_c, B_c, h0_c, f_c = _eval_h_censored(
             y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c
         )
@@ -2523,10 +2503,7 @@ def _hess_interval(
     mask_e = cd.is_exact_mask
     if mask_e.any():
         y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
+        X_e, w_e, o_e, S_e = _slice_optional(mask_e, X, weights, offset, scaling)
         H += _hess_none(
             y_e, theta, basis, X_e, dist=dist, weights=w_e, offset=o_e, scaling=S_e
         )
@@ -2535,10 +2512,7 @@ def _hess_interval(
     if mask_c.any():
         lo = cd.lower[mask_c]
         hi = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
+        X_c, w_c, o_c, S_c = _slice_optional(mask_c, X, weights, offset, scaling)
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
@@ -3596,10 +3570,7 @@ def _intercept_score_right(
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        f_e = scale_factor[mask_e] if scale_factor is not None else None
+        X_e, w_e, o_e, f_e = _slice_optional(mask_e, X, weights, offset, scale_factor)
         out[mask_e] = _intercept_score_exact(
             cd.exact[mask_e],
             theta_b,
@@ -3615,10 +3586,7 @@ def _intercept_score_right(
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
         y_c = cd.lower[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        f_c = scale_factor[mask_c] if scale_factor is not None else None
+        X_c, w_c, o_c, f_c = _slice_optional(mask_c, X, weights, offset, scale_factor)
         B_c = basis.evaluate(y_c)
         h0_c = B_c @ theta_b
         if f_c is not None:
@@ -3651,10 +3619,7 @@ def _intercept_score_left(
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        f_e = scale_factor[mask_e] if scale_factor is not None else None
+        X_e, w_e, o_e, f_e = _slice_optional(mask_e, X, weights, offset, scale_factor)
         out[mask_e] = _intercept_score_exact(
             cd.exact[mask_e],
             theta_b,
@@ -3670,10 +3635,7 @@ def _intercept_score_left(
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
         y_c = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        f_c = scale_factor[mask_c] if scale_factor is not None else None
+        X_c, w_c, o_c, f_c = _slice_optional(mask_c, X, weights, offset, scale_factor)
         B_c = basis.evaluate(y_c)
         h0_c = B_c @ theta_b
         if f_c is not None:
@@ -3707,10 +3669,7 @@ def _intercept_score_interval(
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        f_e = scale_factor[mask_e] if scale_factor is not None else None
+        X_e, w_e, o_e, f_e = _slice_optional(mask_e, X, weights, offset, scale_factor)
         out[mask_e] = _intercept_score_exact(
             cd.exact[mask_e],
             theta_b,
@@ -3728,10 +3687,7 @@ def _intercept_score_interval(
         idx_c = np.flatnonzero(mask_c)
         lo = cd.lower[mask_c]
         hi = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        f_c = scale_factor[mask_c] if scale_factor is not None else None
+        X_c, w_c, o_c, f_c = _slice_optional(mask_c, X, weights, offset, scale_factor)
         fin_lo = np.isfinite(lo)
         fin_hi = np.isfinite(hi)
         both = fin_lo & fin_hi
