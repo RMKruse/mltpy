@@ -1361,41 +1361,21 @@ def _ll_none(
     float
         Computed log-likelihood.
     """
-    p = basis.order + 1
-    q_d = X.shape[1] if X is not None else 0
-    q_s = scaling.shape[1] if scaling is not None else 0
-    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
-
-    B, D = basis.evaluate_with_derivative(y)  # (n, p)
-    h0 = B @ theta_b
-    hp0 = D @ theta_b
-    if scaling is not None and gamma is not None:
-        # f_i = exp(0.5 · X_s_i · γ); positive, scales both h_0 and h_0'
-        # uniformly.  The 0.5 matches mlt's internal convention
-        # (mlt:::tmlt uses exp(0.5 * <scaling_predict>)), so γ is
-        # sign- and magnitude-aligned with R `tram`'s scaling coefficient.
-        f = np.exp(0.5 * (scaling @ gamma))
-        h_raw = h0 * f
-        hp = hp0 * f
-    else:
-        h_raw = h0
-        hp = hp0
-    h_raw = _shift(h_raw, X, beta)
-    if offset is not None:
-        h_raw = h_raw + offset
-    h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        # DistOps.logpdf gives exponential log f_exp(h) = -h for all h
-        # (matches R mlt; scipy returns -inf for h<0, which would crash
-        # penalty-based optimisers that legitimately evaluate slightly-
-        # infeasible iterates).  Support feasibility h >= 0 is enforced
-        # separately via build_constraints / build_constraint_matrices.
-        log_pdf_h = dist.logpdf(h)
-        per_obs = log_pdf_h + np.log(hp)
-        if weights is not None:
-            return cast(np.float64, np.dot(weights, per_obs))
-        return np.sum(per_obs)
+    # Value-only delegation: the combined kernel skips gradient assembly when
+    # ``want_grad=False``.  The scaled-baseline / exponential-extension maths
+    # documented above is realised once, in :func:`_ll_and_grad_none`.
+    ll, _ = _ll_and_grad_none(
+        y,
+        theta,
+        basis,
+        X,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
+        want_grad=False,
+    )
+    return ll
 
 
 def _ll_right(
@@ -1416,47 +1396,20 @@ def _ll_right(
     where S(h) = 1 - F(h) is the survival function.
 
     When ``scaling`` is provided, ``h(y|x) = h_0(y)·exp(0.5·x_s·γ) + x_d·β``
-    (ADR 0002).  Exact-row contributions delegate to :func:`_ll_none`, whose
-    scaled-baseline branch is used unchanged.
+    (ADR 0002).  This is the value-only entry point; the maths lives in
+    :func:`_ll_and_grad_right`, which is called here with ``want_grad=False``.
     """
-    p = basis.order + 1
-    q_d = X.shape[1] if X is not None else 0
-    q_s = scaling.shape[1] if scaling is not None else 0
-    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
-    ll = np.float64(0.0)
-
-    mask_e = cd.is_exact_mask
-    if mask_e.any():
-        y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
-        ll += _ll_none(
-            y_e,
-            theta,
-            basis,
-            X_e,
-            dist=dist,
-            weights=w_e,
-            offset=o_e,
-            scaling=S_e,
-        )
-
-    mask_c = cd.is_right_censored_mask
-    if mask_c.any():
-        y_c = cd.lower[mask_c]  # last known lower bound
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
-        h_c, _, _, _ = _eval_h_censored(y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c)
-        logsf_c = dist.logsf(h_c)
-        if w_c is not None:
-            ll += np.dot(w_c, logsf_c)
-        else:
-            ll += np.sum(logsf_c)
-
+    ll, _ = _ll_and_grad_right(
+        cd,
+        theta,
+        basis,
+        X,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
+        want_grad=False,
+    )
     return ll
 
 
@@ -1477,47 +1430,20 @@ def _ll_left(
     ℓ = Σ_exact w_i [log f(h) + log h'] + Σ_censored w_i log F(h)
 
     When ``scaling`` is provided, the scaled-baseline form of ADR 0002
-    applies to both blocks; exact rows delegate to :func:`_ll_none`.
+    applies to both blocks.  This is the value-only entry point; the maths
+    lives in :func:`_ll_and_grad_left`, called here with ``want_grad=False``.
     """
-    p = basis.order + 1
-    q_d = X.shape[1] if X is not None else 0
-    q_s = scaling.shape[1] if scaling is not None else 0
-    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
-    ll = np.float64(0.0)
-
-    mask_e = cd.is_exact_mask
-    if mask_e.any():
-        y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
-        ll += _ll_none(
-            y_e,
-            theta,
-            basis,
-            X_e,
-            dist=dist,
-            weights=w_e,
-            offset=o_e,
-            scaling=S_e,
-        )
-
-    mask_c = cd.is_left_censored_mask
-    if mask_c.any():
-        y_c = cd.upper[mask_c]  # last known upper bound
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
-        h_c, _, _, _ = _eval_h_censored(y_c, basis, theta_b, X_c, beta, S_c, gamma, o_c)
-        _logcdf = dist.logcdf
-        logcdf_c = _logcdf(h_c)
-        if w_c is not None:
-            ll += np.dot(w_c, logcdf_c)
-        else:
-            ll += np.sum(logcdf_c)
-
+    ll, _ = _ll_and_grad_left(
+        cd,
+        theta,
+        basis,
+        X,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
+        want_grad=False,
+    )
     return ll
 
 
@@ -1537,79 +1463,22 @@ def _ll_interval(
     is shared between the lower and upper endpoints of each interval (it does
     not depend on ``y``), so the same row-wise factor multiplies both
     ``h_0(lower)`` and ``h_0(upper)``.
+
+    This is the value-only entry point; the maths (including the
+    ``_log_diff_ndtr`` Taylor fallback and the right-/left-open sub-cases)
+    lives in :func:`_ll_and_grad_interval`, called here with ``want_grad=False``.
     """
-    p = basis.order + 1
-    q_d = X.shape[1] if X is not None else 0
-    q_s = scaling.shape[1] if scaling is not None else 0
-    theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
-    ll = np.float64(0.0)
-
-    mask_e = cd.is_exact_mask
-    if mask_e.any():
-        y_e = cd.exact[mask_e]
-        X_e = X[mask_e] if X is not None else None
-        w_e = weights[mask_e] if weights is not None else None
-        o_e = offset[mask_e] if offset is not None else None
-        S_e = scaling[mask_e] if scaling is not None else None
-        ll += _ll_none(
-            y_e,
-            theta,
-            basis,
-            X_e,
-            dist=dist,
-            weights=w_e,
-            offset=o_e,
-            scaling=S_e,
-        )
-
-    mask_c = ~cd.is_exact_mask
-    if mask_c.any():
-        lo = cd.lower[mask_c]
-        hi = cd.upper[mask_c]
-        X_c = X[mask_c] if X is not None else None
-        w_c = weights[mask_c] if weights is not None else None
-        o_c = offset[mask_c] if offset is not None else None
-        S_c = scaling[mask_c] if scaling is not None else None
-        # Sub-masks within mask_c (relative to its compacted index space):
-        # both finite → true interval; only-hi finite → left-open
-        # (lower=-∞); only-lo finite → right-open (upper=+∞).
-        fin_lo = np.isfinite(lo)
-        fin_hi = np.isfinite(hi)
-        both = fin_lo & fin_hi
-        only_hi = ~fin_lo & fin_hi
-        only_lo = fin_lo & ~fin_hi
-
-        log_p = np.zeros(mask_c.sum(), dtype=np.float64)
-
-        def _h_at(
-            sub_mask: NDArray[np.bool_],
-            y_vals: NDArray[np.float64],
-        ) -> NDArray[np.float64]:
-            X_sub = X_c[sub_mask] if X_c is not None else None
-            S_sub = S_c[sub_mask] if S_c is not None else None
-            o_sub = o_c[sub_mask] if o_c is not None else None
-            h_sub, _, _, _ = _eval_h_censored(
-                y_vals, basis, theta_b, X_sub, beta, S_sub, gamma, o_sub
-            )
-            return h_sub
-
-        if both.any():
-            h_lo_b = _h_at(both, lo[both])
-            h_hi_b = _h_at(both, hi[both])
-            log_p[both] = _log_diff_ndtr(h_lo_b, h_hi_b, dist=dist)
-        if only_hi.any():
-            h_hi_o = _h_at(only_hi, hi[only_hi])
-            _logcdf = dist.logcdf
-            log_p[only_hi] = _logcdf(h_hi_o)
-        if only_lo.any():
-            h_lo_o = _h_at(only_lo, lo[only_lo])
-            log_p[only_lo] = dist.logsf(h_lo_o)
-
-        if w_c is not None:
-            ll += np.dot(w_c, log_p)
-        else:
-            ll += np.sum(log_p)
-
+    ll, _ = _ll_and_grad_interval(
+        cd,
+        theta,
+        basis,
+        X,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
+        want_grad=False,
+    )
     return ll
 
 
@@ -1630,9 +1499,14 @@ def _ll_and_grad_none(
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     scaling: NDArray[np.float64] | None = None,
-) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for exact observations.  See :func:`_grad_none`
-    for the scaled-path formulae."""
+    want_grad: bool = True,
+) -> tuple[np.float64, NDArray[np.float64] | None]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for exact observations.
+
+    When ``want_grad`` is ``False`` only the log-likelihood is computed and the
+    second tuple element is ``None``; this is the path taken by the value-only
+    entry point :func:`_ll_none`.  The scaled-path formulae are documented on
+    :func:`_ll_none`."""
     p = basis.order + 1
     q_d = X.shape[1] if X is not None else 0
     q_s = scaling.shape[1] if scaling is not None else 0
@@ -1655,8 +1529,6 @@ def _ll_and_grad_none(
         h_raw = h_raw + offset
     h = np.clip(h_raw, -_H_CLIP, _H_CLIP)
 
-    ns = _neg_score(h, dist)
-    wns = ns if weights is None else weights * ns
     with np.errstate(invalid="ignore", divide="ignore"):
         # Smooth analytical extension for exponential at h<0 — see _ll_none.
         log_pdf_h = dist.logpdf(h)
@@ -1664,6 +1536,10 @@ def _ll_and_grad_none(
             ll = np.dot(weights, log_pdf_h + np.log(hp))
         else:
             ll = np.sum(log_pdf_h) + np.sum(np.log(hp))
+        if not want_grad:
+            return ll, None
+        ns = _neg_score(h, dist)
+        wns = ns if weights is None else weights * ns
         if f is not None:
             ihp0 = _inverse_hp(hp0, weights)
             grad_b = (B * f[:, None]).T @ wns - D.T @ ihp0
@@ -1674,7 +1550,7 @@ def _ll_and_grad_none(
     if X is not None and beta is not None:
         parts.append(X.T @ wns)
     if scaling is not None and gamma is not None and f is not None:
-        # f = exp(0.5 · X_s · γ) — factor 0.5 (see _ll_none / _grad_none).
+        # f = exp(0.5 · X_s · γ) — factor 0.5 (see _ll_none).
         if weights is None:
             term = ns * h0 * f - 1.0
         else:
@@ -1693,14 +1569,18 @@ def _ll_and_grad_right(
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     scaling: NDArray[np.float64] | None = None,
-) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data."""
+    want_grad: bool = True,
+) -> tuple[np.float64, NDArray[np.float64] | None]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for right-censored data.
+
+    With ``want_grad=False`` only ℓ is returned (gradient element ``None``);
+    this is the value-only path used by :func:`_ll_right`."""
     p = basis.order + 1
     q_d = X.shape[1] if X is not None else 0
     q_s = scaling.shape[1] if scaling is not None else 0
     theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64) if want_grad else None
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1718,9 +1598,11 @@ def _ll_and_grad_right(
             weights=w_e,
             offset=o_e,
             scaling=S_e,
+            want_grad=want_grad,
         )
         ll += ll_e
-        grad += grad_e
+        if grad is not None and grad_e is not None:
+            grad += grad_e
 
     mask_c = cd.is_right_censored_mask
     if mask_c.any():
@@ -1737,10 +1619,11 @@ def _ll_and_grad_right(
             ll += np.dot(w_c, logsf_c)
         else:
             ll += np.sum(logsf_c)
-        log_hazard = dist.logpdf(h_c) - logsf_c
-        hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
-        whazard = hazard if w_c is None else w_c * hazard
-        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, whazard, p, q_d)
+        if grad is not None:
+            log_hazard = dist.logpdf(h_c) - logsf_c
+            hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+            whazard = hazard if w_c is None else w_c * hazard
+            _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, whazard, p, q_d)
 
     return ll, grad
 
@@ -1754,14 +1637,18 @@ def _ll_and_grad_left(
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     scaling: NDArray[np.float64] | None = None,
-) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data."""
+    want_grad: bool = True,
+) -> tuple[np.float64, NDArray[np.float64] | None]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for left-censored data.
+
+    With ``want_grad=False`` only ℓ is returned (gradient element ``None``);
+    this is the value-only path used by :func:`_ll_left`."""
     p = basis.order + 1
     q_d = X.shape[1] if X is not None else 0
     q_s = scaling.shape[1] if scaling is not None else 0
     theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64) if want_grad else None
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1779,9 +1666,11 @@ def _ll_and_grad_left(
             weights=w_e,
             offset=o_e,
             scaling=S_e,
+            want_grad=want_grad,
         )
         ll += ll_e
-        grad += grad_e
+        if grad is not None and grad_e is not None:
+            grad += grad_e
 
     mask_c = cd.is_left_censored_mask
     if mask_c.any():
@@ -1799,9 +1688,10 @@ def _ll_and_grad_left(
             ll += np.dot(w_c, log_Fc)
         else:
             ll += np.sum(log_Fc)
-        inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
-        winv = inv_mills if w_c is None else w_c * inv_mills
-        _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
+        if grad is not None:
+            inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
+            winv = inv_mills if w_c is None else w_c * inv_mills
+            _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
 
     return ll, grad
 
@@ -1815,14 +1705,18 @@ def _ll_and_grad_interval(
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     scaling: NDArray[np.float64] | None = None,
-) -> tuple[np.float64, NDArray[np.float64]]:
-    """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data."""
+    want_grad: bool = True,
+) -> tuple[np.float64, NDArray[np.float64] | None]:
+    """Combined ℓ and ∂(-ℓ)/∂θ for interval-censored data.
+
+    With ``want_grad=False`` only ℓ is returned (gradient element ``None``);
+    this is the value-only path used by :func:`_ll_interval`."""
     p = basis.order + 1
     q_d = X.shape[1] if X is not None else 0
     q_s = scaling.shape[1] if scaling is not None else 0
     theta_b, beta, gamma = _split_theta_scaled(theta, p, q_d, q_s)
     ll = np.float64(0.0)
-    grad = np.zeros(p + q_d + q_s, dtype=np.float64)
+    grad = np.zeros(p + q_d + q_s, dtype=np.float64) if want_grad else None
 
     mask_e = cd.is_exact_mask
     if mask_e.any():
@@ -1840,9 +1734,11 @@ def _ll_and_grad_interval(
             weights=w_e,
             offset=o_e,
             scaling=S_e,
+            want_grad=want_grad,
         )
         ll += ll_e
-        grad += grad_e
+        if grad is not None and grad_e is not None:
+            grad += grad_e
 
     mask_c = ~cd.is_exact_mask
     if mask_c.any():
@@ -1874,15 +1770,18 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_b, log_p_b)
             else:
                 ll += np.sum(log_p_b)
-            w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
-            if ww_b is not None:
-                w_hi_b = ww_b * w_hi_b
-                w_lo_b = ww_b * w_lo_b
-            with np.errstate(invalid="ignore"):
-                _add_grad_censored(
-                    grad, B_hi_b, X_b, S_b, f_b, h0_hi_b, -w_hi_b, p, q_d
-                )
-                _add_grad_censored(grad, B_lo_b, X_b, S_b, f_b, h0_lo_b, w_lo_b, p, q_d)
+            if grad is not None:
+                w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
+                if ww_b is not None:
+                    w_hi_b = ww_b * w_hi_b
+                    w_lo_b = ww_b * w_lo_b
+                with np.errstate(invalid="ignore"):
+                    _add_grad_censored(
+                        grad, B_hi_b, X_b, S_b, f_b, h0_hi_b, -w_hi_b, p, q_d
+                    )
+                    _add_grad_censored(
+                        grad, B_lo_b, X_b, S_b, f_b, h0_lo_b, w_lo_b, p, q_d
+                    )
 
         if only_hi.any():
             X_o = X_c[only_hi] if X_c is not None else None
@@ -1898,10 +1797,15 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_o, log_Fc)
             else:
                 ll += np.sum(log_Fc)
-            inv_mills = np.exp(np.minimum(dist.logpdf(h_hi_o) - log_Fc, _LOG_FLOAT_MAX))
-            if ww_o is not None:
-                inv_mills = ww_o * inv_mills
-            _add_grad_censored(grad, B_hi_o, X_o, S_o, f_o, h0_hi_o, -inv_mills, p, q_d)
+            if grad is not None:
+                inv_mills = np.exp(
+                    np.minimum(dist.logpdf(h_hi_o) - log_Fc, _LOG_FLOAT_MAX)
+                )
+                if ww_o is not None:
+                    inv_mills = ww_o * inv_mills
+                _add_grad_censored(
+                    grad, B_hi_o, X_o, S_o, f_o, h0_hi_o, -inv_mills, p, q_d
+                )
 
         if only_lo.any():
             X_o = X_c[only_lo] if X_c is not None else None
@@ -1916,11 +1820,14 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_o, logsf_o)
             else:
                 ll += np.sum(logsf_o)
-            log_hazard = dist.logpdf(h_lo_o) - logsf_o
-            hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
-            if ww_o is not None:
-                hazard = ww_o * hazard
-            _add_grad_censored(grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d)
+            if grad is not None:
+                log_hazard = dist.logpdf(h_lo_o) - logsf_o
+                hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
+                if ww_o is not None:
+                    hazard = ww_o * hazard
+                _add_grad_censored(
+                    grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d
+                )
 
     return ll, grad
 
@@ -2887,16 +2794,16 @@ def _negative_log_likelihood_from_dist(
                     "support, or extreme h values despite clipping."
                 )
             return float(-result)
-        ll, grad = _ll_and_grad_interaction_none(
+        ll_i, grad_i = _ll_and_grad_interaction_none(
             y_arr, theta, basis, X, dist=dist, weights=weights, offset=offset
         )
-        if not np.isfinite(ll):
+        if not np.isfinite(ll_i):
             raise InfeasibleParameterError(
-                f"log_likelihood returned {ll}.  Possible causes: theta "
+                f"log_likelihood returned {ll_i}.  Possible causes: theta "
                 "violates monotonicity (h'(y) ≤ 0), observations outside basis "
                 "support, or extreme h values despite clipping."
             )
-        return float(-ll), grad
+        return float(-ll_i), grad_i
 
     if not gradient:
         return -_log_likelihood_from_dist(
@@ -2968,6 +2875,12 @@ def _negative_log_likelihood_from_dist(
             weights=weights,
             offset=offset,
             scaling=scaling,
+        )
+
+    if grad is None:  # internal invariant: gradient requested above (want_grad=True)
+        raise RuntimeError(
+            "internal error: combined kernel returned no gradient on the "
+            "gradient=True path."
         )
 
     if isinstance(y, CensoredData) and _has_truncation(y):
