@@ -205,6 +205,196 @@ class TestExperimentalWarning:
             model.fit(y, X)
 
 
+def _fit_intercept_reduction_pair(
+    base_distribution: str = "normal",
+) -> tuple[MLT, ConditionalTransformationModel]:
+    """Fit a scaled shift ``MLT`` (no covariates) and the equivalent scaled
+    ``InteractionBasis`` with an ``InterceptBasis`` x-basis on the same data.
+
+    The interacting baseline collapses to ``h_0(y)`` when ``q = 1``, so the
+    two models describe the same distribution and every ``predict`` target
+    of the interaction model must match the (independently implemented)
+    scaled-shift predict path.
+    """
+    rng = np.random.default_rng(7)
+    n, order, support = 250, 4, (0.0, 5.0)
+    y = rng.uniform(0.1, 4.9, size=n)
+    x_s = rng.normal(size=(n, 1))
+    cfg = OptimizerConfig(solver="auglag", random_state=0)
+
+    shift = MLT(
+        order=order,
+        support=support,
+        scaling=x_s,
+        base_distribution=base_distribution,
+        optimizer_config=cfg,
+    )
+    shift.fit(y)
+
+    ib = InteractionBasis(
+        y_basis=BernsteinBasis(order=order, support=support),
+        x_basis=InterceptBasis(support=(0.0, 1.0)),
+    )
+    inter = ConditionalTransformationModel(
+        basis=ib,
+        scaling=x_s,
+        base_distribution=base_distribution,
+        optimizer_config=cfg,
+    )
+    with pytest.warns(UserWarning, match="experimental"):
+        inter.fit(y, X=np.full((n, 1), 0.5))
+    return shift, inter
+
+
+@pytest.fixture(scope="module")
+def reduction_pair() -> tuple[MLT, ConditionalTransformationModel]:
+    return _fit_intercept_reduction_pair()
+
+
+# Prediction grid: response values spanning the support, paired row-wise with
+# non-trivial scaling-design values so f = exp(0.5·x_s·γ) varies per row.
+_Y_GRID = np.linspace(0.3, 4.7, 9)
+_XS_GRID = np.linspace(-1.5, 1.5, 9)[:, None]
+
+
+class TestScaledInteractionPredict:
+    @pytest.mark.parametrize(
+        "what",
+        [
+            "trafo",
+            "distribution",
+            "logdistribution",
+            "survivor",
+            "logsurvivor",
+            "density",
+            "logdensity",
+            "hazard",
+            "loghazard",
+            "cumhazard",
+            "logcumhazard",
+            "odds",
+            "logodds",
+        ],
+    )
+    def test_matches_scaled_shift_reduction(
+        self,
+        reduction_pair: tuple[MLT, ConditionalTransformationModel],
+        what: str,
+    ) -> None:
+        """With an InterceptBasis x-basis, predict(X_scale_new=...) on the
+        scaled interaction model equals the scaled-shift prediction."""
+        shift, inter = reduction_pair
+        m = _Y_GRID.size
+        expected = shift.predict(_Y_GRID, X_scale_new=_XS_GRID, what=what)
+        got = inter.predict(
+            _Y_GRID, X_new=np.full((m, 1), 0.5), X_scale_new=_XS_GRID, what=what
+        )
+        assert_allclose(got, expected, rtol=1e-4, atol=1e-6)
+
+    def test_quantile_matches_scaled_shift_reduction(
+        self, reduction_pair: tuple[MLT, ConditionalTransformationModel]
+    ) -> None:
+        """Quantile inversion divides the target by f_i, so the interaction
+        quantile must equal the scaled-shift quantile under the reduction."""
+        shift, inter = reduction_pair
+        probs = np.linspace(0.1, 0.9, 9)
+        expected = shift.predict(probs, X_scale_new=_XS_GRID, what="quantile")
+        got = inter.predict(
+            probs,
+            X_new=np.full((probs.size, 1), 0.5),
+            X_scale_new=_XS_GRID,
+            what="quantile",
+        )
+        assert_allclose(got, expected, rtol=1e-4, atol=1e-6)
+
+
+_LINKS = ["normal", "logistic", "min_extreme_value"]
+
+
+@pytest.fixture(scope="module", params=_LINKS)
+def scaled_bs_bs_model(
+    request: pytest.FixtureRequest,
+) -> ConditionalTransformationModel:
+    """Bernstein-y ⊗ Bernstein-x scaled fit, one per base distribution."""
+    ib, y, X, x_s = _scaled_interaction_problem(n=200, seed=42)
+    model = ConditionalTransformationModel(
+        basis=ib,
+        scaling=x_s,
+        base_distribution=request.param,
+        optimizer_config=OptimizerConfig(solver="auglag", random_state=0),
+    )
+    with pytest.warns(UserWarning, match="experimental"):
+        model.fit(y, X)
+    return model
+
+
+class TestScaledInteractionPredictInteracting:
+    @pytest.mark.parametrize("x_val, xs_val", [(0.2, -1.2), (0.5, 0.0), (0.8, 1.5)])
+    def test_quantile_distribution_round_trip(
+        self,
+        scaled_bs_bs_model: ConditionalTransformationModel,
+        x_val: float,
+        xs_val: float,
+    ) -> None:
+        """F(Q(p | x, x_s) | x, x_s) = p with a non-trivial X_scale_new."""
+        probs = np.linspace(0.1, 0.9, 9)
+        m = probs.size
+        X_new = np.full((m, 1), x_val)
+        X_scale_new = np.full((m, 1), xs_val)
+        q = scaled_bs_bs_model.predict(
+            probs, X_new=X_new, X_scale_new=X_scale_new, what="quantile"
+        )
+        p_back = scaled_bs_bs_model.predict(
+            q, X_new=X_new, X_scale_new=X_scale_new, what="distribution"
+        )
+        assert_allclose(p_back, probs, atol=1e-6)
+
+    @pytest.mark.parametrize("x_val, xs_val", [(0.2, -1.2), (0.8, 1.5)])
+    def test_density_integrates_to_cdf_mass(
+        self,
+        scaled_bs_bs_model: ConditionalTransformationModel,
+        x_val: float,
+        xs_val: float,
+    ) -> None:
+        """∫_a^b f(y | x, x_s) dy = F(b | x, x_s) − F(a | x, x_s).
+
+        The bounded Bernstein support truncates the base distribution, so the
+        integral is compared to the CDF mass over the support rather than to
+        1: heavy-tailed links leave a few percent of mass outside ``[a, b]``
+        when f = exp(0.5·x_s·γ) < 1 flattens h.  Equality pins the density
+        as the exact y-derivative of the scaled CDF (h' carries f too)."""
+        a, b = scaled_bs_bs_model.basis.support
+        grid = np.linspace(a, b, 4001)
+        m = grid.size
+        X_new = np.full((m, 1), x_val)
+        X_scale_new = np.full((m, 1), xs_val)
+        dens = scaled_bs_bs_model.predict(
+            grid, X_new=X_new, X_scale_new=X_scale_new, what="density"
+        )
+        cdf = scaled_bs_bs_model.predict(
+            grid, X_new=X_new, X_scale_new=X_scale_new, what="distribution"
+        )
+        mass = cdf[-1] - cdf[0]
+        assert_allclose(np.trapezoid(dens, grid), mass, rtol=1e-5)
+
+    def test_mismatched_x_scale_columns_raise(
+        self, scaled_bs_bs_model: ConditionalTransformationModel
+    ) -> None:
+        y_new = np.array([1.0, 2.0])
+        with pytest.raises(ValueError, match="X_scale_new has 2 columns"):
+            scaled_bs_bs_model.predict(
+                y_new, X_new=np.full((2, 1), 0.5), X_scale_new=np.zeros((2, 2))
+            )
+
+    def test_missing_x_scale_raises(
+        self, scaled_bs_bs_model: ConditionalTransformationModel
+    ) -> None:
+        with pytest.raises(ValueError, match="X_scale_new must be provided"):
+            scaled_bs_bs_model.predict(
+                np.array([1.0]), X_new=np.full((1, 1), 0.5), what="quantile"
+            )
+
+
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
 
 
