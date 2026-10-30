@@ -1823,6 +1823,8 @@ cat(sprintf("profile_ci_baseline: p=%d rows written\n",
 #   *_y_support.txt  — "a b" on one line
 #   *_theta.txt      — full coef(fit): [vec(Θ) (mlt order) | γ], length p*q+q_s
 #   *_gamma.txt      — scale coefficients only, length q_s
+#   *_gamma_vcov.txt — γ block of vcov(fit), (q_s, q_s) flattened row-major
+#                      (issue #105: Wald SEs for γ on the interaction path)
 #   *_loglik.txt     — scalar logLik
 #
 # NOTE: this block requires mlt >= 1.7 (the version that added ``scaling`` /
@@ -1863,6 +1865,10 @@ ll_st    <- as.numeric(logLik(fit_st))
 # identifiable by the scaling-basis column name(s).
 scl_names_st <- colnames(model.matrix(b_s_st, data = df_st))
 gamma_st <- theta_st[scl_names_st]
+# γγ block of the inverse observed information.  The fixture lands at an
+# interior MLE, so vcov.mlt reduces to solve(Hessian) — the quantity mltpy's
+# vcov() returns from the finite-difference interaction Hessian.
+gamma_vcov_st <- vcov(fit_st)[scl_names_st, scl_names_st, drop = FALSE]
 
 writeLines(format(y_st, digits = 15),
            con = file.path(out_dir, "stram_bs_bs_normal_y_train.txt"))
@@ -1876,6 +1882,8 @@ writeLines(format(theta_st, digits = 15),
            con = file.path(out_dir, "stram_bs_bs_normal_theta.txt"))
 writeLines(format(as.numeric(gamma_st), digits = 15),
            con = file.path(out_dir, "stram_bs_bs_normal_gamma.txt"))
+writeLines(format(flatten_row_major(gamma_vcov_st), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_gamma_vcov.txt"))
 writeLines(format(ll_st, digits = 15),
            con = file.path(out_dir, "stram_bs_bs_normal_loglik.txt"))
 

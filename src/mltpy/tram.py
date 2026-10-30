@@ -120,10 +120,12 @@ class _TramModel(MLT):
 
         When covariates are present the output includes a Wald coefficient
         table for the shift terms (``beta``), matching R ``tram::summary``:
-        ``Estimate``, ``Std. Error``, ``z value``, ``Pr(>|z|)``.  Baseline
-        Bernstein coefficients ``theta_b`` are treated as nuisance and not
-        tabulated — they are constrained (monotone) and the corresponding
-        Wald z-tests are not meaningful.
+        ``Estimate``, ``Std. Error``, ``z value``, ``Pr(>|z|)``.  Models
+        fitted with ``scaling=`` add a *Scaling coefficients* table for ``γ``
+        (on :class:`~mltpy.basis.InteractionBasis` models too, where it is
+        the only table).  Baseline coefficients ``theta_b`` (or ``Θ``) are
+        treated as nuisance and not tabulated — they are constrained
+        (monotone) and the corresponding Wald z-tests are not meaningful.
 
         Returns
         -------
@@ -159,19 +161,24 @@ class _TramModel(MLT):
     def _coef_table(self) -> str | None:
         """Format Wald coefficient tables for the ``β`` (and ``γ``) blocks.
 
-        Returns ``None`` when the fitted model has no covariates, when the
-        model uses an :class:`~mltpy.basis.InteractionBasis` (the tensor
-        product has no flat ``beta`` block to tabulate), or if the Hessian
-        is singular so that standard errors cannot be computed.  When the
-        model was fitted with ``scaling=`` (γ block present), the scaling
-        coefficients are tabulated below the shift coefficients under a
-        ``Scaling coefficients`` heading.
+        Returns ``None`` when the fitted model has neither shift nor scaling
+        coefficients, and a placeholder line if the Hessian is singular so
+        that standard errors cannot be computed.  When the model was fitted
+        with ``scaling=`` (γ block present), the scaling coefficients are
+        tabulated below the shift coefficients under a ``Scaling
+        coefficients`` heading.  An :class:`~mltpy.basis.InteractionBasis`
+        model has no flat ``beta`` block (layout ``[vec_C(Θ) | γ]``, ADR
+        0003), so only its ``γ`` block — if any — is tabulated; ``Θ``, like
+        ``theta_b``, is constrained nuisance and stays untabulated.
         """
         if self.theta_ is None:
             return None
         if isinstance(self.basis, InteractionBasis):
-            return None
-        _, beta, gamma, p, q_d, q_s = self._split_fitted_theta()
+            beta, p, q_d = None, 0, 0
+            q_s = 0 if self.scaling is None else self.scaling.shape[1]
+            gamma = self.gamma_ if q_s > 0 else None
+        else:
+            _, beta, gamma, p, q_d, q_s = self._split_fitted_theta()
         if q_d <= 0 and q_s <= 0:
             return None
 
@@ -189,7 +196,8 @@ class _TramModel(MLT):
                 f"X{j + 1}" for j in range(q_s)
             ]
             sections.append("Scaling coefficients:")
-            sections.append(_format_wald_table(s_names, gamma, se[p + q_d :]))
+            # γ is the trailing q_s block on both layouts.
+            sections.append(_format_wald_table(s_names, gamma, se[-q_s:]))
         return "\n".join(sections)
 
     def plot(
