@@ -1,0 +1,43 @@
+{
+  "R": "R version 4.6.1 (2026-06-24)",
+  "mlt": "1.8.4",
+  "basefun": "1.2.6",
+  "cases": {
+    "ia_R_normal_3x3": {
+      "reference": "R analytic",
+      "same_theta": true,
+      "log_likelihood_R": -260.82363326121867,
+      "max_absolute_H_error": 5.3290705182007514e-15,
+      "relative_max_H_error": 3.4850942144687249e-16,
+      "min_eigenvalue_R": 0.22474520216766672,
+      "analytic_allclose_rtol_1e_6_atol_1e_10": true,
+      "relative_max_vcov_error": 2.7367398218185717e-15,
+      "max_relative_SE_error": 2.2204460492503131e-15,
+      "required_analytic_check_passed": true
+    },
+    "ia_R_logistic_3x3": {
+      "reference": "R analytic",
+      "same_theta": true,
+      "log_likelihood_R": -263.55681227822259,
+      "max_absolute_H_error": 1.3322676295501878e-15,
+      "relative_max_H_error": 2.4319882461660769e-16,
+      "min_eigenvalue_R": 0.055568682187657203,
+      "analytic_allclose_rtol_1e_6_atol_1e_10": true,
+      "relative_max_vcov_error": 1.5724246885121945e-14,
+      "max_relative_SE_error": 8.659739592076221e-15,
+      "required_analytic_check_passed": true
+    },
+    "ia_scaled_R_stram_3x3+1": {
+      "reference": "R optimHess of analytic gradient",
+      "same_theta": true,
+      "log_likelihood_R": -249.60419317804167,
+      "max_absolute_H_error": 0.00010596803741691474,
+      "relative_max_H_error": 6.2282268094396919e-07,
+      "min_eigenvalue_R": 0.14833144025292003,
+      "analytic_allclose_rtol_1e_6_atol_1e_10": true,
+      "relative_max_vcov_error": 1.8346468070144457e-08,
+      "max_relative_SE_error": 3.1013870271934252e-07,
+      "required_analytic_check_passed": true
+    }
+  }
+}

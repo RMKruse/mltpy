@@ -1,0 +1,4379 @@
+{
+  "commit": "d2e252d538963d5714e02dbbc71f81e80c5a268b",
+  "python": "3.13.13 (main, May 10 2026, 19:20:37) [Clang 22.1.3 ]",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.5.4",
+  "scipy": "1.18.1",
+  "threads": {
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": null
+  },
+  "reps": 5,
+  "cases": {
+    "ia_R_normal_3x3": {
+      "n": 300,
+      "m": 9,
+      "condition_analytic": 163.21377588584602,
+      "min_eigenvalue_analytic": 0.22474520216766583,
+      "max_abs_h": 2.6086520920516936,
+      "baseline_validation": {
+        "final": {
+          "nll": 260.8236332612188,
+          "grad_inf": 6.6348610872069e-07,
+          "stationarity_inf": 6.6348610872069e-07,
+          "min_slack": 2.153611160935352,
+          "n_active": 0,
+          "stationarity_inf_per_obs": 2.2116203624023002e-09
+        },
+        "slsqp": {
+          "seconds": 0.0009007500193547457,
+          "success": true,
+          "ll": -260.82363326121856,
+          "ll_auglag_minus_slsqp": -2.2737367544323206e-13,
+          "max_abs_dtheta": 7.156841768107824e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0005749579868279397,
+          "max_abs_diff": 0.0004033088973880439,
+          "rel_diff": 2.637578124988383e-05,
+          "min_eig_fd": 0.22453736406478797,
+          "cond_fd": 163.36466110233258,
+          "max_rel_se_diff": 0.000397399594533665
+        },
+        "r_reference": {
+          "max_abs_dTheta_vs_R": 8.356649684349016e-05,
+          "ll_mltpy": -260.8236332612188,
+          "ll_R": -260.823633267136,
+          "abs_dll_vs_R": 5.917229373153532e-09,
+          "test_tolerance": "Theta rtol=atol=1e-4; ll rtol=1e-6"
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 2.6375515498301842e-05,
+          "min_eigenvalue": 0.22453736406478797,
+          "relative_max_vcov_error": 0.0007503595964556454,
+          "max_relative_SE_error": 0.00039739946619432587,
+          "kernel_ms": [
+            1.3868340174667537,
+            1.3949999993201345,
+            1.5075829869601876,
+            1.5163749922066927,
+            1.5075000119395554
+          ],
+          "fits": [
+            {
+              "ms": 4.82945900876075,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.657666984712705,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.793833009898663,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.836042004171759,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.621291998773813,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.669916001148522,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 4.669916001148522,
+          "peak_MiB": 0.12000846862792969
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 2.278252555921065e-11,
+          "min_eigenvalue": 0.2247452022376524,
+          "relative_max_vcov_error": 2.6539678461023527e-10,
+          "max_relative_SE_error": 1.3269840781759967e-10,
+          "kernel_ms": [
+            0.26470900047570467,
+            0.2288329997099936,
+            0.27454100199975073,
+            0.2621669846121222,
+            0.24704099632799625
+          ],
+          "fits": [
+            {
+              "ms": 2.2414170089177787,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.0810409914702177,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.1025000023655593,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.1853329963050783,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.1402080019470304,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.0767500100191683,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 2.1025000023655593,
+          "peak_MiB": 0.119842529296875
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.22474520216766583,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.03433300298638642,
+            0.023042026441544294,
+            0.032584008295089006,
+            0.023625005269423127,
+            0.02012500772252679
+          ],
+          "fits": [
+            {
+              "ms": 1.713083009235561,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 1.6406250069849193,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 1.6847089864313602,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 1.845166989369318,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 1.597374997800216,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 1.6236250230576843,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 260.8236332612188,
+                "grad_inf": 6.6348610872069e-07,
+                "stationarity_inf": 6.6348610872069e-07,
+                "min_slack": 2.153611160935352,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 2.2116203624023002e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 1.6406250069849193,
+          "peak_MiB": 0.11897850036621094
+        }
+      }
+    },
+    "ia_R_logistic_3x3": {
+      "n": 300,
+      "m": 9,
+      "condition_analytic": 223.50635382280402,
+      "min_eigenvalue_analytic": 0.05556868218765654,
+      "max_abs_h": 4.711532714371078,
+      "baseline_validation": {
+        "final": {
+          "nll": 263.5568122782224,
+          "grad_inf": 1.760217998025837e-07,
+          "stationarity_inf": 1.760217998025837e-07,
+          "min_slack": 4.20134550041717,
+          "n_active": 0,
+          "stationarity_inf_per_obs": 5.86739332675279e-10
+        },
+        "slsqp": {
+          "seconds": 0.0012689160066656768,
+          "success": true,
+          "ll": -263.55681227822254,
+          "ll_auglag_minus_slsqp": 5.684341886080802e-14,
+          "max_abs_dtheta": 1.0301344000041013e-06
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0006046660128049552,
+          "max_abs_diff": 0.0003319483354857766,
+          "rel_diff": 6.0593482490272386e-05,
+          "min_eig_fd": 0.055726616976806476,
+          "cond_fd": 222.88053628469976,
+          "max_rel_se_diff": 0.0017840781878275536
+        },
+        "r_reference": {
+          "max_abs_dTheta_vs_R": 0.00017097823707423743,
+          "ll_mltpy": -263.5568122782225,
+          "ll_R": -263.556812288929,
+          "abs_dll_vs_R": 1.070651478585205e-08,
+          "test_tolerance": "Theta rtol=atol=1e-4; ll rtol=1e-6"
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 6.05955118726386e-05,
+          "min_eigenvalue": 0.055726616976806476,
+          "relative_max_vcov_error": 0.003433561446769195,
+          "max_relative_SE_error": 0.001784078081962459,
+          "kernel_ms": [
+            1.8757919897325337,
+            2.016875019762665,
+            2.040915976976976,
+            1.8214170122519135,
+            1.955333020305261
+          ],
+          "fits": [
+            {
+              "ms": 6.861958012450486,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.811291998019442,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.135459018172696,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.079000002704561,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.131499995011836,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.137709006201476,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 7.131499995011836,
+          "peak_MiB": 0.12264823913574219
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 2.244380619543082e-11,
+          "min_eigenvalue": 0.05556868219667417,
+          "relative_max_vcov_error": 6.090957499422822e-10,
+          "max_relative_SE_error": 3.7164926691701794e-10,
+          "kernel_ms": [
+            0.3267079882789403,
+            0.3699999942909926,
+            0.33708399860188365,
+            0.30754198087379336,
+            0.3400830028112978
+          ],
+          "fits": [
+            {
+              "ms": 3.8548750162590295,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.7965830124448985,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.6006250011269003,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.545083978679031,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.26045899419114,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.5386669915169477,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 3.545083978679031,
+          "peak_MiB": 0.12175273895263672
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.05556868218765654,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.03170900163240731,
+            0.039083999581635,
+            0.025332992663607,
+            0.024500011932104826,
+            0.03391699283383787
+          ],
+          "fits": [
+            {
+              "ms": 3.10120900394395,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.9513330082409084,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.9635840037371963,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.982749982038513,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.0422919953707606,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.8422089817468077,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 263.5568122782224,
+                "grad_inf": 1.760217998025837e-07,
+                "stationarity_inf": 1.760217998025837e-07,
+                "min_slack": 4.20134550041717,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 5.86739332675279e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 2.9635840037371963,
+          "peak_MiB": 0.12111568450927734
+        }
+      }
+    },
+    "ia_scaled_R_stram_3x3+1": {
+      "n": 300,
+      "m": 10,
+      "condition_analytic": 1163.5781552717885,
+      "min_eigenvalue_analytic": 0.14833143613815547,
+      "max_abs_h": 2.651039962579527,
+      "baseline_validation": {
+        "final": {
+          "nll": 249.60419317804158,
+          "grad_inf": 0.3576189273272732,
+          "stationarity_inf": 5.944230778709425e-07,
+          "min_slack": -1.2373556179667844e-08,
+          "n_active": 1,
+          "stationarity_inf_per_obs": 1.981410259569808e-09
+        },
+        "slsqp": {
+          "seconds": 0.0012374170182738453,
+          "success": true,
+          "ll": -249.60419318246664,
+          "ll_auglag_minus_slsqp": 4.425032784638461e-09,
+          "max_abs_dtheta": 1.6657378409945522e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0008288339886348695,
+          "max_abs_diff": 0.00023959066397694073,
+          "rel_diff": 1.4081857620106186e-06,
+          "min_eig_fd": 0.14822647180467757,
+          "cond_fd": 1164.4016278763143,
+          "max_rel_se_diff": 0.0003735533812929681
+        },
+        "r_reference": {
+          "ll_mltpy": -249.6041931780416,
+          "ll_R": -249.604193182467,
+          "abs_dll_vs_R": 4.4253738451516256e-09,
+          "abs_dgamma_vs_R": 6.520273723720216e-09
+        }
+      },
+      "warnings": [
+        "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+      ],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 1.4081844539980163e-06,
+          "min_eigenvalue": 0.14822647180467757,
+          "relative_max_vcov_error": 0.0005679980766068289,
+          "max_relative_SE_error": 0.00037355346313283633,
+          "kernel_ms": [
+            2.4310410080943257,
+            2.502959017874673,
+            2.464332996169105,
+            2.4259999918285757,
+            2.447749982820824
+          ],
+          "fits": [
+            {
+              "ms": 8.49533302243799,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 8.048249990679324,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 8.391249983105808,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 8.249792008427903,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 8.266624994575977,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 8.390707982471213,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 8.266624994575977,
+          "peak_MiB": 0.16546344757080078
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 6.27605829696601e-11,
+          "min_eigenvalue": 0.1483314360836376,
+          "relative_max_vcov_error": 5.026315173511547e-10,
+          "max_relative_SE_error": 2.5131563496927356e-10,
+          "kernel_ms": [
+            0.4367500077933073,
+            0.4478750051930547,
+            0.43583300430327654,
+            0.4384579951874912,
+            0.4319580039009452
+          ],
+          "fits": [
+            {
+              "ms": 6.178665993502364,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.318792002275586,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.254374980926514,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 5.9729999920818955,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.440833996748552,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.316874991171062,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 6.316874991171062,
+          "peak_MiB": 0.14516353607177734
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.14833143613815547,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.03962501068599522,
+            0.04029099363833666,
+            0.038583006244152784,
+            0.03350002225488424,
+            0.04137499490752816
+          ],
+          "fits": [
+            {
+              "ms": 6.138750002719462,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 5.743416986661032,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 5.596041999524459,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 5.932000000029802,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.071791023714468,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 6.160582997836173,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 249.60419317804158,
+                "grad_inf": 0.3576189273272732,
+                "stationarity_inf": 5.944230778709425e-07,
+                "min_slack": -1.2373556179667844e-08,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 1.981410259569808e-09
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 5.932000000029802,
+          "peak_MiB": 0.14498043060302734
+        }
+      }
+    },
+    "ia_bs3x1_m8_n250": {
+      "n": 250,
+      "m": 8,
+      "condition_analytic": 470.5924008519191,
+      "min_eigenvalue_analytic": 0.07791476682302532,
+      "max_abs_h": 3.0142587796143454,
+      "baseline_validation": {
+        "final": {
+          "nll": 351.618738956705,
+          "grad_inf": 0.059697901425407096,
+          "stationarity_inf": 7.822763805620525e-07,
+          "min_slack": 3.6387954871486272e-09,
+          "n_active": 1,
+          "stationarity_inf_per_obs": 3.12910552224821e-09
+        },
+        "slsqp": {
+          "seconds": 0.0007728330092504621,
+          "success": true,
+          "ll": -351.61873895648756,
+          "ll_auglag_minus_slsqp": -2.1742607714259066e-10,
+          "max_abs_dtheta": 5.173824918491832e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0005231249961070716,
+          "max_abs_diff": 0.00035404199572042216,
+          "rel_diff": 2.907431598571579e-05,
+          "min_eig_fd": 0.0779515411180231,
+          "cond_fd": 470.3737371631096,
+          "max_rel_se_diff": 0.0006620967631465469
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 2.907445414433321e-05,
+          "min_eigenvalue": 0.0779515411180231,
+          "relative_max_vcov_error": 0.0006828893955460882,
+          "max_relative_SE_error": 0.0006620969716756298,
+          "kernel_ms": [
+            1.1274169955868274,
+            1.1227090144529939,
+            1.1176659900229424,
+            1.090624980861321,
+            1.1320830089971423
+          ],
+          "fits": [
+            {
+              "ms": 4.598208994138986,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.830125020816922,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.504875018028542,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.535957996267825,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.46795902098529,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 4.36962497769855,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 4.504875018028542,
+          "peak_MiB": 0.09012889862060547
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 1.4312289151483833e-11,
+          "min_eigenvalue": 0.0779147667803663,
+          "relative_max_vcov_error": 6.48013372477431e-10,
+          "max_relative_SE_error": 3.606046572457444e-10,
+          "kernel_ms": [
+            0.2161670126952231,
+            0.2094169904012233,
+            0.2160410222131759,
+            0.20991699420847,
+            0.21374999778345227
+          ],
+          "fits": [
+            {
+              "ms": 3.543625003658235,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.518332989187911,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.495124983601272,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.625374985858798,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.5313749976921827,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.3066250034607947,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 3.518332989187911,
+          "peak_MiB": 0.09031200408935547
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.07791476682302532,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.03158301115036011,
+            0.02008400042541325,
+            0.01854199217632413,
+            0.021124986233189702,
+            0.017874990589916706
+          ],
+          "fits": [
+            {
+              "ms": 3.0975830159150064,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.2732500112615526,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.1797499977983534,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.145541006233543,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.346041979966685,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.3109169744420797,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 351.618738956705,
+                "grad_inf": 0.059697901425407096,
+                "stationarity_inf": 7.822763805620525e-07,
+                "min_slack": 3.6387954871486272e-09,
+                "n_active": 1,
+                "stationarity_inf_per_obs": 3.12910552224821e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 3.2732500112615526,
+          "peak_MiB": 0.09014415740966797
+        }
+      }
+    },
+    "ia_bs3x1_m8_n1000": {
+      "n": 1000,
+      "m": 8,
+      "condition_analytic": 541.7901312571287,
+      "min_eigenvalue_analytic": 0.2705982481505886,
+      "max_abs_h": 3.4348567453421928,
+      "baseline_validation": {
+        "final": {
+          "nll": 1408.9571920037813,
+          "grad_inf": 4.2770988528673115e-07,
+          "stationarity_inf": 4.2770988528673115e-07,
+          "min_slack": 1.5940651908527337,
+          "n_active": 0,
+          "stationarity_inf_per_obs": 4.2770988528673117e-10
+        },
+        "slsqp": {
+          "seconds": 0.0010955000179819763,
+          "success": true,
+          "ll": -1408.9571920037815,
+          "ll_auglag_minus_slsqp": 2.2737367544323206e-13,
+          "max_abs_dtheta": 4.857459647844564e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0010117499914485961,
+          "max_abs_diff": 0.0011179073666838235,
+          "rel_diff": 2.2948533659041055e-05,
+          "min_eig_fd": 0.2707279787063402,
+          "cond_fd": 541.5294613335973,
+          "max_rel_se_diff": 0.0009867447451412659
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 2.2948337417103028e-05,
+          "min_eigenvalue": 0.2707279787063402,
+          "relative_max_vcov_error": 0.0014780538709257825,
+          "max_relative_SE_error": 0.0009867455906914513,
+          "kernel_ms": [
+            1.9480829942040145,
+            1.9036669982597232,
+            1.8932090024463832,
+            1.8986670183949172,
+            1.9416249997448176
+          ],
+          "fits": [
+            {
+              "ms": 6.367499998304993,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.187416991451755,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.137832999229431,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.183958001201972,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.188625004142523,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 6.215250003151596,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 6.187416991451755,
+          "peak_MiB": 0.34209346771240234
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 2.780278677201441e-11,
+          "min_eigenvalue": 0.27059824870432264,
+          "relative_max_vcov_error": 1.8336417606967728e-09,
+          "max_relative_SE_error": 9.801847111745587e-10,
+          "kernel_ms": [
+            0.3575420123524964,
+            0.35341602051630616,
+            0.3429999924264848,
+            0.3445000038482249,
+            0.3572919813450426
+          ],
+          "fits": [
+            {
+              "ms": 3.150500007905066,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.0567079957108945,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.1785840110387653,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.0932920053601265,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.0662909848615527,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 3.195875004166737,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 3.0932920053601265,
+          "peak_MiB": 0.34259700775146484
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.2705982481505886,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.04020900814794004,
+            0.03366702003404498,
+            0.028916983865201473,
+            0.03162497887387872,
+            0.041417020838707685
+          ],
+          "fits": [
+            {
+              "ms": 2.5027920200955123,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.603500004624948,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.446416998282075,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.4322919780388474,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.4316670023836195,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 2.417874988168478,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1408.9571920037813,
+                "grad_inf": 4.2770988528673115e-07,
+                "stationarity_inf": 4.2770988528673115e-07,
+                "min_slack": 1.5940651908527337,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.2770988528673117e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 2.4322919780388474,
+          "peak_MiB": 0.34209346771240234
+        }
+      }
+    },
+    "ia_bs3x1_m8_n4000": {
+      "n": 4000,
+      "m": 8,
+      "condition_analytic": 717.4634017660501,
+      "min_eigenvalue_analytic": 0.8170261226364431,
+      "max_abs_h": 3.9399264344475524,
+      "baseline_validation": {
+        "final": {
+          "nll": 5623.190255024489,
+          "grad_inf": 2.6690798335948784e-06,
+          "stationarity_inf": 2.6690798335948784e-06,
+          "min_slack": 1.6478195878077526,
+          "n_active": 0,
+          "stationarity_inf_per_obs": 6.672699583987196e-10
+        },
+        "slsqp": {
+          "seconds": 0.0024245419772341847,
+          "success": true,
+          "ll": -5623.190255024489,
+          "ll_auglag_minus_slsqp": -9.094947017729282e-13,
+          "max_abs_dtheta": 1.938086404695838e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.003337959002237767,
+          "max_abs_diff": 0.004832030242596375,
+          "rel_diff": 2.4196167311852446e-05,
+          "min_eig_fd": 0.8176234218450965,
+          "cond_fd": 716.9380495301647,
+          "max_rel_se_diff": 0.000403400073950011
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 2.4196237934103928e-05,
+          "min_eigenvalue": 0.8176234218450965,
+          "relative_max_vcov_error": 0.0007944294170343395,
+          "max_relative_SE_error": 0.00040340017681483875,
+          "kernel_ms": [
+            4.8632499820087105,
+            4.829084005905315,
+            4.823875002330169,
+            4.826541990041733,
+            4.848333017434925
+          ],
+          "fits": [
+            {
+              "ms": 15.642790996935219,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 15.460666996659711,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 15.49133300432004,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 15.469583013327792,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 15.489332989091054,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 15.361124998889863,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 15.469583013327792,
+          "peak_MiB": 1.3481206893920898
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 3.756447089616122e-11,
+          "min_eigenvalue": 0.8170261243977421,
+          "relative_max_vcov_error": 2.172559672670707e-09,
+          "max_relative_SE_error": 1.6002255076585925e-09,
+          "kernel_ms": [
+            0.7814999844413251,
+            0.7852499838918447,
+            0.7798330043442547,
+            0.800667010480538,
+            0.7749170181341469
+          ],
+          "fits": [
+            {
+              "ms": 7.365124998614192,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.1917079912964255,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.2832920122891665,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.2210840007755905,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.125708012608811,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 7.25529101327993,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 7.2210840007755905,
+          "peak_MiB": 1.3486242294311523
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.8170261226364431,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.0905419874470681,
+            0.08266701479442418,
+            0.07999999797903001,
+            0.08195900591090322,
+            0.08208400686271489
+          ],
+          "fits": [
+            {
+              "ms": 5.820667021907866,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 5.6827079970389605,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 5.728791002184153,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 5.770624993601814,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 5.874999973457307,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 5.6606659782119095,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 5623.190255024489,
+                "grad_inf": 2.6690798335948784e-06,
+                "stationarity_inf": 2.6690798335948784e-06,
+                "min_slack": 1.6478195878077526,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 6.672699583987196e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 5.728791002184153,
+          "peak_MiB": 1.3481206893920898
+        }
+      }
+    },
+    "ia_bs4x2_m15_n1000": {
+      "n": 1000,
+      "m": 15,
+      "condition_analytic": 8465.156507843938,
+      "min_eigenvalue_analytic": 0.009889175140889401,
+      "max_abs_h": 3.317098193325986,
+      "baseline_validation": {
+        "final": {
+          "nll": 1406.7844624214658,
+          "grad_inf": 0.15958626966602196,
+          "stationarity_inf": 2.047318712783408e-06,
+          "min_slack": -3.3885224848262396e-08,
+          "n_active": 2,
+          "stationarity_inf_per_obs": 2.047318712783408e-09
+        },
+        "slsqp": {
+          "seconds": 0.0017463749973103404,
+          "success": true,
+          "ll": -1406.784462429002,
+          "ll_auglag_minus_slsqp": 7.536073098890483e-09,
+          "max_abs_dtheta": 5.227034949761844e-06
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0025592500169295818,
+          "max_abs_diff": 0.0014954100180377683,
+          "rel_diff": 6.430586959179641e-05,
+          "min_eig_fd": 0.009703067701716833,
+          "cond_fd": 8627.555239710084,
+          "max_rel_se_diff": 0.014963345730255817
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 6.43069995038621e-05,
+          "min_eigenvalue": 0.009703067701716833,
+          "relative_max_vcov_error": 0.0262834194212778,
+          "max_relative_SE_error": 0.014963331234254307,
+          "kernel_ms": [
+            6.343208980979398,
+            6.3928329909686,
+            6.3780829950701445,
+            6.340082996757701,
+            6.4106250065378845
+          ],
+          "fits": [
+            {
+              "ms": 17.883958003949374,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 17.878707993077114,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 17.971041990676895,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 17.76524999877438,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 17.604125023353845,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 18.002666998654604,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 17.878707993077114,
+          "peak_MiB": 0.6103200912475586
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 3.202520422059187e-11,
+          "min_eigenvalue": 0.009889175631408726,
+          "relative_max_vcov_error": 4.733569385878897e-08,
+          "max_relative_SE_error": 2.4211271765217646e-08,
+          "kernel_ms": [
+            0.6472500099334866,
+            0.6598329928237945,
+            0.6693330069538206,
+            0.6477499846369028,
+            0.6505000055767596
+          ],
+          "fits": [
+            {
+              "ms": 12.475125025957823,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 18.068874982418492,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 16.656374995363876,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 12.536583002656698,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 11.965874989982694,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 13.070000015432015,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 13.070000015432015,
+          "peak_MiB": 0.6105031967163086
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.009889175140889401,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.04862499190494418,
+            0.051417009672150016,
+            0.0514579878654331,
+            0.04541699308902025,
+            0.04862499190494418
+          ],
+          "fits": [
+            {
+              "ms": 12.38587498664856,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 12.694459001068026,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 12.013958010356873,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 12.166916014393792,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 11.587124987272546,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 11.457958986284211,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.7844624214658,
+                "grad_inf": 0.15958626966602196,
+                "stationarity_inf": 2.047318712783408e-06,
+                "min_slack": -3.3885224848262396e-08,
+                "n_active": 2,
+                "stationarity_inf_per_obs": 2.047318712783408e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 12.013958010356873,
+          "peak_MiB": 0.6103353500366211
+        }
+      }
+    },
+    "ia_bs6x3_m28_n250": {
+      "n": 250,
+      "m": 28,
+      "condition_analytic": 4542979.368319307,
+      "min_eigenvalue_analytic": 2.7485720121334525e-06,
+      "max_abs_h": 2.8529501438904212,
+      "baseline_validation": {
+        "final": {
+          "nll": 347.8531177297371,
+          "grad_inf": 0.19594447877384802,
+          "stationarity_inf": 4.05601309649839e-07,
+          "min_slack": -2.0216678997542203e-08,
+          "n_active": 13,
+          "stationarity_inf_per_obs": 1.6224052385993558e-09
+        },
+        "slsqp": {
+          "seconds": 0.003115875006187707,
+          "success": true,
+          "ll": -347.85311773126926,
+          "ll_auglag_minus_slsqp": 1.5321575119742192e-09,
+          "max_abs_dtheta": 2.7986016331027486e-05
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0023701669997535646,
+          "max_abs_diff": 0.0003513898522851111,
+          "rel_diff": 0.0001248957602893127,
+          "min_eig_fd": -0.0005057283606778805,
+          "cond_fd": 1.2486809148962074e+301,
+          "max_rel_se_diff": NaN
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 0.00012489493856135877,
+          "min_eigenvalue": -0.0005057283606778805,
+          "SE_status": "undefined: information is not positive definite",
+          "kernel_ms": [
+            12.590250000357628,
+            12.57445800001733,
+            12.861499999416992,
+            12.644834001548588,
+            12.457833014195785
+          ],
+          "fits": [
+            {
+              "ms": 33.86854100972414,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 34.73200000007637,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 33.49687499576248,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 33.01766701042652,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 31.37899999273941,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 31.837415997870266,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 33.01766701042652,
+          "peak_MiB": 0.29143810272216797
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 5.3010528102290054e-11,
+          "min_eigenvalue": 2.7485593637636065e-06,
+          "relative_max_vcov_error": 4.053271927588049e-06,
+          "max_relative_SE_error": 2.342699700896844e-06,
+          "kernel_ms": [
+            0.7370410021394491,
+            0.7408329984173179,
+            0.7599579985253513,
+            0.7402909977827221,
+            0.8042079862207174
+          ],
+          "fits": [
+            {
+              "ms": 21.285374998115003,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 21.550832985667512,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 22.567125008208677,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 21.315167017746717,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 20.35816601710394,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 22.199041006388143,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 21.550832985667512,
+          "peak_MiB": 0.29162120819091797
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 2.7485720121334525e-06,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.04208300379104912,
+            0.034666998544707894,
+            0.03570900298655033,
+            0.035250006476417184,
+            0.03791699418798089
+          ],
+          "fits": [
+            {
+              "ms": 20.128290983848274,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 20.356041990453377,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 21.48808300262317,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 21.40283299377188,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 20.660792011767626,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 19.934624986490235,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 347.8531177297371,
+                "grad_inf": 0.19594447877384802,
+                "stationarity_inf": 4.05601309649839e-07,
+                "min_slack": -2.0216678997542203e-08,
+                "n_active": 13,
+                "stationarity_inf_per_obs": 1.6224052385993558e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 20.660792011767626,
+          "peak_MiB": 0.29145336151123047
+        }
+      }
+    },
+    "ia_bs6x3_m28_n1000": {
+      "n": 1000,
+      "m": 28,
+      "condition_analytic": 621135.0165911553,
+      "min_eigenvalue_analytic": 8.049965062590422e-05,
+      "max_abs_h": 3.2477205820331982,
+      "baseline_validation": {
+        "final": {
+          "nll": 1403.8750180571672,
+          "grad_inf": 0.12369212616431469,
+          "stationarity_inf": 7.829767501021934e-07,
+          "min_slack": -1.3595583547854062e-08,
+          "n_active": 8,
+          "stationarity_inf_per_obs": 7.829767501021933e-10
+        },
+        "slsqp": {
+          "seconds": 0.0035792090056929737,
+          "success": true,
+          "ll": -1403.875018053889,
+          "ll_auglag_minus_slsqp": -3.2778189051896334e-09,
+          "max_abs_dtheta": 2.4516496814896982e-05
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.006041290995199233,
+          "max_abs_diff": 0.0015227297645026283,
+          "rel_diff": 0.0001380120830113344,
+          "min_eig_fd": -0.0008693982702248678,
+          "cond_fd": 5.000095268530588e+301,
+          "max_rel_se_diff": NaN
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 0.00013801741760853124,
+          "min_eigenvalue": -0.0008693982702248678,
+          "SE_status": "undefined: information is not positive definite",
+          "kernel_ms": [
+            21.164708014111966,
+            21.04212497943081,
+            21.260916983010247,
+            21.32720800000243,
+            20.995875005610287
+          ],
+          "fits": [
+            {
+              "ms": 45.53241698886268,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 45.473416976165026,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 45.84741598227993,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 45.41529199923389,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 45.83245801040903,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 45.44570899452083,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 45.473416976165026,
+          "peak_MiB": 1.1144399642944336
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 4.9756686976206775e-11,
+          "min_eigenvalue": 8.049952537729347e-05,
+          "relative_max_vcov_error": 1.7498932453313956e-06,
+          "max_relative_SE_error": 9.907639988426808e-07,
+          "kernel_ms": [
+            1.2317500077188015,
+            1.2125420034863055,
+            1.2027920165564865,
+            1.2073749967385083,
+            1.2672919838223606
+          ],
+          "fits": [
+            {
+              "ms": 25.38945898413658,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.628041999880224,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.02691699191928,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.13458297471516,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.136666983598843,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.00270801829174,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 25.13458297471516,
+          "peak_MiB": 1.1146230697631836
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 8.049965062590422e-05,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.07487498805858195,
+            0.0695830094628036,
+            0.07233300129882991,
+            0.06399999256245792,
+            0.06512500112876296
+          ],
+          "fits": [
+            {
+              "ms": 23.955707991262898,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 24.072000000160187,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 24.18795900302939,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 23.99979199981317,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 23.988000000827014,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 24.35658298782073,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1403.8750180571672,
+                "grad_inf": 0.12369212616431469,
+                "stationarity_inf": 7.829767501021934e-07,
+                "min_slack": -1.3595583547854062e-08,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 7.829767501021933e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 24.072000000160187,
+          "peak_MiB": 1.114455223083496
+        }
+      }
+    },
+    "ia_scaled_bs3x1_m9_n1000": {
+      "n": 1000,
+      "m": 9,
+      "condition_analytic": 628.2061734654627,
+      "min_eigenvalue_analytic": 0.2655522969236284,
+      "max_abs_h": 3.528195120705632,
+      "baseline_validation": {
+        "final": {
+          "nll": 1406.9553731130748,
+          "grad_inf": 4.820942933747574e-07,
+          "stationarity_inf": 4.820942933747574e-07,
+          "min_slack": 1.4363788270785607,
+          "n_active": 0,
+          "stationarity_inf_per_obs": 4.820942933747574e-10
+        },
+        "slsqp": {
+          "seconds": 0.002023042005021125,
+          "success": true,
+          "ll": -1406.955373113075,
+          "ll_auglag_minus_slsqp": 0.0,
+          "max_abs_dtheta": 2.1390206494942277e-07
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.0014405419933609664,
+          "max_abs_diff": 0.0014154225791429553,
+          "rel_diff": 8.60401975914293e-06,
+          "min_eig_fd": 0.2668140197397222,
+          "cond_fd": 625.2325875004042,
+          "max_rel_se_diff": 0.0020081189857057424
+        }
+      },
+      "warnings": [
+        "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+      ],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 8.60398247158031e-06,
+          "min_eigenvalue": 0.2668140197397222,
+          "relative_max_vcov_error": 0.003920623650702531,
+          "max_relative_SE_error": 0.0020081180596770443,
+          "kernel_ms": [
+            3.4471249964553863,
+            3.3522910089232028,
+            3.4032499825116247,
+            3.1568749982398003,
+            3.3823330013547093
+          ],
+          "fits": [
+            {
+              "ms": 10.243541997624561,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 9.817707992624491,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 16.743707994464785,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 14.181375008774921,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 14.4144999794662,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 16.56304200878367,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 14.4144999794662,
+          "peak_MiB": 0.4194326400756836
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 1.1683615953992297e-11,
+          "min_eigenvalue": 0.2655522965334592,
+          "relative_max_vcov_error": 1.7659770891357567e-09,
+          "max_relative_SE_error": 9.278919854693868e-10,
+          "kernel_ms": [
+            0.6559579924214631,
+            0.6469170039054006,
+            0.5897500086575747,
+            0.6203330121934414,
+            0.6005830073263496
+          ],
+          "fits": [
+            {
+              "ms": 5.011000001104549,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 4.7162910050246865,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 4.90533298579976,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 4.942708008456975,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 4.9936250143218786,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 4.8162089951802045,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 4.90533298579976,
+          "peak_MiB": 0.4199666976928711
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.2655522969236284,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.0644999963697046,
+            0.058833014918491244,
+            0.04570800228975713,
+            0.05541701102629304,
+            0.0475000124424696
+          ],
+          "fits": [
+            {
+              "ms": 3.609207982663065,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 3.5175830125808716,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 3.7918750022072345,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 3.6577499995473772,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 3.778499987674877,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            },
+            {
+              "ms": 3.4547919931355864,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 1406.9553731130748,
+                "grad_inf": 4.820942933747574e-07,
+                "stationarity_inf": 4.820942933747574e-07,
+                "min_slack": 1.4363788270785607,
+                "n_active": 0,
+                "stationarity_inf_per_obs": 4.820942933747574e-10
+              },
+              "warnings": [
+                "scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+              ]
+            }
+          ],
+          "fit_warm_median_ms": 3.6577499995473772,
+          "peak_MiB": 0.4194173812866211
+        }
+      }
+    },
+    "ia_bs6x3_m28_n2000": {
+      "n": 2000,
+      "m": 28,
+      "condition_analytic": 420629.32536818355,
+      "min_eigenvalue_analytic": 0.00023783980955031044,
+      "max_abs_h": 3.5540954799639097,
+      "baseline_validation": {
+        "final": {
+          "nll": 2819.875992615492,
+          "grad_inf": 0.17811671276952978,
+          "stationarity_inf": 1.9522554524087354e-06,
+          "min_slack": -3.100895451524366e-08,
+          "n_active": 11,
+          "stationarity_inf_per_obs": 9.761277262043676e-10
+        },
+        "slsqp": {
+          "seconds": 0.0036625420034397393,
+          "success": true,
+          "ll": -2819.875992611917,
+          "ll_auglag_minus_slsqp": -3.575223672669381e-09,
+          "max_abs_dtheta": 1.0746815618301042e-05
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.011178124987054616,
+          "max_abs_diff": 0.0031297204827751487,
+          "rel_diff": 0.00013144247755920524,
+          "min_eig_fd": -0.0030531782874460493,
+          "cond_fd": 1.0004148442817748e+302,
+          "max_rel_se_diff": NaN
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 0.0001314431778711559,
+          "min_eigenvalue": -0.0030531782874460493,
+          "SE_status": "undefined: information is not positive definite",
+          "kernel_ms": [
+            32.79941598884761,
+            32.211540994467214,
+            32.433540996862575,
+            32.338582997908816,
+            32.490458979737014
+          ],
+          "fits": [
+            {
+              "ms": 56.66320800082758,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 57.33470799168572,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 56.623041979037225,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 57.121582998661324,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 57.099291996564716,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 57.02633300097659,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 57.099291996564716,
+          "peak_MiB": 1.849257469177246
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 6.149645702817933e-11,
+          "min_eigenvalue": 0.00023784010984923186,
+          "relative_max_vcov_error": 1.2624834935177895e-06,
+          "max_relative_SE_error": 9.88588329309259e-07,
+          "kernel_ms": [
+            1.7600000137463212,
+            1.8229999986942858,
+            1.8200410122517496,
+            1.8314170010853559,
+            1.8318330112379044
+          ],
+          "fits": [
+            {
+              "ms": 25.910374999511987,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.885459006531164,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.782916985917836,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 26.163041999097914,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 26.172292011324316,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 25.840042013442144,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 25.885459006531164,
+          "peak_MiB": 1.849440574645996
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.00023783980955031044,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.10766598279587924,
+            0.09487499482929707,
+            0.10383300832472742,
+            0.1067080011125654,
+            0.10633299825713038
+          ],
+          "fits": [
+            {
+              "ms": 23.514833010267466,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 24.6999159862753,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 23.27333399443887,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 30.339791002916172,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 34.511375008150935,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            },
+            {
+              "ms": 35.35391701734625,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 2819.875992615492,
+                "grad_inf": 0.17811671276952978,
+                "stationarity_inf": 1.9522554524087354e-06,
+                "min_slack": -3.100895451524366e-08,
+                "n_active": 11,
+                "stationarity_inf_per_obs": 9.761277262043676e-10
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 30.339791002916172,
+          "peak_MiB": 1.8492727279663086
+        }
+      }
+    },
+    "ia_bs6x3_m28_n10000": {
+      "n": 10000,
+      "m": 28,
+      "condition_analytic": 228976.012530657,
+      "min_eigenvalue_analytic": 0.0021742226296691592,
+      "max_abs_h": 3.9196603775143366,
+      "baseline_validation": {
+        "final": {
+          "nll": 14203.258277559124,
+          "grad_inf": 0.4100608773881902,
+          "stationarity_inf": 1.1269732965502044e-05,
+          "min_slack": -7.997461359821045e-09,
+          "n_active": 8,
+          "stationarity_inf_per_obs": 1.1269732965502045e-09
+        },
+        "slsqp": {
+          "seconds": 0.009754959028214216,
+          "success": true,
+          "ll": -14203.258277558372,
+          "ll_auglag_minus_slsqp": -7.530616130679846e-10,
+          "max_abs_dtheta": 3.590145869303285e-05
+        },
+        "hessian_fd_vs_gradfd": {
+          "seconds_gradfd": 0.04937558399979025,
+          "max_abs_diff": 0.01237305014001322,
+          "rel_diff": 0.00010835341085580027,
+          "min_eig_fd": -0.0075699473037005565,
+          "cond_fd": 4.9783795720803775e+302,
+          "max_rel_se_diff": NaN
+        }
+      },
+      "warnings": [],
+      "routes": {
+        "scalar_fd": {
+          "relative_max_H_error": 0.00010834815366136103,
+          "min_eigenvalue": -0.0075699473037005565,
+          "SE_status": "undefined: information is not positive definite",
+          "kernel_ms": [
+            124.475499993423,
+            117.67849998432212,
+            107.50866701710038,
+            111.6396659926977,
+            111.7647500068415
+          ],
+          "fits": [
+            {
+              "ms": 176.51499999919906,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 175.29112502234057,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 204.3595830036793,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 177.04537502140738,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 181.27041598199867,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 183.0996249918826,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 181.27041598199867,
+          "peak_MiB": 8.929335594177246
+        },
+        "gradient_fd": {
+          "relative_max_H_error": 1.7075184779679917e-10,
+          "min_eigenvalue": 0.002174218612700214,
+          "relative_max_vcov_error": 1.775122390174315e-06,
+          "max_relative_SE_error": 1.194418481231807e-06,
+          "kernel_ms": [
+            5.656458000885323,
+            5.339416995411739,
+            5.417707987362519,
+            5.325583973899484,
+            5.6089169811457396
+          ],
+          "fits": [
+            {
+              "ms": 68.23954099672846,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 67.99458400928415,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 68.01100002485327,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 67.32291600201279,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 67.81379101448692,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 67.95724999392405,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 67.95724999392405,
+          "peak_MiB": 8.929518699645996
+        },
+        "analytic": {
+          "relative_max_H_error": 0.0,
+          "min_eigenvalue": 0.0021742226296691592,
+          "relative_max_vcov_error": 0.0,
+          "max_relative_SE_error": 0.0,
+          "kernel_ms": [
+            0.35741599276661873,
+            0.5301249912008643,
+            0.34649998997338116,
+            0.34183301613666117,
+            0.34983298974111676
+          ],
+          "fits": [
+            {
+              "ms": 62.56408299668692,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 62.92929197661579,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 61.20037499931641,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 61.75900000380352,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 61.97462498676032,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            },
+            {
+              "ms": 62.22662498475984,
+              "converged": true,
+              "max_abs_theta_change": 0.0,
+              "ll_change": 0.0,
+              "validation": {
+                "nll": 14203.258277559124,
+                "grad_inf": 0.4100608773881902,
+                "stationarity_inf": 1.1269732965502044e-05,
+                "min_slack": -7.997461359821045e-09,
+                "n_active": 8,
+                "stationarity_inf_per_obs": 1.1269732965502045e-09
+              },
+              "warnings": []
+            }
+          ],
+          "fit_warm_median_ms": 61.97462498676032,
+          "peak_MiB": 8.929350852966309
+        }
+      }
+    }
+  }
+}
