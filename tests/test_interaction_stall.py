@@ -1,8 +1,9 @@
-"""Interaction auglag must not report a false stall as converged — issue #142.
+"""Interaction auglag must not report a false stall as converged — #135, #142.
 
-Bernstein-y (order 6, support (-4, 4)) ⊗ Bernstein-x (order 3, support
-(-1, 1)), Normal base, exact data, n ∈ {1000, 2000}, fitted with the issue's
-exact configuration ``OptimizerConfig(random_state=0)``.  Before the ADR 0004
+The #142 case uses Bernstein-y (order 6, support (-4, 4)) ⊗ Bernstein-x
+(order 3, support (-1, 1)), Normal base, exact data, n ∈ {1000, 2000}, fitted
+with the issue's exact configuration ``OptimizerConfig(random_state=0)``.
+Before the ADR 0004
 fixes (#134, merged in #136) the first L-BFGS-B inner solve hit an
 infeasible trial point, the interaction objective returned ``(inf, 0)``, the
 line search stopped without moving, and the auglag stall exit accepted that
@@ -47,6 +48,7 @@ from numpy.testing import assert_allclose, assert_array_equal
 from mltpy import (
     ConditionalTransformationModel,
     ConvergenceWarning,
+    Coxph,
     InteractionBasis,
     OptimizerConfig,
 )
@@ -183,3 +185,52 @@ def test_theta_matches_r(
     p, q = Theta.shape
     theta_r = stall_refs[n]["theta"].reshape(q, p).T
     assert_allclose(Theta, theta_r, rtol=1e-3, atol=1e-4)
+
+
+@pytest.mark.parametrize("polish", [True, False])
+def test_active_monotonicity_fit_never_falsely_converges(polish: bool) -> None:
+    """Issue #135: accept the boundary optimum or warn about non-convergence.
+
+    The original auglag fit claimed convergence at logLik ≈ -1937.55 with
+    KKT ≈ 236 and no active row; trust-constr reached logLik ≈ -480.61.
+    """
+    rng = np.random.default_rng(111)
+    n = 800
+    x = rng.uniform(0.0, 1.0, size=n)
+    x_s = rng.uniform(-1.5, 1.5, size=n)
+    z = np.log(-np.log(rng.uniform(size=n)))
+    t = 10.0 + (z / np.exp(0.4 * x_s) - x) / (2.0 + 2.0 * x)
+    support = (float(t.min()) - 0.25, float(t.max()) + 0.25)
+    x_basis = BernsteinBasis(order=2, support=(0.0, 1.0))
+
+    reference = Coxph(
+        support=support,
+        order=2,
+        interacting=x_basis,
+        optimizer_config=OptimizerConfig(solver="trust-constr", random_state=0),
+    ).fit(t, X=x)
+    assert reference.result_ is not None
+    assert reference.result_.converged
+    assert reference.Theta_ is not None
+    assert abs(np.diff(reference.Theta_, axis=0).min()) < 1e-6
+
+    model = Coxph(
+        support=support,
+        order=2,
+        interacting=x_basis,
+        optimizer_config=OptimizerConfig(random_state=0, polish=polish),
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        model.fit(t, X=x)
+
+    assert model.result_ is not None
+    if model.result_.converged:
+        assert_allclose(
+            model.result_.log_likelihood,
+            reference.result_.log_likelihood,
+            rtol=1e-6,
+            atol=1e-10,
+        )
+    else:
+        assert any(issubclass(w.category, ConvergenceWarning) for w in caught)
