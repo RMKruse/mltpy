@@ -2458,3 +2458,188 @@ writeLines(format(q_lm, digits = 15),
 
 cat(sprintf("stram_onehot lm ref: n=%d, K=%d, ll=%.6f, gamma=%.6f\n",
             n_lm, length(lev_lm), ll_lm, gamma_lm))
+
+# ---------------------------------------------------------------------------
+# Survreg(interacting=..., scaling=...) — issue #110.
+#
+# The log-time analogue of the stram_bs_bs_* blocks above.  mltpy's Survreg
+# models the transformation on log(t) (``LogBernsteinBasis``), so the response
+# basis is Bernstein on log(t) (``log_first = TRUE``) of order 1 — the
+# strictly affine baseline ``tram::Survreg`` always fits — tensored with an
+# order-1 Bernstein-x interacting basis and scaled by exp(0.5 · x_s · γ):
+#
+#     F_Z^{-1}(F(t | x, x_s)) = h(t | x) · exp(0.5 · x_s · γ),
+#     h(t | x) = (a(log t) ⊗ b(x))ᵀ vec(Θ),
+#
+# with the link of each Survreg family: weibull ↔ ``MinExtrVal``, lognormal ↔
+# ``Normal``, loglogistic ↔ ``Logistic``.  Exact (uncensored) event times
+# only — the interaction likelihood path is exact-data only.  Fitted through
+# ``mlt::ctm`` for term-for-term basis agreement with mltpy's
+# ``InteractionBasis(LogBernsteinBasis, BernsteinBasis)``; γ is sign- and
+# magnitude-aligned with mltpy (no flip).
+#
+# Data: h(t | x) = exp(0.5·γ·x_s)·(2·(log t − 1) + 0.8·(x − 0.5)) with
+# γ = 0.4, which is affine in log t and in x and so lies exactly in the
+# log-Bernstein-y (order 1) ⊗ Bernstein-x (order 1) span.  With n = 1000 the
+# MLE is strictly interior (every Θ column increment is well above 1), and
+# the same BFGS polish at reltol = 1e-15 as the stram_bs_bs blocks takes γ
+# past alabama's inner tolerance.
+#
+# Cross-check against the literal tram formula route,
+# ``tram::Survreg(y | x ~ 1 | x_s, dist = <dist>)`` (class ``stram``; tram
+# warns that strata + scale is "highly experimental").  Its response basis is
+# (1, log t) and its interacting term the linear (1, x) design, which span the
+# same spaces as the order-1 Bernstein bases, so the two fits share the MLE:
+# same logLik and γ, and with C the tram (response × interacting) coefficient
+# matrix, Θ = M · [C[, 1], C[, 1] + C[, 2]] where M = [[1, log a], [1, log b]]
+# maps (1, log t) coefficients to Bernstein-on-[log a, log b] coefficients.
+#
+# Fixtures emitted (prefix ``stram_logbs_bs_<dist>_``, dist ∈ weibull,
+# lognormal, loglogistic):
+#   *_y_train.txt      — event times, length n
+#   *_x_train.txt      — interacting covariate, length n
+#   *_x_s_train.txt    — scaling covariate, length n
+#   *_y_support.txt    — "a b" on one line (original time scale)
+#   *_theta.txt        — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt        — scale coefficients only, length q_s
+#   *_gamma_tram.txt   — γ from the tram::Survreg(y | x ~ 1 | x_s) stram fit
+#   *_loglik.txt       — scalar logLik
+#   *_grid.txt         — prediction grid, one "t x x_s" row per line
+#   *_survivor.txt     — S(t | x, x_s) at each grid row
+#   *_density.txt      — f(t | x, x_s) = f_Z(h)·h' at each grid row
+#   *_hazard.txt       — f(t | x, x_s) / S(t | x, x_s) at each grid row
+#   *_qgrid.txt        — quantile grid, one "p x x_s" row per line
+#   *_quantile.txt     — F⁻¹(p | x, x_s) at each quantile-grid row
+# ---------------------------------------------------------------------------
+suppressPackageStartupMessages(library(tram))
+
+.write_survreg_stram <- function(dist_name, todistr, seed) {
+  zfun <- switch(todistr,
+    MinExtrVal = list(
+      q = function(u) log(-log1p(-u)),
+      d = function(z) exp(z - exp(z)),
+      s = function(z) exp(-exp(z))),
+    Normal = list(q = qnorm, d = dnorm,
+                  s = function(z) pnorm(z, lower.tail = FALSE)),
+    Logistic = list(q = qlogis, d = dlogis,
+                    s = function(z) plogis(z, lower.tail = FALSE)))
+
+  set.seed(seed)
+  n_sv <- 1000L
+  p_sv <- 2L  # log-Bernstein-y functions (order 1, tram::Survreg's baseline)
+  q_sv <- 2L  # Bernstein-x functions
+  x_sv   <- runif(n_sv, 0, 1)
+  x_s_sv <- rnorm(n_sv)
+  # Invert F_Z(k · h0(t | x)) = U for log t.
+  k_sv <- exp(0.5 * 0.4 * x_s_sv)
+  y_sv <- exp(1 - 0.4 * (x_sv - 0.5) + zfun$q(runif(n_sv)) / (2 * k_sv))
+  a_sv <- min(y_sv) * 0.9
+  b_sv <- max(y_sv) * 1.1
+
+  df_sv <- data.frame(y = y_sv, x = x_sv, x_s = x_s_sv)
+  m_y_sv <- numeric_var("y", support = c(a_sv, b_sv), bounds = c(0, Inf))
+  m_x_sv <- numeric_var("x", support = c(0, 1))
+  b_y_sv <- Bernstein_basis(m_y_sv, order = p_sv - 1L, ui = "increasing",
+                            log_first = TRUE)
+  b_x_sv <- Bernstein_basis(m_x_sv, order = q_sv - 1L)
+  b_s_sv <- as.basis(~ x_s, data = df_sv, remove_intercept = TRUE)
+
+  polish <- mltoptim(optim = list(checkconstraints = TRUE, method = "BFGS",
+                                  maxit = 100000L, reltol = 1e-15))["optim"]
+  ctm_sv <- ctm(response = b_y_sv, interacting = b_x_sv, scaling = b_s_sv,
+                scale_shift = FALSE, todistr = todistr)
+  fit0_sv <- mlt(ctm_sv, data = df_sv)
+  fit_sv  <- mlt(ctm_sv, data = df_sv, theta = coef(fit0_sv), optim = polish)
+  stopifnot(fit_sv$convergence == 0,
+            min(diff(matrix(coef(fit_sv)[1:(p_sv * q_sv)], p_sv, q_sv))) > 1)
+
+  theta_sv <- coef(fit_sv)
+  ll_sv    <- as.numeric(logLik(fit_sv))
+  scl_names_sv <- colnames(model.matrix(b_s_sv, data = df_sv))
+  gamma_sv <- theta_sv[scl_names_sv]
+
+  # Literal tram stram route, polished the same way.
+  tram_sv0 <- suppressWarnings(
+    Survreg(y | x ~ 1 | x_s, data = df_sv, dist = dist_name,
+            support = c(a_sv, b_sv), bounds = c(0, Inf)))
+  stopifnot(inherits(tram_sv0, "stram"))
+  tram_sv <- mlt(tram_sv0$model, data = df_sv,
+                 theta = coef(tram_sv0, with_baseline = TRUE), optim = polish)
+  tram_cf_sv <- coef(tram_sv)
+  gamma_tram_sv <- tram_cf_sv[paste0("scl_", scl_names_sv)]
+  C_sv <- matrix(tram_cf_sv[1:(p_sv * q_sv)], p_sv, q_sv)
+  M_sv <- cbind(1, log(c(a_sv, b_sv)))
+  stopifnot(
+    tram_sv$convergence == 0,
+    isTRUE(all.equal(as.numeric(logLik(tram_sv)), ll_sv, tolerance = 1e-10)),
+    isTRUE(all.equal(unname(gamma_tram_sv), unname(gamma_sv),
+                     tolerance = 1e-6)),
+    isTRUE(all.equal(M_sv %*% cbind(C_sv[, 1], rowSums(C_sv)),
+                     matrix(theta_sv[1:(p_sv * q_sv)], p_sv, q_sv),
+                     tolerance = 1e-6, check.attributes = FALSE)))
+
+  # Per-row predictions at (t, x, x_s), assembled from the tensor basis as in
+  # the stram_bs_bs blocks (``predict()`` on a scaled ctm errors in mlt
+  # 1.8.4): h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ),
+  # where Z' already carries the 1/t chain-rule factor of log_first.  The
+  # stopifnot() below checks the reconstruction reproduces logLik(fit).
+  bb_sv <- b(bresponse = b_y_sv, binteracting = b_x_sv)
+  pq_sv <- p_sv * q_sv
+  .h_sv <- function(d) {
+    f <- exp(0.5 * d$x_s * gamma_sv)
+    list(h  = drop(model.matrix(bb_sv, data = d) %*% theta_sv[1:pq_sv]) * f,
+         hp = drop(model.matrix(bb_sv, data = d, deriv = c(y = 1)) %*%
+                     theta_sv[1:pq_sv]) * f)
+  }
+  tr_sv <- .h_sv(df_sv)
+  stopifnot(isTRUE(all.equal(sum(log(zfun$d(tr_sv$h)) + log(tr_sv$hp)),
+                             ll_sv, tolerance = 1e-10)))
+
+  grid_sv <- expand.grid(y = quantile(y_sv, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                         x = c(0.2, 0.8),
+                         x_s = c(-1, 0, 1.5))
+  hg_sv   <- .h_sv(grid_sv)
+  surv_sv <- zfun$s(hg_sv$h)
+  dens_sv <- zfun$d(hg_sv$h) * hg_sv$hp
+  haz_sv  <- dens_sv / surv_sv
+
+  qgrid_sv <- expand.grid(p = c(0.1, 0.5, 0.9),
+                          x = c(0.2, 0.8),
+                          x_s = c(-1, 0, 1.5))
+  quant_sv <- vapply(seq_len(nrow(qgrid_sv)), function(i) {
+    r <- qgrid_sv[i, ]
+    exp(uniroot(function(lt) .h_sv(data.frame(y = exp(lt), x = r$x,
+                                              x_s = r$x_s))$h - zfun$q(r$p),
+                interval = log(c(a_sv, b_sv)), tol = 1e-14)$root)
+  }, numeric(1))
+
+  out <- function(name) {
+    file.path(out_dir, sprintf("stram_logbs_bs_%s_%s.txt", dist_name, name))
+  }
+  writeLines(format(y_sv, digits = 15), con = out("y_train"))
+  writeLines(format(x_sv, digits = 15), con = out("x_train"))
+  writeLines(format(x_s_sv, digits = 15), con = out("x_s_train"))
+  writeLines(paste(format(a_sv, digits = 15), format(b_sv, digits = 15)),
+             con = out("y_support"))
+  writeLines(format(theta_sv, digits = 15), con = out("theta"))
+  writeLines(format(as.numeric(gamma_sv), digits = 15), con = out("gamma"))
+  writeLines(format(as.numeric(gamma_tram_sv), digits = 15),
+             con = out("gamma_tram"))
+  writeLines(format(ll_sv, digits = 15), con = out("loglik"))
+  write.table(format(as.matrix(grid_sv), digits = 15), file = out("grid"),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  writeLines(format(as.numeric(surv_sv), digits = 15), con = out("survivor"))
+  writeLines(format(as.numeric(dens_sv), digits = 15), con = out("density"))
+  writeLines(format(as.numeric(haz_sv), digits = 15), con = out("hazard"))
+  write.table(format(as.matrix(qgrid_sv), digits = 15), file = out("qgrid"),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  writeLines(format(quant_sv, digits = 15), con = out("quantile"))
+
+  cat(sprintf(paste0("stram_logbs_bs %s ref: n=%d, p=%d, q=%d, q_s=%d, ",
+                     "ll=%.6f, gamma=%.6f\n"),
+              dist_name, n_sv, p_sv, q_sv, length(gamma_sv), ll_sv, gamma_sv))
+}
+
+.write_survreg_stram("weibull",     "MinExtrVal", 20261110)
+.write_survreg_stram("lognormal",   "Normal",     20261111)
+.write_survreg_stram("loglogistic", "Logistic",   20261112)

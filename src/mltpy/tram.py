@@ -383,7 +383,9 @@ class _SurvivalMixin(_TramModel):
         y:
             Time points within ``basis.support``.
         X:
-            Optional covariate matrix of shape ``(m, q_d)``.
+            Optional covariate matrix of shape ``(m, q_d)``; for models
+            fitted with ``interacting=``, the (required) interacting
+            covariate.
         offset:
             Optional per-observation offset added to ``h``.
         X_scale:
@@ -423,7 +425,9 @@ class _SurvivalMixin(_TramModel):
         y:
             Time points within ``basis.support``.
         X:
-            Optional covariate matrix of shape ``(m, q_d)``.
+            Optional covariate matrix of shape ``(m, q_d)``; for models
+            fitted with ``interacting=``, the (required) interacting
+            covariate.
         offset:
             Optional per-observation offset added to ``h``.
         X_scale:
@@ -1199,6 +1203,14 @@ class Survreg(_SurvivalMixin):
     With covariates X the model is proportional (Weibull / log-logistic) or
     additive (log-normal) on the log-time scale.
 
+    Pass ``interacting`` to fit a *non-proportional* (stratified or
+    fully-interacting) model where the log-time transformation itself
+    depends on the covariate via the tensor product
+    ``h(t | x) = (a(log t) ⊗ b(x))ᵀ vec(Θ)`` — the analogue of R
+    ``tram::Survreg(y | s ~ 1)``.  See ADR 0001 and
+    :class:`~mltpy.basis.InteractionBasis` for the parameter-vector layout
+    and the column-wise monotonicity strategy.
+
     Parameters
     ----------
     support:
@@ -1216,6 +1228,21 @@ class Survreg(_SurvivalMixin):
         and is required for R parity comparisons.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
+    interacting:
+        Optional x-basis (:class:`~mltpy.basis.BernsteinBasis`,
+        :class:`~mltpy.basis.OrdinalBasis`, or
+        :class:`~mltpy.basis.OneHotBasis` for a categorical stratum).  When
+        provided, the model is fit as
+        ``ConditionalTransformationModel(InteractionBasis(LogBernsteinBasis(...),
+        interacting))`` instead of the standard shift model, with
+        ``theta_ = vec_C(Θ)`` and Θ exposed as :attr:`Theta_`.  Pass the
+        interacting covariate as ``X`` to :meth:`fit`, :meth:`survival`, and
+        :meth:`hazard` (``X_new`` for :meth:`predict`).  Only exact
+        (uncensored) event times are supported on this path — although
+        Survreg is mostly used with right-censored data, the interaction
+        likelihood is exact-data only: pass times as an array, or a
+        :class:`~mltpy.variables.CensoredData` without censored rows;
+        censored rows raise ``NotImplementedError``.
     scaling:
         Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
         R ``tram::Survreg(Surv(y, event) ~ x_d | x_s, ..., scale=~x_s)``.
@@ -1224,7 +1251,27 @@ class Survreg(_SurvivalMixin):
         The fitted parameter vector gains a γ block exposed as
         :attr:`gamma_`, and the :meth:`survival`, :meth:`hazard`, and
         :meth:`predict` methods require ``X_scale`` / ``X_scale_new``.
-        Sign-aligned with R (ADR 0002, Decision 5).
+        Sign-aligned with R (ADR 0002, Decision 5).  May be combined with
+        ``interacting=`` (ADR 0003, issue #110) to fit
+        ``F_Z⁻¹ F(t | x, x_s) = ([a(log t) ⊗ b(x)]ᵀ vec(Θ)) ·
+        exp(0.5 · x_s · γ)``, the analogue of R
+        ``tram::Survreg(y | x ~ 1 | x_s)`` (class ``stram``):
+        ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as :attr:`Theta_` and γ
+        as :attr:`gamma_`, and :meth:`fit` emits a ``UserWarning`` flagging
+        the path as experimental.
+
+    Raises
+    ------
+    ValueError
+        If ``distribution`` is not one of the supported families,
+        ``support`` is not a strictly positive interval, or ``interacting``
+        is not a non-negative partition of unity (e.g. a
+        :class:`~mltpy.basis.PolynomialBasis`), which the column-wise
+        monotonicity constraint requires.
+    NotImplementedError
+        From :meth:`fit`, when ``interacting=`` is set and ``y`` is a
+        :class:`~mltpy.variables.CensoredData` with censored rows — the
+        interaction likelihood covers exact event times only.
 
     Examples
     --------
@@ -1237,6 +1284,22 @@ class Survreg(_SurvivalMixin):
     >>> cd = CensoredData.right_censored(t, censored=~status)
     >>> model = Survreg(support=(t.min() * 0.9, t.max() * 1.1)).fit(cd)
     >>> surv = model.survival(t)
+
+    Non-proportional Weibull model with a scaled baseline (exact times only):
+
+    >>> from mltpy.basis import BernsteinBasis
+    >>> x = rng.uniform(0.0, 1.0, size=200)
+    >>> x_s = rng.normal(size=(200, 1))
+    >>> model = Survreg(
+    ...     support=(t.min() * 0.9, t.max() * 1.1),
+    ...     order=1,
+    ...     interacting=BernsteinBasis(order=1, support=(0.0, 1.0)),
+    ...     scaling=x_s,
+    ... )
+    >>> model.fit(t, X=x)  # UserWarning: experimental path
+    >>> model.Theta_.shape, model.gamma_.shape
+    ((2, 2), (1,))
+    >>> surv = model.survival(t, X=x, X_scale=x_s)
     """
 
     def __init__(
@@ -1245,6 +1308,7 @@ class Survreg(_SurvivalMixin):
         distribution: SurvregDistribution = "weibull",
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
+        interacting: BernsteinBasis | OrdinalBasis | OneHotBasis | None = None,
         scaling: NDArray[np.float64] | None = None,
     ) -> None:
         if distribution not in _SURVREG_DIST_MAP:
@@ -1254,13 +1318,22 @@ class Survreg(_SurvivalMixin):
             )
         base_dist = cast(BaseDistribution, _SURVREG_DIST_MAP[distribution])
         log_basis = LogBernsteinBasis(order=order, support=support)
+        # Non-proportional Survreg: θ = vec_C(Θ), or [vec_C(Θ) | γ] when scaled
+        # (ADR 0003), with the log-time basis as the y-axis of the tensor
+        # product.  The interaction likelihood is exact-data only, so
+        # optimize() rejects genuinely censored rows.
+        basis: LogBernsteinBasis | InteractionBasis = (
+            log_basis
+            if interacting is None
+            else InteractionBasis(y_basis=log_basis, x_basis=interacting)
+        )
 
         # Bypass MLT.__init__ and call ConditionalTransformationModel directly,
         # because MLT builds a BernsteinBasis internally.  We store _order/_support
         # for _TramModel.__repr__.
         ConditionalTransformationModel.__init__(
             self,
-            basis=log_basis,  # type: ignore[arg-type]
+            basis=basis,  # type: ignore[arg-type]
             censoring=CensoringType.RIGHT,
             optimizer_config=optimizer_config,
             base_distribution=base_dist,
