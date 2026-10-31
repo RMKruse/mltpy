@@ -425,7 +425,7 @@ class TestStramRParity:
 
     def test_theta_matches_r(self) -> None:
         model, (theta_R,) = _fit_stram_fixture("theta")
-        p, q = 3, 3
+        p, q = model.Theta_.shape
         # mlt orders vec(Θ) with the y-basis index fastest (column-major on
         # the (p, q) matrix); the trailing entry is γ.
         Theta_R = theta_R[: p * q].reshape(p, q, order="F")
