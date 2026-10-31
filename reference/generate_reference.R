@@ -2044,6 +2044,7 @@ cat(sprintf("stram_bs_bs mev ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
 #   *_y_support.txt    — "a b" on one line
 #   *_theta.txt        — full coef(fit): [vec(Θ) (mlt order) | γ]
 #   *_gamma.txt        — scale coefficients only, length q_s
+#   *_gamma_tram.txt   — γ from the tram::Colr(y | x ~ 1 | x_s) stram fit
 #   *_loglik.txt       — scalar logLik
 #   *_grid.txt         — prediction grid, one "y x x_s" row per line
 #   *_distribution.txt — F(y | x, x_s) at each grid row
@@ -2087,6 +2088,35 @@ ll_lg    <- as.numeric(logLik(fit_lg))
 scl_names_lg <- colnames(model.matrix(b_s_lg, data = df_lg))
 gamma_lg <- theta_lg[scl_names_lg]
 
+# Cross-check against the literal tram formula route, ``tram::Colr(y | x ~ 1
+# | x_s)`` (class ``stram``; tram warns that strata + scale is "highly
+# experimental").  Its interacting term is the linear model matrix (1, x),
+# which spans the same space as Bernstein-x of order 1 on [0, 1], so the two
+# fits share the MLE: same logLik and γ, and Θ maps as
+# Θ[, x = 0] = (Intercept) and Θ[, x = 1] = (Intercept) + x.  Polished with
+# the same BFGS step as the ctm fit.
+suppressPackageStartupMessages(library(tram))
+tram_lg0 <- suppressWarnings(
+  Colr(y | x ~ 1 | x_s, data = df_lg, order = p_lg - 1L,
+       support = c(a_lg, b_lg), bounds = c(a_lg, b_lg)))
+stopifnot(inherits(tram_lg0, "stram"))
+tram_lg <- mlt(tram_lg0$model, data = df_lg,
+               theta = coef(tram_lg0, with_baseline = TRUE),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+tram_cf_lg <- coef(tram_lg)
+gamma_tram_lg <- tram_cf_lg[paste0("scl_", scl_names_lg)]
+tram_theta_lg <- matrix(tram_cf_lg[1:(p_lg * q_lg)], p_lg, q_lg)
+stopifnot(
+  tram_lg$convergence == 0,
+  isTRUE(all.equal(as.numeric(logLik(tram_lg)), ll_lg, tolerance = 1e-10)),
+  isTRUE(all.equal(unname(gamma_tram_lg), unname(gamma_lg), tolerance = 1e-6)),
+  isTRUE(all.equal(cbind(tram_theta_lg[, 1], rowSums(tram_theta_lg)),
+                   matrix(theta_lg[1:(p_lg * q_lg)], p_lg, q_lg),
+                   tolerance = 1e-6, check.attributes = FALSE)))
+
 # Per-row predictions at (y, x, x_s), assembled from the tensor basis exactly
 # as in the mev block (``predict()`` on a scaled ctm errors in mlt 1.8.4):
 # h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ).  The
@@ -2123,6 +2153,8 @@ writeLines(format(theta_lg, digits = 15),
            con = file.path(out_dir, "stram_bs_bs_logistic_theta.txt"))
 writeLines(format(as.numeric(gamma_lg), digits = 15),
            con = file.path(out_dir, "stram_bs_bs_logistic_gamma.txt"))
+writeLines(format(as.numeric(gamma_tram_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_gamma_tram.txt"))
 writeLines(format(ll_lg, digits = 15),
            con = file.path(out_dir, "stram_bs_bs_logistic_loglik.txt"))
 write.table(format(as.matrix(grid_lg), digits = 15),

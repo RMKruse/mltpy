@@ -14,8 +14,9 @@ exact-data only, so censored rows are rejected with a clear error.
 R reference data (``reference/stram_bs_bs_logistic_*``) is produced by
 ``reference/generate_reference.R`` via ``mlt::ctm(response = Bernstein-y,
 interacting = Bernstein-x, scaling = ~x_s, todistr = "Logistic")`` — the
-``stram`` route confirmed in ADR 0003.  γ is sign- and magnitude-aligned
-with mltpy (no flip).
+``stram`` route confirmed in ADR 0003 — and cross-checked against the literal
+``tram::Colr(y | x ~ 1 | x_s)`` stram fit, whose γ is stored separately.  γ
+is sign- and magnitude-aligned with mltpy (no flip).
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from mltpy import (
     OptimizerConfig,
     log_likelihood,
 )
-from mltpy.basis import BernsteinBasis, OrdinalBasis
+from mltpy.basis import BernsteinBasis, LegendreBasis, OrdinalBasis, PolynomialBasis
 from mltpy.tram import Colr
 from mltpy.variables import CensoredData, CensoringType
 
@@ -48,6 +49,7 @@ _REF_FILES = [
     "y_support",
     "theta",
     "gamma",
+    "gamma_tram",
     "loglik",
     "grid",
     "distribution",
@@ -126,6 +128,17 @@ class TestRParity:
     ) -> None:
         gamma_r = np.atleast_1d(logistic_ref["gamma"])
         assert_allclose(logistic_fit.gamma_, gamma_r, rtol=1e-6, atol=1e-10)
+
+    def test_gamma_matches_tram_stram(
+        self, logistic_fit: Colr, logistic_ref: dict[str, np.ndarray]
+    ) -> None:
+        """γ matches the literal ``tram::Colr(y | x ~ 1 | x_s)`` stram fit.
+
+        tram's interacting term is the linear (1, x) design, which spans the
+        same space as order-1 Bernstein-x on [0, 1], so the MLE is shared.
+        """
+        gamma_tram = np.atleast_1d(logistic_ref["gamma_tram"])
+        assert_allclose(logistic_fit.gamma_, gamma_tram, rtol=1e-6, atol=1e-10)
 
     def test_loglik_matches_r(
         self, logistic_fit: Colr, logistic_ref: dict[str, np.ndarray]
@@ -501,6 +514,32 @@ class TestInteractingOnly:
         ).fit(y, X=strata)
         assert model.Theta_ is not None
         assert model.Theta_.shape == (_ORDER_Y + 1, 2)
+
+
+class TestErrors:
+    @pytest.mark.parametrize(
+        "x_basis",
+        [
+            PolynomialBasis(order=1, support=(0.0, 1.0)),
+            LegendreBasis(order=1, support=(0.0, 1.0)),
+        ],
+        ids=["polynomial", "legendre"],
+    )
+    def test_non_partition_of_unity_x_basis_rejected(
+        self, x_basis: PolynomialBasis | LegendreBasis
+    ) -> None:
+        """Column-wise monotonicity needs a non-negative partition of unity."""
+        with pytest.raises(ValueError, match="partition of unity"):
+            Colr(support=(0.0, 1.0), interacting=x_basis)  # type: ignore[arg-type]
+
+    def test_interacting_without_x_rejected(
+        self,
+        synthetic: tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float]],
+    ) -> None:
+        """The interacting covariate is required at fit time."""
+        y, _, _, support = synthetic
+        with pytest.raises(ValueError):
+            _colr(support).fit(y)
 
 
 class TestBackwardCompatibility:

@@ -214,9 +214,11 @@ class _TramModel(MLT):
             Response values at which to evaluate the model.  Must lie within
             ``basis.support``.
         X:
-            Ignored — TRAM models are not interacting, so the plotted
-            baseline does not depend on covariates.  Accepted for signature
-            compatibility with the base class.
+            Ignored — only the covariate-free baseline is plotted.  Accepted
+            for signature compatibility with the base class.  Models fitted
+            with ``interacting=`` or ``scaling=`` need covariates for every
+            prediction and so cannot be plotted here; call :meth:`predict`
+            with ``X_new`` / ``X_scale_new`` instead.
         ax:
             Optional 2-tuple ``(ax_cdf, ax_pdf)`` of ``matplotlib.axes.Axes``,
             or a single ``matplotlib.axes.Axes`` instance. If a single axes is
@@ -238,6 +240,9 @@ class _TramModel(MLT):
         TypeError
             If ``ax`` is provided but cannot be unpacked into two axes, nor used
             as a single axes.
+        ValueError
+            If the model was fitted with ``interacting=`` or ``scaling=``
+            (predictions need ``X_new`` / ``X_scale_new``).
         """
         try:
             import matplotlib.pyplot as plt
@@ -759,6 +764,22 @@ class Colr(_TramModel):
     >>> model = Colr(support=(y.min(), y.max()))
     >>> model.fit(y)
     >>> cdf = model.predict(y, what="distribution")
+
+    Non-proportional odds with a scaled baseline (exact data only):
+
+    >>> from mltpy.basis import BernsteinBasis
+    >>> x = rng.uniform(0.0, 1.0, size=200)
+    >>> x_s = rng.normal(size=(200, 1))
+    >>> model = Colr(
+    ...     support=(y.min() - 0.1, y.max() + 0.1),
+    ...     order=2,
+    ...     interacting=BernsteinBasis(order=1, support=(0.0, 1.0)),
+    ...     scaling=x_s,
+    ... )
+    >>> model.fit(y, X=x)  # UserWarning: experimental path
+    >>> model.Theta_.shape, model.gamma_.shape
+    ((3, 2), (1,))
+    >>> cdf = model.predict(y, X_new=x, X_scale_new=x_s, what="distribution")
     """
 
     def __init__(
