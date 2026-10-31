@@ -1,0 +1,239 @@
+{
+ "case": "ia_scaled_bs3x1_m9_n1000",
+ "family": "interaction+scaling",
+ "n": 1000,
+ "env": {
+  "python": "3.12.16",
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "mltpy": "0.4.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu": "Apple M5 Pro",
+  "ncpu": 15,
+  "blas": {
+   "name": "accelerate",
+   "version": "unknown",
+   "detection method": "system"
+  },
+  "thread_env": {
+   "OMP_NUM_THREADS": null,
+   "VECLIB_MAXIMUM_THREADS": null,
+   "OPENBLAS_NUM_THREADS": null
+  },
+  "loadavg": [
+   1.75146484375,
+   2.13525390625,
+   2.2392578125
+  ],
+  "git_head": "b9069681742c462f448500a7b287668a2b5a0413",
+  "git_dirty": false,
+  "restart_random_state": 0,
+  "_": ""
+ },
+ "rss_before_mib": 99.4375,
+ "maxrss_after_cold_mib": 99.4375,
+ "fresh_seconds": [
+  0.03138937501353212,
+  0.030356124974787235,
+  0.030283041996881366,
+  0.030344625003635883,
+  0.03008533298270777,
+  0.030349250009749085
+ ],
+ "fresh_status": [
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 4.820942933747574e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 52,
+   "log_likelihood": -1406.9553731130748,
+   "warnings": [
+    "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+   ]
+  }
+ ],
+ "n_params": 9,
+ "refit_seconds": [
+  0.03038666700012982,
+  0.03008383300038986,
+  0.030431333027081564
+ ],
+ "refit_status_last": {
+  "raw_converged": true,
+  "kkt_residual_stored": 4.820942933747574e-07,
+  "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+  "n_restarts": 0,
+  "n_outer_iter": 2,
+  "n_inner_iter": 52,
+  "log_likelihood": -1406.9553731130748,
+  "warnings": [
+   "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+  ]
+ },
+ "instrumented_seconds": 0.03052245799335651,
+ "phases": {
+  "seconds": {
+   "solver_attempts": 0.0061120000027585775,
+   "polish_hessian": 0.011710624996339902,
+   "polish": 0.011995416978606954,
+   "optimize_total": 0.01844241700018756,
+   "final_hessian": 0.01194458399550058,
+   "score_matrix": 0.00010329199722036719
+  },
+  "calls": {
+   "solver_attempts": 1,
+   "polish_hessian": 1,
+   "polish": 1,
+   "optimize_total": 1,
+   "final_hessian": 1,
+   "score_matrix": 1
+  },
+  "objective_calls_by_phase": {
+   "solver_attempts": 64,
+   "polish": 3,
+   "optimize_total": 3
+  },
+  "ll_interaction_calls_by_phase": {
+   "polish_hessian": 180,
+   "final_hessian": 180
+  },
+  "solver_attempts": [
+   {
+    "seconds": 0.0061120000027585775,
+    "converged": true,
+    "kkt": 4.820942933747574e-07,
+    "fun": 1406.9553731130748,
+    "outer": 2,
+    "inner": 52,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set)."
+   }
+  ],
+  "polish": [
+   {
+    "seconds": 0.011995416978606954,
+    "accepted": true,
+    "nll_before": 1406.9553731130748,
+    "nll_after": 1406.9553731130748,
+    "max_abs_dtheta": 0.0
+   }
+  ]
+ },
+ "instrumented_status": {
+  "raw_converged": true,
+  "kkt_residual_stored": 4.820942933747574e-07,
+  "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set).",
+  "n_restarts": 0,
+  "n_outer_iter": 2,
+  "n_inner_iter": 52,
+  "log_likelihood": -1406.9553731130748,
+  "warnings": [
+   "UserWarning: scaling= with InteractionBasis is an experimental path; validate against your use case (mirrors R tram's stram warning)."
+  ]
+ },
+ "validation": {
+  "final": {
+   "nll": 1406.9553731130748,
+   "grad_inf": 4.820942933747574e-07,
+   "stationarity_inf": 4.820942933747574e-07,
+   "min_slack": 1.4363788270785607,
+   "n_active": 0,
+   "stationarity_inf_per_obs": 4.820942933747574e-10
+  },
+  "pre_polish": {
+   "nll": 1406.9553731130748,
+   "grad_inf": 4.820942933747574e-07,
+   "stationarity_inf": 4.820942933747574e-07,
+   "min_slack": 1.4363788270785607,
+   "n_active": 0,
+   "stationarity_inf_per_obs": 4.820942933747574e-10
+  },
+  "slsqp": {
+   "seconds": 0.0033718750055413693,
+   "success": true,
+   "ll": -1406.955373113075,
+   "ll_auglag_minus_slsqp": 2.2737367544323206e-13,
+   "max_abs_dtheta": 2.1390206494942277e-07
+  },
+  "hessian_fd_vs_gradfd": {
+   "seconds_gradfd": 0.0014350420096889138,
+   "max_abs_diff": 0.0014154225791429553,
+   "rel_diff": 8.60401975914293e-06,
+   "min_eig_fd": 0.2668140197397222,
+   "cond_fd": 625.2325875004042,
+   "max_rel_se_diff": 0.0020081189857057424
+  }
+ },
+ "determinism_max_abs_dtheta_vs_fresh": 0.0,
+ "memory": {
+  "traced_peak_mib": 0.606236457824707,
+  "retained_with_caches_mib": 0.2611513137817383,
+  "retained_model_only_mib": 0.09151363372802734,
+  "score_matrix_mib": 0.06866455078125,
+  "maxrss_mib_end": 99.4375
+ },
+ "cprofile_cumulative": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    0.035    0.035 /Users/entropy/.claude/jobs/4365f609/tmp/fitbench/harness.py:300(run_op)\n        1    0.000    0.000    0.035    0.035 /Users/entropy/Git/mltpy/src/mltpy/model.py:596(fit)\n        2    0.000    0.000    0.026    0.013 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3193(hessian)\n        2    0.000    0.000    0.026    0.013 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3141(_hessian_interaction_fd)\n      360    0.000    0.000    0.026    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3161(nll)\n      360    0.004    0.000    0.025    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2652(_ll_interaction_none)\n        1    0.000    0.000    0.022    0.022 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:653(optimize)\n        1    0.000    0.000    0.022    0.022 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1022(_optimize_interaction)\n        1    0.000    0.000    0.021    0.021 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1128(_interaction_auglag)\n        3    0.000    0.000    0.021    0.007 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_minimize.py:54(minimize)\n      429    0.000    0.000    0.021    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1550(evaluate_with_derivative)\n      858    0.016    0.000    0.017    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1384(_kron_rows)\n        3    0.000    0.000    0.014    0.005 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py:204(_prepare_scalar_function)\n        3    0.000    0.000    0.014    0.005 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py:218(__init__)\n        1    0.000    0.000    0.013    0.013 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1314(_ncg_polish)\n        1    0.000    0.000    0.013    0.013 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_trustregion_ncg.py:11(_minimize_trust_ncg)\n        1    0.000    0.000    0.013    0.013 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_trustregion.py:118(_minimize_trust_region)\n        3    0.000    0.000    0.013    0.004 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py:57(__init__)\n\n",
+ "cprofile_tottime": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n      858    0.016    0.000    0.017    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1384(_kron_rows)\n      360    0.004    0.000    0.025    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2652(_ll_interaction_none)\n       68    0.002    0.000    0.006    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2711(_ll_and_grad_interaction_none)\n      429    0.002    0.000    0.002    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2690(_interaction_baseline_factor)\n      995    0.002    0.000    0.002    0.000 {method 'get' of 'dict' objects}\n      428    0.001    0.000    0.001    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:165(logpdf)\n      711    0.001    0.000    0.001    0.000 {method 'reduce' of 'numpy.ufunc' objects}\n      429    0.000    0.000    0.000    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/numpy/_core/_methods.py:96(_clip)\n      930    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.12/3.12.16/Frameworks/Python.framework/Versions/3.12/lib/python3.12/typing.py:175(_type_check)\n      858    0.000    0.000    0.003    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:329(evaluate_with_derivative)\n\n"
+}

@@ -1,0 +1,26 @@
+shift_none_n100 ok 0s
+shift_right_n100 ok 1s
+shift_none_n1000 ok 1s
+shift_right_n1000 ok 1s
+shift_none_n5000 ok 0s
+shift_right_n5000 ok 2s
+shift_interval_n1000 ok 1s
+boxcox_x3_n1000 ok 0s
+coxph_x3_right_n1000 ok 1s
+boxcox_x3_n5000 ok 1s
+coxph_x3_right_n5000 ok 2s
+boxcox_scaled_n1000 ok 1s
+boxcox_scaled_n5000 ok 1s
+ia_R_normal_3x3 ok 1s
+ia_R_logistic_3x3 ok 1s
+ia_scaled_R_stram_3x3+1 ok 1s
+ia_bs3x1_m8_n250 ok 0s
+ia_bs3x1_m8_n1000 ok 1s
+ia_bs3x1_m8_n4000 ok 2s
+ia_bs4x2_m15_n1000 ok 1s
+ia_bs6x3_m28_n250 ok 2s
+ia_bs6x3_m28_n1000 ok 133s
+ia_scaled_bs3x1_m9_n1000 ok 1s
+profile_ci_boxcox ok 8s
+profile_ci_coxph ok 13s
+DONE
