@@ -388,3 +388,35 @@ class TestConvenienceSurface:
         assert model.theta_.size == (_ORDER_Y + 1) * (_ORDER_X + 1)
         with pytest.raises(ValueError, match="gamma_ is undefined"):
             _ = model.gamma_
+
+
+class TestGammaInference:
+    """γ uncertainty through the public Coxph surface — issue #105."""
+
+    def test_vcov_spans_theta_and_gamma(self, fitted_synthetic: Coxph) -> None:
+        """vcov() is a finite, symmetric ``(p·q + q_s)²`` matrix over
+        ``[vec_C(Θ) | γ]``."""
+        ib = fitted_synthetic.basis
+        assert isinstance(ib, InteractionBasis)
+        q_s = fitted_synthetic.gamma_.size
+        m = ib.n_y_params * ib.n_x_params + q_s
+        V = fitted_synthetic.vcov()
+        assert V.shape == (m, m)
+        assert np.all(np.isfinite(V))
+        assert_allclose(V, V.T, rtol=0, atol=1e-10)
+        assert np.all(np.linalg.eigvalsh(V[-q_s:, -q_s:]) > 0)
+
+    def test_summary_tabulates_gamma_with_wald_se(
+        self, fitted_synthetic: Coxph
+    ) -> None:
+        """summary() shows a *Scaling coefficients* block holding γ and its
+        Wald SE; Θ stays untabulated."""
+        s = fitted_synthetic.summary()
+        assert s.count("Scaling coefficients:") == 1
+        block = s.split("Scaling coefficients:")[1].strip("\n").splitlines()
+        assert len(block) == 2  # header + the single γ row
+        fields = block[1].split()
+        assert fields[0] == "X1"
+        se = fitted_synthetic.standard_errors()[-1]
+        assert_allclose(float(fields[1]), fitted_synthetic.gamma_[0], atol=5e-5)
+        assert_allclose(float(fields[2]), se, atol=5e-5)

@@ -624,8 +624,9 @@ class _ScaledInteractionTram(_TramModel):
     """Exact-data, normal-base tram over an InteractionBasis.
 
     Stand-in for the forthcoming ``BoxCox(interacting=..., scaling=...)``
-    (#107) so the shared :meth:`_TramModel.summary` can be exercised on the
-    scaled-interaction path before any public tram class wires it up.
+    (#107) so the shared :meth:`_TramModel.summary` is exercised on the
+    normal-base scaled-interaction path; the public ``Coxph`` route is
+    covered in ``tests/test_tram_coxph_interacting_scaling.py``.
     """
 
     def __init__(self, basis: InteractionBasis, scaling: np.ndarray | None) -> None:
