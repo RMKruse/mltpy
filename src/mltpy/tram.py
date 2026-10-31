@@ -698,14 +698,32 @@ class Colr(_TramModel):
     continuous, fully observed outcomes.  Produces proportional-odds model
     when covariates are included.
 
+    Pass ``interacting`` to fit a *non-proportional-odds* (stratified or
+    fully-interacting) model where the transformation itself depends on the
+    covariate via the tensor product ``h(y | x) = (a(y) ⊗ b(x))ᵀ vec(Θ)``,
+    so ``logit F(y | x) = h(y | x)``.  See ADR 0001 and
+    :class:`~mltpy.basis.InteractionBasis` for the parameter-vector layout
+    and the column-wise monotonicity strategy.
+
     Parameters
     ----------
     support:
         Closed interval ``(a, b)`` covering all observed values.
     order:
-        Polynomial degree of the Bernstein basis.  Defaults to 6.
+        Polynomial degree of the Bernstein basis on the response.  Defaults
+        to 6.
     optimizer_config:
         Optimisation settings.  If ``None``, library defaults are used.
+    interacting:
+        Optional x-basis (:class:`~mltpy.basis.BernsteinBasis` or
+        :class:`~mltpy.basis.OrdinalBasis`).  When provided, the model is
+        fit as ``MLT(InteractionBasis(BernsteinBasis(...), interacting))``
+        instead of the standard shift model, with ``theta_ = vec_C(Θ)`` and
+        Θ exposed as :attr:`Theta_`.  Pass the interacting covariate as
+        ``X`` to :meth:`fit` and as ``X_new`` to :meth:`predict`.  Only
+        exact data is supported on this path: pass responses as an array,
+        or a :class:`~mltpy.variables.CensoredData` without censored rows;
+        censored rows raise ``NotImplementedError``.
     scaling:
         Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
         R ``tram::Colr(y ~ x_d | x_s)``.  Threads through to the
@@ -717,7 +735,20 @@ class Colr(_TramModel):
         fitted parameter vector gains a γ block exposed as
         :attr:`gamma_`, and :meth:`predict` requires ``X_scale_new``.
         Sign-aligned with R (ADR 0002, Decision 5); see
-        ``docs/adr/0002-scaling-terms.md``.
+        ``docs/adr/0002-scaling-terms.md``.  May be combined with
+        ``interacting=`` (ADR 0003, issue #108) to fit
+        ``logit F(y | x, x_s) = ([a(y) ⊗ b(x)]ᵀ vec(Θ)) ·
+        exp(0.5 · x_s · γ)``, the analogue of R ``tram``'s experimental
+        ``stram`` route: ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as
+        :attr:`Theta_` and γ as :attr:`gamma_`, and :meth:`fit` emits a
+        ``UserWarning`` flagging the path as experimental.
+
+    Raises
+    ------
+    NotImplementedError
+        From :meth:`fit`, when ``interacting=`` is set and ``y`` is a
+        :class:`~mltpy.variables.CensoredData` with censored rows — the
+        interaction likelihood covers exact responses only.
 
     Examples
     --------
@@ -735,16 +766,35 @@ class Colr(_TramModel):
         support: tuple[float, float],
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
+        interacting: BernsteinBasis | OrdinalBasis | None = None,
         scaling: NDArray[np.float64] | None = None,
     ) -> None:
-        super().__init__(
-            order=order,
-            support=support,
+        if interacting is None:
+            super().__init__(
+                order=order,
+                support=support,
+                censoring=CensoringType.NONE,
+                optimizer_config=optimizer_config,
+                base_distribution="logistic",
+                scaling=scaling,
+            )
+            return
+
+        # Non-proportional odds: θ = vec_C(Θ), or [vec_C(Θ) | γ] when scaled
+        # (ADR 0003).  The interaction likelihood is exact-data only, so
+        # optimize() rejects genuinely censored rows.
+        y_basis = BernsteinBasis(order=order, support=support)
+        ib = InteractionBasis(y_basis=y_basis, x_basis=interacting)
+        ConditionalTransformationModel.__init__(
+            self,
+            basis=ib,
             censoring=CensoringType.NONE,
             optimizer_config=optimizer_config,
             base_distribution="logistic",
             scaling=scaling,
         )
+        self._order = order
+        self._support = support
 
 
 # ---------------------------------------------------------------------------
