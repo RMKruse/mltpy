@@ -693,6 +693,15 @@ def optimize(
         If all restarts fail, the best result found so far is returned with
         ``converged=False``.  The caller (``model.py``) decides whether to
         raise or warn.
+
+    Raises
+    ------
+    NotImplementedError
+        For an :class:`~mltpy.basis.InteractionBasis` when ``y`` is a
+        :class:`~mltpy.variables.CensoredData` with censored rows (the
+        interaction likelihood is exact-data only), when ``scaling`` is
+        combined with ``base_distribution="exponential"``, or when
+        ``config.fixed_params`` is set.
     """
     # Fail fast for unsupported base distributions before entering scipy.
     dist = _get_dist(base_distribution)

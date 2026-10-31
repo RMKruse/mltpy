@@ -306,6 +306,33 @@ class TestConvenienceSurface:
         got = fitted_synthetic.hazard(_T_GRID, X=_X_GRID, X_scale=x_s)
         assert_allclose(got, np.exp(h) * hp, rtol=1e-10, atol=1e-14)
 
+    @pytest.mark.filterwarnings("ignore:predict.*exceeds:UserWarning")
+    @pytest.mark.parametrize("x_s_value", [-60.0, 60.0])
+    def test_extreme_scaling_stays_finite(
+        self, fitted_synthetic: Coxph, x_s_value: float
+    ) -> None:
+        """|x_s| large enough to push h past the ±30 clip stays well-defined."""
+        x_s = np.full((_T_GRID.size, 1), x_s_value)
+        s = fitted_synthetic.survival(_T_GRID, X=_X_GRID, X_scale=x_s)
+        lam = fitted_synthetic.hazard(_T_GRID, X=_X_GRID, X_scale=x_s)
+        assert np.all(np.isfinite(s)) and np.all((s >= 0.0) & (s <= 1.0))
+        assert np.all(np.isfinite(lam)) and np.all(lam >= 0.0)
+
+    def test_quantile_and_simulate_not_yet_supported(
+        self, fitted_synthetic: Coxph
+    ) -> None:
+        """Scaled interaction quantile inversion is deferred to issue #104."""
+        x_s = np.zeros((_X_GRID.size, 1))
+        with pytest.raises(NotImplementedError, match="#104"):
+            fitted_synthetic.predict(
+                np.full(_X_GRID.size, 0.5),
+                X_new=_X_GRID,
+                X_scale_new=x_s,
+                what="quantile",
+            )
+        with pytest.raises(NotImplementedError, match="#104"):
+            fitted_synthetic.simulate(_X_GRID.size, X=_X_GRID, X_scale=x_s)
+
     def test_scaling_changes_survival(self, fitted_synthetic: Coxph) -> None:
         """Different x_s values give different survival curves at the same x."""
         lo = np.full((_T_GRID.size, 1), -1.5)

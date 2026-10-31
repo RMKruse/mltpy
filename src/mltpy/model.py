@@ -910,6 +910,14 @@ class ConditionalTransformationModel:
                     "InteractionBasis prediction."
                 )
             if what == "quantile":
+                if X_scale_arr is not None:
+                    # The row-wise inversion reads θ as vec_C(Θ) only; the
+                    # scaled [vec_C(Θ) | γ] layout is issue #104.
+                    raise NotImplementedError(
+                        "predict(what='quantile') is not yet supported for "
+                        "InteractionBasis models fitted with scaling= "
+                        "(issue #104)."
+                    )
                 return self._predict_quantile_interaction(
                     y_arr, X_arr, offset=offset_arr
                 )
