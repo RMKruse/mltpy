@@ -30,6 +30,15 @@ The target distribution Z follows one of:
                              ``theta_b[0] + X_i · β >= 0`` is added for each
                              training observation (see
                              :func:`mltpy.constraints.build_constraints`).
+                             This is the lower-support-end rule
+                             ``h(a|x_i) >= 0`` of ADR 0005.  Where
+                             ``h(a|x) > 0`` the model has a support atom at
+                             the lower end ``y = a`` with mass
+                             ``F(a|x) = 1 − e^{−h(a|x)}``.  An exact
+                             observation with ``y_i = a`` is still scored
+                             with the density, not the atom mass (a
+                             probability-zero event under a continuous
+                             design).
 * ``"laplace"``            — standard Laplace (double exponential); the link
                              realises a median regression model.
 * ``"cauchy"``             — standard Cauchy.  Not log-concave, so the
@@ -280,7 +289,10 @@ def _get_dist(base_distribution: str) -> DistOps:
       exponential (rate 1).  Support is ``[0, ∞)``; the optimiser enforces
       ``h(y|x) >= 0`` via :func:`mltpy.constraints.build_constraints`.  With
       no covariates this collapses to ``theta_b[0] >= 0``; with covariates,
-      one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row.
+      one inequality ``theta_b[0] + X_i · β >= 0`` is added per training row
+      (the lower-support-end rule of ADR 0005).  ``h(a|x) > 0`` gives a
+      support atom ``F(a|x) = 1 − e^{−h(a|x)}`` at the lower end ``y = a``;
+      an exact ``y_i = a`` is scored with the density, not the atom mass.
     * ``"laplace"``            — :data:`scipy.stats.laplace`, the standard
       Laplace (double exponential) distribution.  Score function is
       ``sign(h)``; the link realises a median regression model.
@@ -1464,6 +1476,16 @@ def _ll_none(
 
     The parameter vector is ``theta = [theta_b | beta | gamma]`` of length
     ``p + q_d + q_s``.
+
+    Under ``dist.kind == "exponential"`` the fitted model has a support atom
+    at the lower support end ``a`` with mass ``F(a|x) = 1 − e^{−h(a|x)}``
+    wherever ``h(a|x) > 0`` (ADR 0005).  This function scores every exact
+    observation with the continuous density ``log f(h_i) + log h'_i``, an
+    exact ``y_i = a`` included; it does not use the atom mass ``log F(a|x_i)``.
+    Such a row has probability zero under a continuous design, so this is
+    documented rather than special-cased.  ``log f = −h`` is used on the whole
+    real line (a smooth extension; scipy's ``logpdf`` is ``−inf`` for
+    ``h < 0``).
 
     Parameters
     ----------

@@ -145,6 +145,145 @@ _SIMULATE_U_EPS = 1e-10
 # `what` values whose formula involves h'(y) and therefore require hp > 0.
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
+# Exponential link (ADR 0005): predict() flags rows with h(a|x) < −tol.  The
+# training support rows θ_b[0] + x_i·β ≥ 0 are only met to the solver's
+# feasibility tolerance (AugLagOptions.feas_tol = 1e-7), so a strict `< 0`
+# test fires on round-off at in-hull x when every row is active.  On the
+# unit-rate exponential scale F(a|x) = 1 − e^{−h(a|x)} ≈ h(a|x) near 0, so the
+# negative CDF mass left unflagged is below 1e-7.
+_EXPON_SUPPORT_TOL = 1e-7
+
+# Maximum number of row indices listed in the exponential-support warning.
+_MAX_WARN_ROWS = 10
+
+
+def _warn_exponential_support(
+    theta_b0: float,
+    m: int,
+    *,
+    f_scale: NDArray[np.float64] | None,
+    xbeta: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> None:
+    """Warn when ``h(a|x) < 0`` at prediction rows under the exponential link.
+
+    Parameters
+    ----------
+    theta_b0:
+        First Bernstein coefficient ``θ_b[0]``; ``h_0(a) = θ_b[0]`` because
+        ``B_k(a) = e_0`` at the lower support end ``a``.
+    m:
+        Number of prediction rows.
+    f_scale:
+        Per-row scaling factor ``exp(0.5·x_s·γ)``, shape ``(m,)``, or ``None``
+        for unscaled fits.
+    xbeta:
+        Per-row shift ``x_d·β``, shape ``(m,)``, or ``None``.
+    offset:
+        Per-row offset, shape ``(m,)``, or ``None``.
+
+    Notes
+    -----
+    ADR 0005 consequence 4.  With ``h(a|x) = θ_b[0]·exp(0.5·x_s·γ) + x_d·β +
+    offset``, the fit enforces ``h(a|x_i) ≥ 0`` on the training rows only.
+    Unscaled, that guarantees ``h(a|x) ≥ 0`` on the convex hull of the training
+    ``x_d``, so the warning signals extrapolation; scaled, the expression is
+    convex in ``x`` and may dip below 0 inside the hull.  Rows count as off
+    the support below ``−_EXPON_SUPPORT_TOL``.  The returned predictions are
+    left unchanged: clamping at ``max(h, 0)`` would turn the model into the
+    observed-point threshold model at predict time.  Emitted with
+    ``stacklevel=3`` so that, when :meth:`ConditionalTransformationModel.predict`
+    calls it directly, the warning points at the caller of ``predict``.
+    """
+    h_a = np.full(m, theta_b0, dtype=np.float64)
+    if f_scale is not None:
+        h_a = h_a * f_scale
+    if xbeta is not None:
+        h_a = h_a + xbeta
+    if offset is not None:
+        h_a = h_a + offset
+    bad = np.flatnonzero(h_a < -_EXPON_SUPPORT_TOL)
+    if bad.size == 0:
+        return
+    shown = ", ".join(str(i) for i in bad[:_MAX_WARN_ROWS])
+    if bad.size > _MAX_WARN_ROWS:
+        shown += ", …"
+    warnings.warn(
+        f"predict(): h(a|x) < 0 at {bad.size} row(s) [{shown}] under "
+        "base_distribution='exponential' (min h(a|x) = "
+        f"{float(np.min(h_a[bad])):.4g}).  The fit only enforces the support "
+        "rule h(a|x_i) ≥ 0 on the training rows (ADR 0005); at these x the "
+        "model leaves the exponential support and F(y|x) = 1 − exp(−h(y|x)) "
+        "is negative near the lower support end a.  Values are returned "
+        "unclamped.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _warn_quantile_saturation(
+    z_raw: NDArray[np.float64],
+    z_min: float,
+    z_max: float,
+    *,
+    target: str,
+    lower_end: float,
+    exponential: bool,
+) -> None:
+    """Warn when the quantile bisection target is clipped to the basis bracket.
+
+    Parameters
+    ----------
+    z_raw:
+        Unclipped bisection target on the baseline-``h`` scale, shape ``(m,)``.
+    z_min, z_max:
+        Bracket ``[θ_b[0]+ε, θ_b[-1]−ε]`` that ``z_raw`` is clipped to.
+    target:
+        Human-readable formula of ``z_raw`` for the message.
+    lower_end:
+        Lower support end ``a`` of the response basis.
+    exponential:
+        ``True`` under ``base_distribution="exponential"``.
+
+    Notes
+    -----
+    Under the exponential link ``z_raw < θ_b[0]`` is equivalent to
+    ``p < F(a|x) = 1 − exp(−h(a|x))``: the distribution has a support atom of
+    mass ``F(a|x)`` at ``y = a`` (ADR 0005, consequence 3), so the returned
+    value ``a`` is the exact quantile, not a numerical saturation.  Those
+    rows get their own wording; every other clip (the upper end, or any clip
+    under another link) keeps the basis-endpoint wording.  Emitted with
+    ``stacklevel=4`` (this helper → ``_predict_quantile*`` → ``predict``) so
+    that, for a direct call to :meth:`ConditionalTransformationModel.predict`,
+    the warnings point at its caller.  The right-censored grid inversion in
+    ``_predict_quantile`` does not route through this helper.
+    """
+    low = z_raw < z_min
+    clipped = low | (z_raw > z_max)
+    if exponential and np.any(low):
+        warnings.warn(
+            f"predict(what='quantile'): p < F(a|x) = 1 − exp(−h(a|x)) at "
+            f"{int(np.count_nonzero(low))} point(s).  Under "
+            "base_distribution='exponential' the distribution has a support "
+            "atom of mass F(a|x) at the lower support end y = a (ADR 0005), "
+            f"so the quantile at these points is a = {lower_end:.4g}; this is "
+            "the exact value, not a numerical saturation.",
+            UserWarning,
+            stacklevel=4,
+        )
+        clipped = z_raw > z_max
+    if np.any(clipped):
+        warnings.warn(
+            f"predict(what='quantile'): {target} exceeds the basis bracket "
+            f"[θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] at one or "
+            "more points; clipping for numerical stability. Quantiles at "
+            "these points are saturated at the basis endpoints, not the true "
+            "asymptotic limit. Consider widening the basis support or "
+            "restricting probs away from 0/1.",
+            UserWarning,
+            stacklevel=4,
+        )
+
 
 def _invert_shift_groups(
     probs: NDArray[np.float64],
@@ -862,11 +1001,46 @@ class ConditionalTransformationModel:
         ValueError
             If ``what`` is not one of the valid options.
 
+        Warns
+        -----
+        UserWarning
+            Under ``base_distribution="exponential"`` on the shift basis, when
+            ``h(a|x) < 0`` at one or more rows of ``X_new`` (``a`` the lower
+            support end), naming those rows.  Values are returned unclamped.
+        UserWarning
+            For ``what="quantile"``, when the inversion target is clipped to
+            the basis bracket, or (exponential link) when ``p < F(a|x)`` so
+            the quantile is the support atom ``a``.
+
         Notes
         -----
         Log-scale variants use ``scipy.special.log_ndtr`` for the normal
         distribution's log-CDF (more accurate in the tails) and
         ``dist.logcdf``/``logsf``/``logpdf`` otherwise.
+
+        **Exponential link (ADR 0005).**  The fit enforces the lower-support-end
+        rule ``h(a|x_i) ≥ 0`` on every training row.  Where ``h(a|x) > 0`` the
+        fitted distribution has a support atom at ``y = a`` with mass
+        ``F(a|x) = 1 − e^{−h(a|x)}`` (a jump in the cumulative hazard at
+        ``a``): ``what="distribution"`` returns that mass at ``y = a``, and
+        ``what="quantile"`` returns ``a`` for every ``p < F(a|x)`` (except on
+        right-censored fits, whose quantiles follow R ``qmlt``'s grid
+        inversion on ``[0, b]`` with the CDF forced to 0 at the first grid
+        point, so small ``p`` are interpolated rather than returned as ``a``).
+        Fitting still scores an exact observation with ``y_i = a`` with the
+        density, not the atom mass.  The rule only covers the training rows:
+        on the unscaled shift path it holds on the convex hull of the training
+        ``X``, but a new ``x``
+        outside it can give ``h(a|x) < 0`` and a negative CDF near ``a``.
+        ``predict`` then warns and returns the raw values.  It does not
+        clamp at ``max(h, 0)``, which would turn the fit into an
+        observed-point threshold model.  The check already uses the scaled
+        form ``θ_b[0]·e^{0.5·x_s·γ} + x_d·β + offset``; that is convex in
+        ``x``, so once ``scaling=`` is supported with this link it can also
+        fire inside the hull.  The density-scale targets (``"density"``,
+        ``"hazard"``, …) describe the continuous part only and use the smooth
+        extension ``log f = −h``, which stays finite for ``h < 0``; they
+        neither show the atom nor reveal off-support rows.
 
         Examples
         --------
@@ -976,6 +1150,13 @@ class ConditionalTransformationModel:
         # Standard (shift) basis path
         # ------------------------------------------------------------------
         theta_b, beta_fit, gamma_fit, p, q_d, q_s = self._split_fitted_theta()
+        # Scaling factor f_i = exp(0.5 · x_s,i · γ).  Same convention as
+        # likelihood._ll_none (and R `mlt:::tmlt`), so γ is sign- and
+        # magnitude-aligned with R `tram`'s scaling block.
+        scale_factor: NDArray[np.float64] | None = None
+        if gamma_fit is not None and X_scale_arr is not None:
+            scale_factor = np.exp(0.5 * (X_scale_arr @ gamma_fit))
+        check_support = self.base_distribution == "exponential"
 
         if what == "quantile":
             xbeta: NDArray[np.float64] | None = None
@@ -998,6 +1179,14 @@ class ConditionalTransformationModel:
                         f"model has {beta_fit.shape[0]} covariate coefficients."
                     )
                 xbeta = X_arr @ beta_fit
+            if check_support:
+                _warn_exponential_support(
+                    float(theta_b[0]),
+                    m,
+                    f_scale=scale_factor,
+                    xbeta=xbeta,
+                    offset=offset_arr,
+                )
             if gamma_fit is not None and X_scale_arr is not None:
                 return self._predict_quantile_scaling(
                     y_arr,
@@ -1014,24 +1203,28 @@ class ConditionalTransformationModel:
         # Evaluate transformation and its derivative
         B = self.basis.evaluate(y_arr)  # (m, p)
         D = self.basis.derivative(y_arr, order=1)  # (m, p)
-        h0 = B @ theta_b  # (m,)
-        hp0 = D @ theta_b  # (m,)
-        # Scaling factor f_i = exp(0.5 · x_s,i · γ).  Same convention as
-        # likelihood._ll_none (and R `mlt:::tmlt`), so γ is sign- and
-        # magnitude-aligned with R `tram`'s scaling block.
-        if gamma_fit is not None and X_scale_arr is not None:
-            f_scale = np.exp(0.5 * (X_scale_arr @ gamma_fit))
-            h = h0 * f_scale
-            hp = hp0 * f_scale
-        else:
-            h = h0
-            hp = hp0
+        h = B @ theta_b  # (m,)
+        hp = D @ theta_b  # (m,)
+        if scale_factor is not None:
+            h = h * scale_factor
+            hp = hp * scale_factor
 
+        xbeta_d: NDArray[np.float64] | None = None
         if X_arr is not None and beta_fit is not None:
-            h = h + X_arr @ beta_fit
+            xbeta_d = X_arr @ beta_fit
+            h = h + xbeta_d
 
         if offset_arr is not None:
             h = h + offset_arr
+
+        if check_support:
+            _warn_exponential_support(
+                float(theta_b[0]),
+                m,
+                f_scale=scale_factor,
+                xbeta=xbeta_d,
+                offset=offset_arr,
+            )
 
         dist = _get_dist(self.base_distribution)
         return _apply_what(what, h, hp, dist)
@@ -1180,16 +1373,14 @@ class ConditionalTransformationModel:
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
 
         z_raw = dist.ppf(probs_arr) - shift
-        if np.any((z_raw < z_min) | (z_raw > z_max)):
-            warnings.warn(
-                "predict(what='quantile'): F⁻¹(p) − xβ exceeds the basis "
-                f"bracket [θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] "
-                "at one or more points; clipping for numerical stability. "
-                "Quantiles at these points are saturated at the basis "
-                "endpoints, not the true asymptotic limit. Consider widening "
-                "the basis support or restricting probs away from 0/1.",
-                stacklevel=2,
-            )
+        _warn_quantile_saturation(
+            z_raw,
+            z_min,
+            z_max,
+            target="F⁻¹(p) − xβ",
+            lower_end=a,
+            exponential=self.base_distribution == "exponential",
+        )
         z = np.clip(z_raw, z_min, z_max)
 
         # Precomputed Bernstein constants: h(q) = sum_i binom(k,i) t^i (1-t)^(k-i) θ_i
@@ -1287,17 +1478,16 @@ class ConditionalTransformationModel:
         z_min = float(theta_b[0]) + _BRENTQ_EPS
         z_max = float(theta_b[-1]) - _BRENTQ_EPS
         z_raw = (dist.ppf(probs_arr) - shift) / f_scale
-        if np.any((z_raw < z_min) | (z_raw > z_max)):
-            warnings.warn(
-                "predict(what='quantile'): (F⁻¹(p) − xβ − offset) / "
-                "exp(0.5·x_s·γ) exceeds the basis bracket "
-                f"[θ_b[0]+ε, θ_b[-1]−ε] = [{z_min:.4g}, {z_max:.4g}] at "
-                "one or more points; clipping for numerical stability. "
-                "Quantiles at these points are saturated at the basis "
-                "endpoints, not the true asymptotic limit. Consider widening "
-                "the basis support or restricting probs away from 0/1.",
-                stacklevel=2,
-            )
+        # Under the exponential link z_raw < θ_b[0] ⇔ F⁻¹(p) < h(a|x) ⇔
+        # p < F(a|x): the support-atom case, same as the shift path.
+        _warn_quantile_saturation(
+            z_raw,
+            z_min,
+            z_max,
+            target="(F⁻¹(p) − xβ − offset) / exp(0.5·x_s·γ)",
+            lower_end=a,
+            exponential=self.base_distribution == "exponential",
+        )
         z = np.clip(z_raw, z_min, z_max)
 
         # Reuse the same Bernstein bisection scaffolding as ``_predict_quantile``.
