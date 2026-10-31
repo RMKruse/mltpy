@@ -486,21 +486,6 @@ class BoxCox(_TramModel):
         :attr:`~mltpy.variables.CensoringType.INTERVAL` together with a
         :class:`~mltpy.variables.CensoredData` ``y`` to fit the censored
         Box-Cox likelihood.
-    scaling:
-        Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
-        R ``tram::BoxCox(..., scale=~x_s)``.  Threads through to the
-        scaled-baseline likelihood (issue #71) and the scaled-predict
-        path (issue #72).  When supplied, the fitted parameter vector
-        gains a γ block (length ``q_s``) exposed as :attr:`gamma_`, and
-        :meth:`predict` requires ``X_scale_new``.  Sign-aligned with the
-        R ``scale=`` block (ADR 0002, Decision 5); see
-        ``docs/adr/0002-scaling-terms.md``.  May be combined with
-        ``interacting=`` (ADR 0003, issue #107) to fit
-        ``Φ⁻¹ F(y | x, x_s) = ([a(y) ⊗ b(x)]ᵀ vec(Θ)) · exp(0.5 · x_s · γ)``,
-        the analogue of R ``tram::BoxCox(y | s ~ 1 | z)`` (class
-        ``stram``): ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as
-        :attr:`Theta_` and γ as :attr:`gamma_`, and :meth:`fit` emits a
-        ``UserWarning`` flagging the path as experimental.
     interacting:
         Optional x-basis (:class:`~mltpy.basis.BernsteinBasis`,
         :class:`~mltpy.basis.OrdinalBasis`, or
@@ -517,6 +502,21 @@ class BoxCox(_TramModel):
         :meth:`fitted_transformation` is unavailable (there is no single
         baseline transformation); use :attr:`Theta_` or
         ``predict(what="trafo")``.
+    scaling:
+        Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
+        R ``tram::BoxCox(..., scale=~x_s)``.  Threads through to the
+        scaled-baseline likelihood (issue #71) and the scaled-predict
+        path (issue #72).  When supplied, the fitted parameter vector
+        gains a γ block (length ``q_s``) exposed as :attr:`gamma_`, and
+        :meth:`predict` requires ``X_scale_new``.  Sign-aligned with the
+        R ``scale=`` block (ADR 0002, Decision 5); see
+        ``docs/adr/0002-scaling-terms.md``.  May be combined with
+        ``interacting=`` (ADR 0003, issue #107) to fit
+        ``Φ⁻¹ F(y | x, x_s) = ([a(y) ⊗ b(x)]ᵀ vec(Θ)) · exp(0.5 · x_s · γ)``,
+        the analogue of R ``tram::BoxCox(y | s ~ 1 | z)`` (class
+        ``stram``): ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as
+        :attr:`Theta_` and γ as :attr:`gamma_`, and :meth:`fit` emits a
+        ``UserWarning`` flagging the path as experimental.
 
     Raises
     ------
@@ -555,8 +555,8 @@ class BoxCox(_TramModel):
         order: int = 6,
         optimizer_config: OptimizerConfig | None = None,
         censoring: CensoringType = CensoringType.NONE,
-        scaling: NDArray[np.float64] | None = None,
         interacting: BernsteinBasis | OrdinalBasis | OneHotBasis | None = None,
+        scaling: NDArray[np.float64] | None = None,
     ) -> None:
         if interacting is None:
             super().__init__(
