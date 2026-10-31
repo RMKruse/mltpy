@@ -2694,7 +2694,7 @@ class _InteractionDesign:
 
 
 def _ll_interaction_none(
-    dm: _InteractionDesign,
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
@@ -2707,7 +2707,7 @@ def _ll_interaction_none(
     vector is ``theta = [vec_C(Θ) | γ]`` and the transformation is
     ``h(y|x,x_s) = ([a(y)⊗b(x)]ᵀ vec(Θ)) · exp(0.5·x_s·γ)`` (ADR 0003).
     """
-    design, d_design = dm.design, dm.d_design  # (n, p*q)
+    design, d_design = kron.design, kron.d_design  # (n, p*q)
     theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
     g = design @ theta_T
     gp = d_design @ theta_T
@@ -2751,7 +2751,7 @@ def _interaction_baseline_factor(
 
 
 def _ll_and_grad_interaction_none(
-    dm: _InteractionDesign,
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
     dist: DistOps = _NORM_OPS,
     weights: NDArray[np.float64] | None = None,
@@ -2767,7 +2767,7 @@ def _ll_and_grad_interaction_none(
     ``0.5·X_sᵀ(w·(ns·g·f − 1))`` — the same form as the shift-scaling path
     (see :func:`_ll_and_grad_none`).
     """
-    design, d_design = dm.design, dm.d_design  # (n, p*q)
+    design, d_design = kron.design, kron.d_design  # (n, p*q)
     theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
     g = design @ theta_T
     gp = d_design @ theta_T
@@ -2809,7 +2809,7 @@ def _ll_and_grad_interaction_none(
 
 
 def _interaction_nll(
-    dm: _InteractionDesign,
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
@@ -2824,14 +2824,14 @@ def _interaction_nll(
         If ``ℓ(θ)`` is non-finite (e.g. ``∂h/∂y ≤ 0`` at a data point).
     """
     result = _ll_interaction_none(
-        dm, theta, dist=dist, weights=weights, offset=offset, scaling=scaling
+        kron, theta, dist=dist, weights=weights, offset=offset, scaling=scaling
     )
     _check_finite_ll(result)
     return float(-result)
 
 
 def _interaction_nll_and_grad(
-    dm: _InteractionDesign,
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
@@ -2846,7 +2846,7 @@ def _interaction_nll_and_grad(
         If ``ℓ(θ)`` is non-finite.
     """
     ll_i, grad_i = _ll_and_grad_interaction_none(
-        dm, theta, dist=dist, weights=weights, offset=offset, scaling=scaling
+        kron, theta, dist=dist, weights=weights, offset=offset, scaling=scaling
     )
     _check_finite_ll(ll_i)
     return float(-ll_i), grad_i
@@ -2974,10 +2974,14 @@ def _negative_log_likelihood_from_dist(
             raise ValueError(
                 "InteractionBasis requires X to be provided for likelihood evaluation."
             )
-        dm = _InteractionDesign.build(basis, y, X)
+        kron = _InteractionDesign.build(basis, y, X)
         if not gradient:
-            return _interaction_nll(dm, theta, dist, weights, offset, scaling)
-        return _interaction_nll_and_grad(dm, theta, dist, weights, offset, scaling)
+            return _interaction_nll(
+                kron, theta, dist, weights=weights, offset=offset, scaling=scaling
+            )
+        return _interaction_nll_and_grad(
+            kron, theta, dist, weights=weights, offset=offset, scaling=scaling
+        )
 
     if not gradient:
         return -_log_likelihood_from_dist(
@@ -3194,8 +3198,8 @@ def negative_log_likelihood(
 
 
 def _hessian_interaction_fd(
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
-    dm: _InteractionDesign,
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
@@ -3207,7 +3211,7 @@ def _hessian_interaction_fd(
     On the scaled path ``theta = [vec_C(Θ) | γ]`` and the observed
     information spans both blocks (ADR 0003 Decision 4) — the same
     finite-difference Hessian, simply over a longer parameter vector.  All
-    ``2·m·(m+1)`` likelihood evaluations share the prebuilt designs ``dm``.
+    ``2·m·(m+1)`` likelihood evaluations share the prebuilt designs ``kron``.
 
     Raises
     ------
@@ -3219,7 +3223,7 @@ def _hessian_interaction_fd(
     def nll(t: NDArray[np.float64]) -> float:
         return float(
             -_ll_interaction_none(
-                dm,
+                kron,
                 t,
                 dist=dist,
                 weights=weights,
@@ -3297,8 +3301,8 @@ def hessian(
         if X is None:
             raise ValueError("InteractionBasis requires X for hessian computation.")
         return _hessian_interaction_fd(
-            theta,
             _InteractionDesign.build(basis, y, X),
+            theta,
             dist=dist,
             weights=weights,
             offset=offset,
@@ -3373,8 +3377,8 @@ def hessian(
 
 
 def _score_matrix_interaction(
+    kron: _InteractionDesign,
     theta: NDArray[np.float64],
-    dm: _InteractionDesign,
     dist: DistOps,
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
@@ -3388,7 +3392,7 @@ def _score_matrix_interaction(
     ``0.5·x_s·(1 − ns·g·f)`` — the per-observation form of the ``γ`` score
     in :func:`_ll_and_grad_interaction_none`.
     """
-    design, d_design = dm.design, dm.d_design  # (n, p*q)
+    design, d_design = kron.design, kron.d_design  # (n, p*q)
     theta_T, f = _interaction_baseline_factor(theta, design.shape[1], scaling)
     g = design @ theta_T
     gp = d_design @ theta_T
@@ -3462,8 +3466,8 @@ def score_matrix(
                 "InteractionBasis requires X for score_matrix computation."
             )
         result = _score_matrix_interaction(
-            theta,
             _InteractionDesign.build(basis, y, X),
+            theta,
             dist=dist,
             weights=weights,
             offset=offset,

@@ -1266,26 +1266,35 @@ def _optimize_interaction(
     # The dense Kronecker designs a(y)⊗b(x) and a'(y)⊗b(x) do not depend on θ:
     # build them once and share them across every objective, gradient,
     # penalty-anchor and polish-Hessian evaluation of this fit (issue #147).
-    # Only the closures below hold ``dm``, so it is released when this
+    # Only the closures below hold ``kron``, so it is released when this
     # function returns; it is never stored on the result or the model.
-    dm = _InteractionDesign.build(basis, y, x_arr)
+    kron = _InteractionDesign.build(basis, y, x_arr)
 
     def true_nll(theta: NDArray[np.float64]) -> float:
         # Unpenalised, like ``_make_true_nll``: an infeasible θ raises.
-        return _interaction_nll(dm, theta, dist, weights, offset, scaling)
+        return _interaction_nll(
+            kron, theta, dist, weights=weights, offset=offset, scaling=scaling
+        )
 
     # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
     # keeps the caller's weights via ``true_nll``.
     obj_weights, obj_scale = _solver_weights(weights, config.solver)
     penalty = _infeasible_penalty(
         theta_init,
-        lambda t: _interaction_nll(dm, t, dist, obj_weights, offset, scaling),
+        lambda t: _interaction_nll(
+            kron, t, dist, weights=obj_weights, offset=offset, scaling=scaling
+        ),
     )
 
     def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         try:
             return _interaction_nll_and_grad(
-                dm, theta, dist, obj_weights, offset, scaling
+                kron,
+                theta,
+                dist,
+                weights=obj_weights,
+                offset=offset,
+                scaling=scaling,
             )
         except InfeasibleParameterError:
             # Same contract as the shift path's ``_make_objective``: a finite
@@ -1312,7 +1321,7 @@ def _optimize_interaction(
 
     def hess(theta: NDArray[np.float64]) -> NDArray[np.float64]:
         return _hessian_interaction_fd(
-            theta, dm, dist, weights=weights, offset=offset, scaling=scaling
+            kron, theta, dist, weights=weights, offset=offset, scaling=scaling
         )
 
     if config.solver == "auglag":
@@ -1506,8 +1515,8 @@ def _ncg_polish(
         point outside the monotone cone) is absorbed into a stiff ``1e6·I``
         so that trust-ncg shrinks its step.
     n_params:
-        Number of Bernstein basis coefficients (shift path) or ``None``-equivalent
-        when ``A_ineq`` is provided (interaction path uses A_ineq for feasibility).
+        Number of Bernstein basis coefficients ``θ_b`` (shift path).  Ignored
+        when ``A_ineq`` is provided; the interaction path passes ``0``.
     A_ineq:
         Optional inequality constraint matrix.  When provided, feasibility is
         checked via ``A_ineq @ theta_polished >= 0`` instead of the shift-model

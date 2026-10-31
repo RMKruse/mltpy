@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from mltpy._auglag import AugLagOptions
-from mltpy.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import MonotonicityConstraint
 from mltpy.likelihood import InfeasibleParameterError, negative_log_likelihood
 from mltpy.optimizer import (
@@ -1141,8 +1141,9 @@ class TestInteractionDesignReuse:
     """
 
     @staticmethod
-    def _setup(scaled: bool) -> tuple:
-        from mltpy.basis import InteractionBasis
+    def _setup(
+        scaled: bool,
+    ) -> tuple[InteractionBasis, np.ndarray, np.ndarray, np.ndarray | None]:
 
         rng = np.random.default_rng(20261031)
         n = 300
@@ -1156,14 +1157,16 @@ class TestInteractionDesignReuse:
         return basis, y, X, scaling
 
     @staticmethod
-    def _spy_builds(monkeypatch: pytest.MonkeyPatch) -> list:
+    def _spy_builds(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
         """Record every design pair returned by ``evaluate_with_derivative``."""
-        from mltpy.basis import InteractionBasis
-
-        built: list = []
+        built: list[tuple[np.ndarray, np.ndarray]] = []
         original = InteractionBasis.evaluate_with_derivative
 
-        def spy(self, y, X):  # type: ignore[no-untyped-def]
+        def spy(
+            self: InteractionBasis, y: np.ndarray, X: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
             out = original(self, y, X)
             built.append(out)
             return out
