@@ -26,6 +26,7 @@ import pathlib
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
+from scipy.stats import norm
 
 from mltpy import (
     ConditionalTransformationModel,
@@ -34,7 +35,7 @@ from mltpy import (
     OptimizerConfig,
     log_likelihood,
 )
-from mltpy.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis, OrdinalBasis, PolynomialBasis
 from mltpy.tram import BoxCox
 from mltpy.variables import CensoredData, CensoringType
 
@@ -45,6 +46,7 @@ _REF_FILES = [
     "s_train",
     "x_s_train",
     "y_support",
+    "theta",
     "theta_onehot",
     "gamma",
     "loglik",
@@ -60,7 +62,7 @@ _REF_FILES = [
 _ORDER_Y = 2
 _K = 3
 
-_EXPERIMENTAL = pytest.mark.filterwarnings(
+_IGNORE_EXPERIMENTAL_WARNING = pytest.mark.filterwarnings(
     "ignore:scaling= with InteractionBasis is an experimental path"
 )
 
@@ -111,11 +113,31 @@ def bx_fits(bx_ref: dict[str, np.ndarray]) -> dict[str, BoxCox]:
 
 
 class TestRParity:
+    @pytest.mark.parametrize("solver", _SOLVERS)
     def test_gamma_matches_r(
-        self, bx_fits: dict[str, BoxCox], bx_ref: dict[str, np.ndarray]
+        self,
+        bx_fits: dict[str, BoxCox],
+        bx_ref: dict[str, np.ndarray],
+        solver: str,
     ) -> None:
         gamma_r = np.atleast_1d(bx_ref["gamma"])
-        assert_allclose(bx_fits["auglag"].gamma_, gamma_r, rtol=1e-6, atol=1e-10)
+        assert_allclose(bx_fits[solver].gamma_, gamma_r, rtol=1e-6, atol=1e-10)
+
+    def test_onehot_theta_is_tram_contrast_theta(
+        self, bx_ref: dict[str, np.ndarray]
+    ) -> None:
+        """The fixture's one-hot Θ is tram's treatment-contrast Θ remapped.
+
+        tram orders its baseline y-fastest per x-column ``(Intercept)``,
+        ``sb``, ``sc``; one-hot column k is the intercept column plus
+        contrast column k (zero for the reference level).
+        """
+        p = _ORDER_Y + 1
+        C = bx_ref["theta"][: p * _K].reshape(_K, p).T  # (p, K) contrast Θ
+        Theta = C.copy()
+        Theta[:, 1:] += C[:, [0]]
+        assert_allclose(Theta.ravel(), bx_ref["theta_onehot"], rtol=1e-14, atol=0)
+        assert_allclose(bx_ref["theta"][p * _K :], bx_ref["gamma"], rtol=0, atol=0)
 
     def test_loglik_matches_r(
         self, bx_fits: dict[str, BoxCox], bx_ref: dict[str, np.ndarray]
@@ -172,7 +194,7 @@ class TestRParity:
         """predict() with the parallel X_scale_new= matches R row-wise."""
         grid = bx_ref["grid"]
         y, s, x_s = grid[:, 0], grid[:, 1:2], grid[:, 2:3]
-        got = bx_fits[solver].predict(y, X_new=s, what=what, X_scale_new=x_s)  # type: ignore[arg-type]
+        got = bx_fits[solver].predict(y, X_new=s, what=what, X_scale_new=x_s)
         assert_allclose(got, bx_ref[what], rtol=_RTOL, atol=1e-10)
 
     @pytest.mark.parametrize("solver", _SOLVERS)
@@ -264,12 +286,16 @@ def _analytic_h(
 class TestConvenienceSurface:
     @pytest.mark.parametrize(
         "x_basis",
-        [BernsteinBasis(order=2, support=(0.0, 1.0)), OneHotBasis(K=3)],
-        ids=["bernstein", "onehot"],
+        [
+            BernsteinBasis(order=2, support=(0.0, 1.0)),
+            OrdinalBasis(K=3),
+            OneHotBasis(K=3),
+        ],
+        ids=["bernstein", "ordinal", "onehot"],
     )
     @pytest.mark.parametrize("scaled", [False, True], ids=["unscaled", "scaled"])
     def test_builds_interaction_model(
-        self, x_basis: BernsteinBasis | OneHotBasis, scaled: bool
+        self, x_basis: BernsteinBasis | OrdinalBasis | OneHotBasis, scaled: bool
     ) -> None:
         x_s = np.zeros((4, 1)) if scaled else None
         model = BoxCox(support=(0.0, 1.0), order=3, interacting=x_basis, scaling=x_s)
@@ -319,8 +345,6 @@ class TestConvenienceSurface:
         self, fitted_synthetic: BoxCox, x_s_value: float
     ) -> None:
         """Normal link: F = Φ(h), f = φ(h)·h'."""
-        from scipy.stats import norm
-
         x_s = np.full((_Y_GRID.size, 1), x_s_value)
         h, hp = _analytic_h(fitted_synthetic, _Y_GRID, _X_GRID, x_s)
         cdf = fitted_synthetic.predict(
@@ -407,7 +431,7 @@ class TestConvenienceSurface:
         assert fitted_synthetic.theta_ is not None
         assert_allclose(model.theta_, fitted_synthetic.theta_, rtol=1e-12, atol=0)
 
-    @_EXPERIMENTAL
+    @_IGNORE_EXPERIMENTAL_WARNING
     @pytest.mark.parametrize("scaled", [False, True], ids=["unscaled", "scaled"])
     def test_censored_data_rejected(
         self,
@@ -422,6 +446,73 @@ class TestConvenienceSurface:
         model = _boxcox(support, x_s if scaled else None, CensoringType.RIGHT)
         with pytest.raises(NotImplementedError, match="exact"):
             model.fit(cd, X=x)
+
+    @_IGNORE_EXPERIMENTAL_WARNING
+    @pytest.mark.parametrize(
+        ("x_basis", "first_code"),
+        [(OrdinalBasis(K=3), 1), (OneHotBasis(K=3), 0)],
+        ids=["ordinal", "onehot"],
+    )
+    def test_categorical_x_basis_fits(
+        self,
+        synthetic: tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float]],
+        x_basis: OrdinalBasis | OneHotBasis,
+        first_code: int,
+    ) -> None:
+        """Categorical x-bases fit with one Θ column per basis function.
+
+        OrdinalBasis(K) labels cut positions 1..K-1; OneHotBasis(K) labels
+        categories 0..K-1.
+        """
+        y, _, x_s, support = synthetic
+        n_codes = x_basis.order + 1
+        rng = np.random.default_rng(0)
+        codes = rng.integers(first_code, first_code + n_codes, y.size)
+        model = BoxCox(
+            support=support, order=_ORDER_Y, interacting=x_basis, scaling=x_s
+        ).fit(y, X=codes)
+        assert model.Theta_ is not None
+        assert model.Theta_.shape == (_ORDER_Y + 1, x_basis.order + 1)
+        cdf = model.predict(y[:5], X_new=codes[:5], X_scale_new=x_s[:5])
+        assert np.all((cdf > 0.0) & (cdf < 1.0))
+
+    def test_simulate_with_x_scale(self, fitted_synthetic: BoxCox) -> None:
+        """simulate() threads the parallel X_scale= to the quantile path."""
+        a, b = fitted_synthetic.basis.support
+        draws = fitted_synthetic.simulate(
+            _X_GRID.size,
+            X=_X_GRID,
+            X_scale=np.full((_X_GRID.size, 1), 0.5),
+            random_state=0,
+        )
+        assert draws.shape == (_X_GRID.size,)
+        assert np.all((draws >= a) & (draws <= b))
+
+    def test_unsupported_x_basis_rejected(self) -> None:
+        """Θ column monotonicity needs a non-negative partition of unity."""
+        with pytest.raises(ValueError, match="partition of unity"):
+            BoxCox(
+                support=(0.0, 1.0),
+                interacting=PolynomialBasis(order=1, support=(0.0, 1.0)),  # type: ignore[arg-type]
+            )
+
+    def test_empty_y_rejected(self) -> None:
+        with pytest.raises(ValueError, match="at least one observation"):
+            _boxcox((0.0, 1.0)).fit(np.empty(0), X=np.empty(0))
+
+    def test_scaling_rows_must_match_y(
+        self,
+        synthetic: tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float]],
+    ) -> None:
+        y, x, x_s, support = synthetic
+        with pytest.raises(ValueError, match="scaling has"):
+            _boxcox(support, x_s[:-1]).fit(y, X=x)
+
+    def test_x_scale_new_shape_checked(self, fitted_synthetic: BoxCox) -> None:
+        with pytest.raises(ValueError, match="X_scale_new has"):
+            fitted_synthetic.predict(
+                _Y_GRID, X_new=_X_GRID, X_scale_new=np.zeros((2, 1))
+            )
 
     def test_interacting_requires_x(
         self,

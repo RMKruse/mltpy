@@ -507,6 +507,8 @@ class BoxCox(_TramModel):
         ``X_new``.  Only exact (uncensored) responses are supported on this
         path: pass an array, or a :class:`~mltpy.variables.CensoredData`
         without censored rows; censored rows raise ``NotImplementedError``.
+        As on the shift path, the data decide: a plain array is fitted as
+        exact responses whatever ``censoring`` says.
         :meth:`fitted_transformation` is unavailable (there is no single
         baseline transformation); use :attr:`Theta_` or
         ``predict(what="trafo")``.

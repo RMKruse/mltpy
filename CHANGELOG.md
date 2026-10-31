@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `([a(y) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and `gamma_`.
   Exact data only: censored rows raise `NotImplementedError`. `γ`, `Θ`,
   log-likelihood, distribution, density and quantile match R
-  `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (fixtures
+  `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (quantiles with an absolute
+  tolerance scaled by the support width) (fixtures
   `reference/stram_onehot_bs_boxcox_*`). (#107)
 
 ## [0.4.0] — 2026-05-25
