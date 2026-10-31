@@ -28,7 +28,7 @@ _HEAVY_WEIGHTS = [1e4, 1e6, 1e8]
 
 
 @pytest.fixture(scope="module")
-def mev() -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+def mev_data() -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
     paths = {
         k: REF_DIR / f"{_PREFIX}{k}.txt" for k in ("y_train", "x_train", "y_support")
     }
@@ -68,19 +68,20 @@ _MODELS = {
 }
 
 
-def _x(name: str, x: np.ndarray) -> np.ndarray:
+def _design(name: str, x: np.ndarray) -> np.ndarray:
+    """``X`` for a model: a column for shift models, the raw vector for interaction."""
     return x if name.endswith("interaction") else x.reshape(-1, 1)
 
 
 @pytest.fixture(scope="module")
 def unit_fits(
-    mev: tuple[np.ndarray, np.ndarray, tuple[float, float]],
+    mev_data: tuple[np.ndarray, np.ndarray, tuple[float, float]],
 ) -> dict[str, Coxph | Colr]:
-    y, x, support = mev
+    y, x, support = mev_data
     fits = {}
     for name, make in _MODELS.items():
         m = make(support)
-        m.fit(y, X=_x(name, x))
+        m.fit(y, X=_design(name, x))
         fits[name] = m
     return fits
 
@@ -88,15 +89,15 @@ def unit_fits(
 @pytest.mark.parametrize("w", _HEAVY_WEIGHTS)
 @pytest.mark.parametrize("name", list(_MODELS))
 def test_uniform_heavy_weights_reach_unit_weight_mle(
-    mev: tuple[np.ndarray, np.ndarray, tuple[float, float]],
+    mev_data: tuple[np.ndarray, np.ndarray, tuple[float, float]],
     unit_fits: dict[str, Coxph | Colr],
     name: str,
     w: float,
 ) -> None:
-    y, x, support = mev
+    y, x, support = mev_data
     unit = unit_fits[name]
     heavy = _MODELS[name](support)
-    heavy.fit(y, X=_x(name, x), weights=np.full(y.shape[0], w))
+    heavy.fit(y, X=_design(name, x), weights=np.full(y.shape[0], w))
     assert heavy.result_ is not None and unit.result_ is not None
     assert heavy.theta_ is not None and unit.theta_ is not None
     assert heavy.result_.converged, heavy.result_.solver_message
@@ -109,11 +110,11 @@ def test_uniform_heavy_weights_reach_unit_weight_mle(
 
 @pytest.mark.parametrize("c", [1e-6, 1e6])
 def test_nonuniform_weights_are_scale_invariant(
-    mev: tuple[np.ndarray, np.ndarray, tuple[float, float]], c: float
+    mev_data: tuple[np.ndarray, np.ndarray, tuple[float, float]], c: float
 ) -> None:
     """Rescaling non-uniform weights by a constant reproduces the fit, and the
     reported log-likelihood is the one under the caller's weights."""
-    y, x, support = mev
+    y, x, support = mev_data
     weights = np.asarray(np.random.default_rng(1).uniform(0.5, 2.0, y.shape[0]))
     base = _shift(Coxph, support)
     base.fit(y, X=x.reshape(-1, 1), weights=weights)

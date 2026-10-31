@@ -17,7 +17,7 @@ from typing import Any, Callable, Literal, cast
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
-from scipy.optimize import LinearConstraint, minimize
+from scipy.optimize import LinearConstraint, OptimizeResult, minimize
 
 from mltpy._auglag import AugLagOptions, auglag_minimize
 from mltpy.basis import BernsteinBasis, InteractionBasis
@@ -448,7 +448,7 @@ def _make_true_nll(
 
 def _solver_weights(
     weights: NDArray[np.float64] | None,
-    solver: str,
+    solver: Literal["auglag", "slsqp", "trust-constr"],
 ) -> tuple[NDArray[np.float64] | None, float]:
     """Weights a scipy solver's objective is built with, and the factor removed.
 
@@ -465,12 +465,16 @@ def _solver_weights(
     Only the objective the solver sees changes.  Candidates are still scored,
     and the log-likelihood reported, under the caller's weights.
 
+    The normalisation covers an objective made large by its weights.  An
+    unweighted objective made large by sheer sample size (``|NLL| ≳ 1e6``,
+    millions of rows) still meets an absolute ``ftol``.
+
     Parameters
     ----------
     weights : NDArray[np.float64] | None
         Validated per-observation weights (finite, non-negative, at least one
         positive entry), or ``None``.
-    solver : str
+    solver : Literal["auglag", "slsqp", "trust-constr"]
         ``config.solver``.  Only ``"slsqp"`` is normalised: trust-constr and
         auglag reach the MLE at every weight scale and keep their objective.
 
@@ -487,8 +491,12 @@ def _solver_weights(
     return weights / scale, scale
 
 
-def _unscale_scipy_result(result: Any, scale: float) -> Any:
-    """Restore ``.fun`` / ``.jac`` of a scipy result to the caller's weights."""
+def _unscale_scipy_result(result: OptimizeResult, scale: float) -> OptimizeResult:
+    """Restore ``.fun`` / ``.jac`` of a scipy result to the caller's weights.
+
+    Multiplies both by ``scale`` (from :func:`_solver_weights`) in place and
+    returns the same ``result``; a no-op when ``scale == 1``.
+    """
     if scale != 1.0:
         result.fun = result.fun * scale
         if getattr(result, "jac", None) is not None:
@@ -1054,10 +1062,8 @@ def _optimize_scipy(
     # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
     # below keeps the caller's weights via ``true_nll``.
     obj_weights, obj_scale = _solver_weights(weights, config.solver)
-    obj_true_nll = (
-        true_nll
-        if obj_weights is weights
-        else _make_true_nll(basis, y, X, censoring, dist, obj_weights, offset, scaling)
+    obj_true_nll = _make_true_nll(
+        basis, y, X, censoring, dist, obj_weights, offset, scaling
     )
 
     obj = _make_objective(
@@ -1262,12 +1268,8 @@ def _optimize_interaction(
     # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
     # keeps the caller's weights via ``true_nll``.
     obj_weights, obj_scale = _solver_weights(weights, config.solver)
-    obj_true_nll = (
-        true_nll
-        if obj_weights is weights
-        else _make_true_nll(
-            basis, y, x_arr, CensoringType.NONE, dist, obj_weights, offset, scaling
-        )
+    obj_true_nll = _make_true_nll(
+        basis, y, x_arr, CensoringType.NONE, dist, obj_weights, offset, scaling
     )
     penalty = _infeasible_penalty(theta_init, obj_true_nll)
 
@@ -1433,7 +1435,7 @@ def _interaction_scipy(
     cm: Any,
     config: OptimizerConfig,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
-    obj_scale: float = 1.0,
+    obj_scale: float,
 ) -> OptimizationResult:
     """SLSQP / trust-constr path for the interaction basis.
 
