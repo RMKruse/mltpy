@@ -79,11 +79,11 @@ class AugLagOptions:
         augmented-Lagrangian stationarity floors at ~1e-5 even though θ has
         stopped moving and matches the reference fit to many decimals.  The
         stall exit is taken only when some constraint is active (an equality
-        row, a positive inequality multiplier, or an inequality within
-        ``feas_tol`` of its boundary) or when the stationarity meets the
-        companion Gill–Murray–Wright test ``‖∇L_A‖∞ ≤ theta_tol^(2/3) · (1 +
-        |f|)``; a stall that meets neither means the inner solve failed, and
-        the loop stops with ``converged=False``.  Default ``1e-8``.
+        row or a positive inequality multiplier) or when the stationarity
+        meets the companion Gill–Murray–Wright test ``‖∇L_A‖∞ ≤
+        theta_tol^(2/3) · (1 + |f|)``; a stall that meets neither means the
+        inner solve failed, and the loop stops with ``converged=False``.
+        Default ``1e-8``.
     inner_method:
         ``scipy.optimize.minimize`` method used for each unconstrained inner
         solve.  Default ``"L-BFGS-B"`` matches alabama's inner solver.
@@ -327,7 +327,7 @@ def auglag_minimize(
         g = A_ @ theta - b_ if m_ineq > 0 else np.zeros(0, dtype=np.float64)
 
         # Gradient of L_A at new θ with current multipliers
-        _f, grad_f = fun(theta)
+        f_val, grad_f = fun(theta)
         grad_L_A = np.array(grad_f, dtype=np.float64)
         if m_eq > 0:
             grad_L_A = grad_L_A - C_.T @ lambda_eq + rho * (C_.T @ h)
@@ -368,9 +368,12 @@ def auglag_minimize(
         # short-circuits the loop.
         #
         # The active-set floor argument only holds when some constraint is
-        # active — an equality row, a positive multiplier, or an inequality at
-        # its boundary.  With every constraint slack and every multiplier zero
-        # the problem is locally unconstrained (∇L_A = ∇f), and the stall is
+        # active in the sense of exerting force on the inner problem — an
+        # equality row or a positive inequality multiplier.  An inequality
+        # sitting at its boundary with μ = 0 does not count: for g ≥ 0 its
+        # term max(0, μ − ρg) in ∇L_A is zero, so it cannot explain a floored
+        # stationarity.  Without such a constraint the problem is locally
+        # unconstrained (∇L_A = ∇f, up to O(feas_tol·ρ)), and the stall is
         # accepted only when the stationarity also meets the companion
         # gradient test of Gill, Murray & Wright (1981, §8.2.3): with the step
         # test read as U2 (θ_tol = √τ_F, τ_F the relative precision of f),
@@ -386,13 +389,9 @@ def auglag_minimize(
             theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
         )
         if stalled and feasibility < options.feas_tol:
-            constraint_active = (
-                m_eq > 0
-                or bool(np.any(mu_ineq > 0.0))
-                or (m_ineq > 0 and bool(np.any(g <= options.feas_tol)))
-            )
+            constraint_active = m_eq > 0 or bool(np.any(mu_ineq > 0.0))
             stationarity_floor = options.theta_tol ** (2.0 / 3.0) * (
-                1.0 + abs(float(_f))
+                1.0 + abs(float(f_val))
             )
             if not constraint_active and stationarity > stationarity_floor:
                 message = (

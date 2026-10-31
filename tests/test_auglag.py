@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from mltpy._auglag import AugLagOptions, auglag_minimize
 from mltpy.constraints import ConstraintMatrices, build_constraint_matrices
@@ -207,7 +210,9 @@ class TestInequalityQP:
 # ---------------------------------------------------------------------------
 
 
-def _pinned_obj(x0: np.ndarray, f0: float = 0.0, slope: float = 1.0) -> callable:
+def _pinned_obj(
+    x0: NDArray[np.float64], f0: float = 0.0, slope: float = 1.0
+) -> Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]]:
     """Objective the inner solver cannot leave: f = ``f0`` with ∇f = ``slope``
     (every component) at ``x0`` and ``(inf, 0)`` everywhere else.
 
@@ -216,7 +221,7 @@ def _pinned_obj(x0: np.ndarray, f0: float = 0.0, slope: float = 1.0) -> callable
     ``outer_tol``.
     """
 
-    def obj(theta: np.ndarray) -> tuple[float, np.ndarray]:
+    def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         if np.array_equal(theta, x0):
             return f0, np.full_like(theta, slope)
         return float("inf"), np.zeros_like(theta)
@@ -224,47 +229,50 @@ def _pinned_obj(x0: np.ndarray, f0: float = 0.0, slope: float = 1.0) -> callable
     return obj
 
 
+_X0 = np.array([0.5, 0.5])
+_E1 = np.array([[1.0, 0.0]])
+
+
 class TestStallConvergenceRequiresActiveSet:
     """A feasible iterate whose θ stopped moving is only accepted as converged
-    when some constraint is active.  With every constraint slack and no
-    multiplier, a stall means the inner solver failed, not that the KKT
-    residual floored on a degenerate active set."""
+    when some constraint is active (an equality row or a positive inequality
+    multiplier) or the stationarity is at its floating-point floor.  Otherwise
+    a stall means the inner solver failed, not that the KKT residual floored on
+    a degenerate active set."""
 
     @pytest.mark.parametrize(
         "A,b",
         [
-            # Slack inequality: g = 1 > 0 at x0, μ stays 0.
-            (np.array([[1.0, 0.0]]), np.array([-1.0])),
+            # Slack inequality: g = 0.5 > 0 at x0, μ stays 0.
+            (_E1, np.array([0.0])),
+            # Inequality exactly at its boundary (g = 0) but μ = 0: it exerts
+            # no force on ∇L_A, so it cannot explain a floored stationarity.
+            (_E1, np.array([0.5])),
             # No constraints at all.
             (None, None),
         ],
-        ids=["slack-inequality", "unconstrained"],
+        ids=["slack-inequality", "boundary-zero-multiplier", "unconstrained"],
     )
     def test_stall_without_active_constraint_not_converged(
-        self, A: np.ndarray | None, b: np.ndarray | None
+        self, A: NDArray[np.float64] | None, b: NDArray[np.float64] | None
     ) -> None:
-        x0 = np.zeros(2)
+        options = AugLagOptions()
         result = auglag_minimize(
-            _pinned_obj(x0), x0, A_ineq=A, b_ineq=b, C_eq=None, d_eq=None
+            _pinned_obj(_X0),
+            _X0,
+            A_ineq=A,
+            b_ineq=b,
+            C_eq=None,
+            d_eq=None,
+            options=options,
         )
         assert not result.converged
         assert result.kkt_residual > 1e-3
-        np.testing.assert_array_equal(result.theta, x0)
+        np.testing.assert_array_equal(result.theta, _X0)
         assert "stall" in result.message.lower()
-
-    def test_stall_without_active_constraint_stops_early(self) -> None:
-        """The loop gives up as soon as the inactive stall is detected rather
-        than burning the remaining outer budget on an immobile θ."""
-        x0 = np.zeros(2)
-        result = auglag_minimize(
-            _pinned_obj(x0),
-            x0,
-            A_ineq=np.array([[1.0, 0.0]]),
-            b_ineq=np.array([-1.0]),
-            C_eq=None,
-            d_eq=None,
-        )
-        assert result.n_outer_iter == 2
+        # Gives up as soon as the stall is detected rather than burning the
+        # remaining outer budget on an immobile θ.
+        assert result.n_outer_iter < options.max_outer_iter
 
     @pytest.mark.parametrize(
         "f0,slope,expect_converged",
@@ -284,45 +292,41 @@ class TestStallConvergenceRequiresActiveSet:
         stationarity also meets the Gill–Murray–Wright U3 test
         ‖∇L_A‖∞ ≤ θ_tol^(2/3)·(1 + |f|) — the gradient floor attainable when
         f itself is only resolved to relative precision θ_tol²."""
-        x0 = np.zeros(2)
         result = auglag_minimize(
-            _pinned_obj(x0, f0=f0, slope=slope),
-            x0,
-            A_ineq=np.array([[1.0, 0.0]]),
-            b_ineq=np.array([-1.0]),
+            _pinned_obj(_X0, f0=f0, slope=slope),
+            _X0,
+            A_ineq=_E1,
+            b_ineq=np.array([0.0]),
             C_eq=None,
             d_eq=None,
         )
         assert result.converged is expect_converged
 
-    def test_stall_on_active_equality_still_converges(self) -> None:
+    @pytest.mark.parametrize(
+        "A,b,C,d",
+        [
+            # Equality pins θ at x0 (λ ≠ 0 absorbs ∇f).
+            (None, None, np.ones((1, 2)), np.array([1.0])),
+            # Inequality violated by 5e-8 < feas_tol at x0, so the first
+            # multiplier update makes μ = ρ·5e-8 > 0.
+            (_E1, np.array([0.5 + 5e-8]), None, None),
+        ],
+        ids=["equality", "inequality-positive-multiplier"],
+    )
+    def test_stall_on_active_constraint_still_converges(
+        self,
+        A: NDArray[np.float64] | None,
+        b: NDArray[np.float64] | None,
+        C: NDArray[np.float64] | None,
+        d: NDArray[np.float64] | None,
+    ) -> None:
         """The alabama-parity stall exit is preserved when a constraint is
-        active: here an equality pins θ at x0 (λ ≠ 0 absorbs ∇f)."""
-        x0 = np.array([0.5, 0.5])
+        active, even with ‖∇f‖∞ = 1 far above the stationarity floor."""
         result = auglag_minimize(
-            _pinned_obj(x0),
-            x0,
-            A_ineq=None,
-            b_ineq=None,
-            C_eq=np.ones((1, 2)),
-            d_eq=np.array([1.0]),
+            _pinned_obj(_X0), _X0, A_ineq=A, b_ineq=b, C_eq=C, d_eq=d
         )
         assert result.converged
-        assert "parameter change below tolerance" in result.message
-
-    def test_stall_on_active_inequality_still_converges(self) -> None:
-        """Same as above with an inequality binding at x0 (g = 0)."""
-        x0 = np.array([0.5, 0.5])
-        result = auglag_minimize(
-            _pinned_obj(x0),
-            x0,
-            A_ineq=np.array([[1.0, 0.0]]),
-            b_ineq=np.array([0.5]),
-            C_eq=None,
-            d_eq=None,
-        )
-        assert result.converged
-        assert "parameter change below tolerance" in result.message
+        assert "floored on an active set" in result.message
 
 
 # ---------------------------------------------------------------------------

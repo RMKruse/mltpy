@@ -181,25 +181,33 @@ class TestRParity:
         assert_allclose(got, expected, rtol=_SOLVER_THETA_RTOL[solver], atol=1e-10)
 
 
-@pytest.fixture(scope="module", params=["scaled", "unscaled"])
-def auglag_nopolish_fit(
-    request: pytest.FixtureRequest, mev_ref: dict[str, np.ndarray]
-) -> tuple[str, Coxph]:
+_FIT_KINDS = ["scaled", "unscaled"]
+
+
+@pytest.fixture(scope="module")
+def auglag_nopolish_fits(mev_ref: dict[str, np.ndarray]) -> dict[str, Coxph]:
+    """The issue-#134 reproduction: auglag, ``polish=False``, with and without
+    ``scaling=``, keyed by ``_FIT_KINDS``."""
     a, b = mev_ref["y_support"]
-    scaled = request.param == "scaled"
-    model = Coxph(
-        support=(float(a), float(b)),
-        order=_ORDER_Y,
-        interacting=_x_basis(),
-        scaling=mev_ref["x_s_train"].reshape(-1, 1) if scaled else None,
-        optimizer_config=OptimizerConfig(solver="auglag", random_state=0, polish=False),
-    )
-    if scaled:
-        with pytest.warns(UserWarning, match="experimental"):
+    fits: dict[str, Coxph] = {}
+    for kind in _FIT_KINDS:
+        scaled = kind == "scaled"
+        model = Coxph(
+            support=(float(a), float(b)),
+            order=_ORDER_Y,
+            interacting=_x_basis(),
+            scaling=mev_ref["x_s_train"].reshape(-1, 1) if scaled else None,
+            optimizer_config=OptimizerConfig(
+                solver="auglag", random_state=0, polish=False
+            ),
+        )
+        if scaled:
+            with pytest.warns(UserWarning, match="experimental"):
+                model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
+        else:
             model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
-    else:
-        model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
-    return request.param, model
+        fits[kind] = model
+    return fits
 
 
 class TestAuglagFirstAttempt:
@@ -212,21 +220,25 @@ class TestAuglagFirstAttempt:
     defect (it predates scaling=) so both are exercised.
     """
 
+    @pytest.mark.parametrize("kind", _FIT_KINDS)
     def test_converges_without_restart(
-        self, auglag_nopolish_fit: tuple[str, Coxph]
+        self, auglag_nopolish_fits: dict[str, Coxph], kind: str
     ) -> None:
-        _, model = auglag_nopolish_fit
-        result = model.result_
+        result = auglag_nopolish_fits[kind].result_
         assert result is not None
         assert result.converged
         assert result.n_restarts == 0
 
+    @pytest.mark.parametrize("kind", _FIT_KINDS)
     def test_reaches_stationary_point(
-        self, auglag_nopolish_fit: tuple[str, Coxph], mev_ref: dict[str, np.ndarray]
+        self,
+        auglag_nopolish_fits: dict[str, Coxph],
+        mev_ref: dict[str, np.ndarray],
+        kind: str,
     ) -> None:
         """‖∇NLL‖∞ at the returned θ is at the floating-point floor of a
         n = 1000 likelihood, not the ~366 of the stalled line search."""
-        kind, model = auglag_nopolish_fit
+        model = auglag_nopolish_fits[kind]
         _, grad = negative_log_likelihood(
             model.theta_,
             model.basis,
@@ -240,11 +252,10 @@ class TestAuglagFirstAttempt:
         assert np.max(np.abs(grad)) < 1e-6
 
     def test_scaled_matches_r_without_polish(
-        self, auglag_nopolish_fit: tuple[str, Coxph], mev_ref: dict[str, np.ndarray]
+        self, auglag_nopolish_fits: dict[str, Coxph], mev_ref: dict[str, np.ndarray]
     ) -> None:
-        kind, model = auglag_nopolish_fit
-        if kind != "scaled":
-            pytest.skip("R reference exists for the scaled fit only")
+        """R reference exists for the scaled fit only."""
+        model = auglag_nopolish_fits["scaled"]
         result = model.result_
         assert result is not None
         assert_allclose(
