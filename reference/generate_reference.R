@@ -2018,6 +2018,157 @@ cat(sprintf("stram_bs_bs mev ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
             n_mv, p_mv, q_mv, length(gamma_mv), ll_mv))
 
 # ---------------------------------------------------------------------------
+# Colr(interacting=..., scaling=...) — issue #108.
+#
+# The continuous-outcome logistic analogue of the stram_bs_bs_mev block above:
+# the same Bernstein-y × Bernstein-x interacting baseline scaled by
+# exp(0.5 · x_s · γ), but with the standard logistic link
+# (``todistr = "Logistic"``) that mltpy's Colr forces, so
+# logit F(y | x, x_s) = h(y | x) · exp(0.5 · x_s · γ) — a non-proportional-odds
+# CTM.  Exact (uncensored) responses only — the interaction likelihood path is
+# exact-data only.  Fitted through ``mlt::ctm`` for term-for-term basis
+# agreement with mltpy's ``InteractionBasis``; γ is sign- and magnitude-aligned
+# with mltpy (no flip).
+#
+# Data: logit F(y) = exp(0.5·γ·x_s)·(2·(y − 4.5) + 0.8·(x − 0.5)) with
+# γ = 0.4, whose baseline is linear in y and in x and so lies exactly in the
+# Bernstein-y (order 2) ⊗ Bernstein-x (order 1) span.  With n = 1000 the MLE
+# is strictly interior (every Θ column increment is well above 1), so γ is
+# determined well below the 1e-6 parity tolerance.  The same BFGS polish at
+# reltol = 1e-15 as the mev block takes γ past alabama's inner tolerance.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_logistic_``):
+#   *_y_train.txt      — responses, length n
+#   *_x_train.txt      — interacting covariate, length n
+#   *_x_s_train.txt    — scaling covariate, length n
+#   *_y_support.txt    — "a b" on one line
+#   *_theta.txt        — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt        — scale coefficients only, length q_s
+#   *_gamma_tram.txt   — γ from the tram::Colr(y | x ~ 1 | x_s) stram fit
+#   *_loglik.txt       — scalar logLik
+#   *_grid.txt         — prediction grid, one "y x x_s" row per line
+#   *_distribution.txt — F(y | x, x_s) at each grid row
+#   *_density.txt      — f(y | x, x_s) = dlogis(h)·h' at each grid row
+# ---------------------------------------------------------------------------
+set.seed(20261108)
+n_lg <- 1000L
+p_lg <- 3L  # number of Bernstein-y functions
+q_lg <- 2L  # number of Bernstein-x functions
+x_lg   <- runif(n_lg, 0, 1)
+x_s_lg <- rnorm(n_lg)
+# Invert F(y) = plogis(k · h0(y | x)) at F = U for y.
+k_lg <- exp(0.5 * 0.4 * x_s_lg)
+y_lg <- 4.5 - 0.4 * (x_lg - 0.5) + qlogis(runif(n_lg)) / (2 * k_lg)
+a_lg <- min(y_lg) - 0.1
+b_lg <- max(y_lg) + 0.1
+
+df_lg <- data.frame(y = y_lg, x = x_lg, x_s = x_s_lg)
+m_y_lg <- numeric_var("y", support = c(a_lg, b_lg))
+m_x_lg <- numeric_var("x", support = c(0, 1))
+b_y_lg <- Bernstein_basis(m_y_lg, order = p_lg - 1L, ui = "increasing")
+b_x_lg <- Bernstein_basis(m_x_lg, order = q_lg - 1L)
+b_s_lg <- as.basis(~ x_s, data = df_lg, remove_intercept = TRUE)
+
+ctm_lg <- ctm(response = b_y_lg,
+              interacting = b_x_lg,
+              scaling = b_s_lg,
+              scale_shift = FALSE,
+              todistr = "Logistic")
+fit0_lg <- mlt(ctm_lg, data = df_lg)
+fit_lg  <- mlt(ctm_lg, data = df_lg, theta = coef(fit0_lg),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+stopifnot(fit_lg$convergence == 0,
+          min(diff(matrix(coef(fit_lg)[1:(p_lg * q_lg)], p_lg, q_lg))) > 1)
+
+theta_lg <- coef(fit_lg)
+ll_lg    <- as.numeric(logLik(fit_lg))
+scl_names_lg <- colnames(model.matrix(b_s_lg, data = df_lg))
+gamma_lg <- theta_lg[scl_names_lg]
+
+# Cross-check against the literal tram formula route, ``tram::Colr(y | x ~ 1
+# | x_s)`` (class ``stram``; tram warns that strata + scale is "highly
+# experimental").  Its interacting term is the linear model matrix (1, x),
+# which spans the same space as Bernstein-x of order 1 on [0, 1], so the two
+# fits share the MLE: same logLik and γ, and Θ maps as
+# Θ[, x = 0] = (Intercept) and Θ[, x = 1] = (Intercept) + x.  Polished with
+# the same BFGS step as the ctm fit.
+suppressPackageStartupMessages(library(tram))
+tram_lg0 <- suppressWarnings(
+  Colr(y | x ~ 1 | x_s, data = df_lg, order = p_lg - 1L,
+       support = c(a_lg, b_lg), bounds = c(a_lg, b_lg)))
+stopifnot(inherits(tram_lg0, "stram"))
+tram_lg <- mlt(tram_lg0$model, data = df_lg,
+               theta = coef(tram_lg0, with_baseline = TRUE),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+tram_cf_lg <- coef(tram_lg)
+gamma_tram_lg <- tram_cf_lg[paste0("scl_", scl_names_lg)]
+tram_theta_lg <- matrix(tram_cf_lg[1:(p_lg * q_lg)], p_lg, q_lg)
+stopifnot(
+  tram_lg$convergence == 0,
+  isTRUE(all.equal(as.numeric(logLik(tram_lg)), ll_lg, tolerance = 1e-10)),
+  isTRUE(all.equal(unname(gamma_tram_lg), unname(gamma_lg), tolerance = 1e-6)),
+  isTRUE(all.equal(cbind(tram_theta_lg[, 1], rowSums(tram_theta_lg)),
+                   matrix(theta_lg[1:(p_lg * q_lg)], p_lg, q_lg),
+                   tolerance = 1e-6, check.attributes = FALSE)))
+
+# Per-row predictions at (y, x, x_s), assembled from the tensor basis exactly
+# as in the mev block (``predict()`` on a scaled ctm errors in mlt 1.8.4):
+# h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ).  The
+# stopifnot() below checks the reconstruction reproduces logLik(fit).
+# Logistic: F = plogis(h), f = dlogis(h)·h'.
+bb_lg <- b(bresponse = b_y_lg, binteracting = b_x_lg)
+pq_lg <- p_lg * q_lg
+.h_lg <- function(d) {
+  f <- exp(0.5 * d$x_s * gamma_lg)
+  list(h  = drop(model.matrix(bb_lg, data = d) %*% theta_lg[1:pq_lg]) * f,
+       hp = drop(model.matrix(bb_lg, data = d, deriv = c(y = 1)) %*%
+                   theta_lg[1:pq_lg]) * f)
+}
+tr_lg <- .h_lg(df_lg)
+stopifnot(isTRUE(all.equal(sum(dlogis(tr_lg$h, log = TRUE) + log(tr_lg$hp)),
+                           ll_lg, tolerance = 1e-10)))
+
+grid_lg <- expand.grid(y = quantile(y_lg, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       x = c(0.2, 0.8),
+                       x_s = c(-1, 0, 1.5))
+hg_lg   <- .h_lg(grid_lg)
+dist_lg <- plogis(hg_lg$h)
+dens_lg <- dlogis(hg_lg$h) * hg_lg$hp
+
+writeLines(format(y_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_y_train.txt"))
+writeLines(format(x_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_x_train.txt"))
+writeLines(format(x_s_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_x_s_train.txt"))
+writeLines(paste(format(a_lg, digits = 15), format(b_lg, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_logistic_y_support.txt"))
+writeLines(format(theta_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_theta.txt"))
+writeLines(format(as.numeric(gamma_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_gamma.txt"))
+writeLines(format(as.numeric(gamma_tram_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_gamma_tram.txt"))
+writeLines(format(ll_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_loglik.txt"))
+write.table(format(as.matrix(grid_lg), digits = 15),
+            file = file.path(out_dir, "stram_bs_bs_logistic_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(as.numeric(dist_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_distribution.txt"))
+writeLines(format(as.numeric(dens_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_density.txt"))
+
+cat(sprintf("stram_bs_bs logistic ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_lg, p_lg, q_lg, length(gamma_lg), ll_lg))
+
+# ---------------------------------------------------------------------------
 # BoxCox(interacting=..., scaling=...) — issue #107.
 #
 # The stratified, scaled Box-Cox model of ADR 0003 Decision 6, fitted through
