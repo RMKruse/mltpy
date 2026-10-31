@@ -561,7 +561,7 @@ class LogBernsteinBasis:
                 f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
             )
         dB_log = self._log_basis.derivative(np.log(y_arr), order=1)
-        return cast(NDArray[np.float64], dB_log / y_arr[:, None])
+        return dB_log / y_arr[:, None]
 
     def evaluate_with_derivative(
         self, y: NDArray[np.float64]
@@ -586,7 +586,7 @@ class LogBernsteinBasis:
                 f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
             )
         B, dB_log = self._log_basis.evaluate_with_derivative(np.log(y_arr))
-        return B, cast(NDArray[np.float64], dB_log / y_arr[:, None])
+        return B, dB_log / y_arr[:, None]
 
     def integrate(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
         """Not implemented for LogBernsteinBasis."""

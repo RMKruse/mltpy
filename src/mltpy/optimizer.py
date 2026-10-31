@@ -285,7 +285,7 @@ def _project_to_feasible(theta_b: NDArray[np.float64]) -> NDArray[np.float64]:
     NDArray[np.float64]
         NDArray of length p, sorted ascending.
     """
-    return cast(NDArray[np.float64], np.sort(theta_b))
+    return np.sort(theta_b)
 
 
 def _make_objective(
