@@ -48,6 +48,7 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
    adr/0001-tensor-product-interaction-basis
    adr/0002-scaling-terms
    adr/0003-scaling-with-interaction
+   adr/0004-auglag-stall-acceptance
 
 .. toctree::
    :maxdepth: 1
