@@ -1,0 +1,1291 @@
+{
+ "case": "profile_ci_boxcox",
+ "family": "profile-ci",
+ "n": 150,
+ "env": {
+  "python": "3.12.16",
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "mltpy": "0.4.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu": "Apple M5 Pro",
+  "ncpu": 15,
+  "blas": {
+   "name": "accelerate",
+   "version": "unknown",
+   "detection method": "system"
+  },
+  "thread_env": {
+   "OMP_NUM_THREADS": null,
+   "VECLIB_MAXIMUM_THREADS": null,
+   "OPENBLAS_NUM_THREADS": null
+  },
+  "loadavg": [
+   1.85107421875,
+   2.1494140625,
+   2.24365234375
+  ],
+  "git_head": "b9069681742c462f448500a7b287668a2b5a0413",
+  "git_dirty": false,
+  "restart_random_state": 0,
+  "_": ""
+ },
+ "rss_before_mib": 99.265625,
+ "maxrss_after_cold_mib": 99.265625,
+ "fresh_seconds": [
+  0.6280402079864871,
+  0.6260615000210237,
+  0.625671040994348
+ ],
+ "fresh_status": [
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 9.131186651245571e-08,
+   "solver_message": "KKT conditions satisfied.",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 26,
+   "log_likelihood": -119.27612732726291,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 9.131186651245571e-08,
+   "solver_message": "KKT conditions satisfied.",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 26,
+   "log_likelihood": -119.27612732726291,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 9.131186651245571e-08,
+   "solver_message": "KKT conditions satisfied.",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 26,
+   "log_likelihood": -119.27612732726291,
+   "warnings": []
+  }
+ ],
+ "n_params": 6,
+ "refit_seconds": [],
+ "refit_status_last": null,
+ "instrumented_seconds": 0.6286925419990439,
+ "phases": {
+  "seconds": {
+   "solver_attempts": 0.6235852941754274,
+   "polish_hessian": 2.8709007892757654e-05,
+   "polish": 0.00011183400056324899,
+   "optimize_total": 0.6277109151124023,
+   "final_hessian": 1.7250014934688807e-05,
+   "score_matrix": 1.1958996765315533e-05
+  },
+  "calls": {
+   "solver_attempts": 128,
+   "polish_hessian": 1,
+   "polish": 1,
+   "optimize_total": 128,
+   "final_hessian": 1,
+   "score_matrix": 1
+  },
+  "objective_calls_by_phase": {
+   "solver_attempts": 24905,
+   "polish": 3,
+   "optimize_total": 3
+  },
+  "ll_interaction_calls_by_phase": {},
+  "solver_attempts": [
+   {
+    "seconds": 0.0007939579954836518,
+    "converged": true,
+    "kkt": 9.131186651245571e-08,
+    "fun": 119.27612732726291,
+    "outer": 2,
+    "inner": 26,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.005116917018312961,
+    "converged": true,
+    "kkt": 1.2710168491025797e-06,
+    "fun": 122.78341436211085,
+    "outer": 10,
+    "inner": 143,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.27e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005012000008719042,
+    "converged": true,
+    "kkt": 1.2710168491025797e-06,
+    "fun": 122.78341436211085,
+    "outer": 10,
+    "inner": 143,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.27e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0008720420009922236,
+    "converged": true,
+    "kkt": 4.661982266895848e-08,
+    "fun": 119.27612732726294,
+    "outer": 2,
+    "inner": 26,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.005607625003904104,
+    "converged": true,
+    "kkt": 1.2937780846655755e-06,
+    "fun": 120.4272817838376,
+    "outer": 11,
+    "inner": 145,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.29e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005741041008150205,
+    "converged": true,
+    "kkt": 1.2965654088148426e-06,
+    "fun": 121.07282689501099,
+    "outer": 12,
+    "inner": 141,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.30e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.00616645798436366,
+    "converged": true,
+    "kkt": 1.1558060437621975e-06,
+    "fun": 121.20093548392177,
+    "outer": 11,
+    "inner": 139,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.16e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0058815000229515135,
+    "converged": true,
+    "kkt": 1.3221146062392108e-06,
+    "fun": 121.19679723871978,
+    "outer": 12,
+    "inner": 143,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.32e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005964083014987409,
+    "converged": true,
+    "kkt": 2.3864577949339605e-06,
+    "fun": 121.19685648919798,
+    "outer": 10,
+    "inner": 141,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.39e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005689542012987658,
+    "converged": true,
+    "kkt": 1.1539691611162084e-06,
+    "fun": 121.19685811337658,
+    "outer": 11,
+    "inner": 142,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.15e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006240541988518089,
+    "converged": true,
+    "kkt": 2.2324035438003875e-06,
+    "fun": 126.77130420804838,
+    "outer": 10,
+    "inner": 150,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.23e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0008989580092020333,
+    "converged": true,
+    "kkt": 4.661982266895848e-08,
+    "fun": 119.27612732726294,
+    "outer": 2,
+    "inner": 26,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.00639604200841859,
+    "converged": true,
+    "kkt": 2.2324035438003875e-06,
+    "fun": 126.77130420804838,
+    "outer": 10,
+    "inner": 150,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.23e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.003989375021774322,
+    "converged": true,
+    "kkt": 7.760661233646715e-07,
+    "fun": 119.60419161326934,
+    "outer": 9,
+    "inner": 112,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.76e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.005485083005623892,
+    "converged": true,
+    "kkt": 1.0155661065436306e-06,
+    "fun": 121.66698617540413,
+    "outer": 10,
+    "inner": 130,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.02e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0045922090066596866,
+    "converged": true,
+    "kkt": 3.4147225491665267e-06,
+    "fun": 120.98230009496822,
+    "outer": 9,
+    "inner": 113,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 3.41e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004350207978859544,
+    "converged": true,
+    "kkt": 2.8025206386672608e-06,
+    "fun": 121.18102792961975,
+    "outer": 9,
+    "inner": 116,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.80e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005277583986753598,
+    "converged": true,
+    "kkt": 1.9982220091918634e-06,
+    "fun": 121.19692480055551,
+    "outer": 12,
+    "inner": 121,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.00e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004850333003560081,
+    "converged": true,
+    "kkt": 1.654230064929152e-06,
+    "fun": 121.19685654361429,
+    "outer": 10,
+    "inner": 122,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.65e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005012916983105242,
+    "converged": true,
+    "kkt": 4.9195537936697065e-06,
+    "fun": 121.19685877026468,
+    "outer": 9,
+    "inner": 115,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.92e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005609082989394665,
+    "converged": true,
+    "kkt": 1.5404205040425722e-06,
+    "fun": 132.00815791966562,
+    "outer": 11,
+    "inner": 150,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.54e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005788582988316193,
+    "converged": true,
+    "kkt": 1.5404205040425722e-06,
+    "fun": 132.00815791966562,
+    "outer": 11,
+    "inner": 150,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.54e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0010040410270448774,
+    "converged": true,
+    "kkt": 2.1102866831768097e-07,
+    "fun": 119.27612732726291,
+    "outer": 2,
+    "inner": 31,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.11e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.004083125008037314,
+    "converged": true,
+    "kkt": 9.86879295616916e-07,
+    "fun": 119.38412712151361,
+    "outer": 10,
+    "inner": 110,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 9.87e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.0055730839958414435,
+    "converged": true,
+    "kkt": 1.3633554202030496e-05,
+    "fun": 121.75004231448354,
+    "outer": 10,
+    "inner": 133,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.36e-05 floored on an active set)."
+   },
+   {
+    "seconds": 0.005360166018363088,
+    "converged": true,
+    "kkt": 2.3323885747217332e-06,
+    "fun": 120.72231069859671,
+    "outer": 8,
+    "inner": 128,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.33e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005043082986958325,
+    "converged": true,
+    "kkt": 4.168566326789858e-06,
+    "fun": 121.1492912102392,
+    "outer": 9,
+    "inner": 127,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.17e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005136625026352704,
+    "converged": true,
+    "kkt": 5.197185701133478e-06,
+    "fun": 121.19758597838076,
+    "outer": 10,
+    "inner": 135,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 5.20e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004843583999900147,
+    "converged": true,
+    "kkt": 4.183746881825101e-06,
+    "fun": 121.19685035950829,
+    "outer": 9,
+    "inner": 131,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.18e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005490292009199038,
+    "converged": true,
+    "kkt": 4.3698882350451385e-06,
+    "fun": 121.19685673650167,
+    "outer": 9,
+    "inner": 132,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.37e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004876624996541068,
+    "converged": true,
+    "kkt": 2.6915916140346496e-06,
+    "fun": 121.19685871525152,
+    "outer": 9,
+    "inner": 131,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.69e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006457959010731429,
+    "converged": true,
+    "kkt": 8.880544381639766e-06,
+    "fun": 130.2616575670913,
+    "outer": 12,
+    "inner": 196,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 8.88e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0010025000083260238,
+    "converged": true,
+    "kkt": 2.1102866831768097e-07,
+    "fun": 119.27612732726291,
+    "outer": 2,
+    "inner": 31,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.11e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.006501915981061757,
+    "converged": true,
+    "kkt": 8.880544381639766e-06,
+    "fun": 130.2616575670913,
+    "outer": 12,
+    "inner": 196,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 8.88e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004813540988834575,
+    "converged": true,
+    "kkt": 7.397157313349112e-07,
+    "fun": 119.40706123512142,
+    "outer": 10,
+    "inner": 101,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.40e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.005144458002177998,
+    "converged": true,
+    "kkt": 1.142157596945026e-06,
+    "fun": 120.6395004136038,
+    "outer": 10,
+    "inner": 162,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.14e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007471417018678039,
+    "converged": true,
+    "kkt": 1.75791900058897e-06,
+    "fun": 122.58294334803003,
+    "outer": 12,
+    "inner": 182,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.76e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005485667003085837,
+    "converged": true,
+    "kkt": 8.810944400750031e-07,
+    "fun": 120.96688844195668,
+    "outer": 10,
+    "inner": 171,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 8.81e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.00650312501238659,
+    "converged": true,
+    "kkt": 1.632093692194303e-06,
+    "fun": 121.25352444155902,
+    "outer": 10,
+    "inner": 175,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.63e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0053262079891283065,
+    "converged": true,
+    "kkt": 1.3991529148604798e-06,
+    "fun": 121.1915334849999,
+    "outer": 10,
+    "inner": 167,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.40e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005255541007500142,
+    "converged": true,
+    "kkt": 1.5640992412357946e-06,
+    "fun": 121.19675376216824,
+    "outer": 10,
+    "inner": 168,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.56e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005937916983384639,
+    "converged": true,
+    "kkt": 1.5466683951359528e-06,
+    "fun": 121.19685675985758,
+    "outer": 10,
+    "inner": 166,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.55e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0055593340075574815,
+    "converged": true,
+    "kkt": 1.5637323862449648e-06,
+    "fun": 121.19685462108072,
+    "outer": 10,
+    "inner": 165,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.56e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007120334019418806,
+    "converged": true,
+    "kkt": 1.128316469589663e-06,
+    "fun": 137.32673692504483,
+    "outer": 13,
+    "inner": 189,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.13e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007243958010803908,
+    "converged": true,
+    "kkt": 1.128316469589663e-06,
+    "fun": 137.32673692504483,
+    "outer": 13,
+    "inner": 189,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.13e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.000679041986586526,
+    "converged": true,
+    "kkt": 3.709177498478766e-08,
+    "fun": 119.27612732726294,
+    "outer": 1,
+    "inner": 22,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.003790082992054522,
+    "converged": true,
+    "kkt": 4.818891188307362e-07,
+    "fun": 119.32668442491115,
+    "outer": 7,
+    "inner": 100,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.82e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.006294416991295293,
+    "converged": true,
+    "kkt": 1.309248949254993e-06,
+    "fun": 120.62294976740223,
+    "outer": 10,
+    "inner": 159,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.31e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007565958017949015,
+    "converged": true,
+    "kkt": 2.5746386675962185e-06,
+    "fun": 123.84847853649491,
+    "outer": 12,
+    "inner": 171,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.57e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0061051670054439455,
+    "converged": true,
+    "kkt": 1.2288373287816512e-06,
+    "fun": 120.8785878222701,
+    "outer": 11,
+    "inner": 162,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.23e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.00570012500975281,
+    "converged": true,
+    "kkt": 4.406138514934099e-06,
+    "fun": 121.32251679019222,
+    "outer": 11,
+    "inner": 170,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.41e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006103708001319319,
+    "converged": true,
+    "kkt": 1.3585219571510265e-06,
+    "fun": 121.17969717830543,
+    "outer": 11,
+    "inner": 160,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.36e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0055412499932572246,
+    "converged": true,
+    "kkt": 2.7801271165195374e-06,
+    "fun": 121.19613858878449,
+    "outer": 11,
+    "inner": 160,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.78e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005482792010297999,
+    "converged": true,
+    "kkt": 1.4309737057516259e-06,
+    "fun": 121.19685714303739,
+    "outer": 11,
+    "inner": 161,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.43e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006166959006804973,
+    "converged": true,
+    "kkt": 2.853246292122691e-06,
+    "fun": 121.19685510652938,
+    "outer": 12,
+    "inner": 161,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.85e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006579292006790638,
+    "converged": true,
+    "kkt": 6.0742828829063455e-06,
+    "fun": 182.77484414031665,
+    "outer": 10,
+    "inner": 165,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.07e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0006603329966310412,
+    "converged": true,
+    "kkt": 3.709177498478766e-08,
+    "fun": 119.27612732726294,
+    "outer": 1,
+    "inner": 22,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.006403583014616743,
+    "converged": true,
+    "kkt": 6.0742828829063455e-06,
+    "fun": 182.77484414031665,
+    "outer": 10,
+    "inner": 165,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.07e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0031249170133378357,
+    "converged": true,
+    "kkt": 7.379550694963655e-07,
+    "fun": 119.28025486065783,
+    "outer": 9,
+    "inner": 87,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.38e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.006614500016439706,
+    "converged": true,
+    "kkt": 1.4093198927866979e-06,
+    "fun": 126.72911721140883,
+    "outer": 14,
+    "inner": 168,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.41e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.002924833999713883,
+    "converged": true,
+    "kkt": 1.1000301949337654e-06,
+    "fun": 119.38577034629344,
+    "outer": 7,
+    "inner": 92,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.10e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005947291007032618,
+    "converged": true,
+    "kkt": 1.1348538886402082e-06,
+    "fun": 120.356230569905,
+    "outer": 12,
+    "inner": 165,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.13e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.00603433299693279,
+    "converged": true,
+    "kkt": 2.206276660032813e-06,
+    "fun": 122.70494557786495,
+    "outer": 13,
+    "inner": 168,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.21e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006247458979487419,
+    "converged": true,
+    "kkt": 1.30567847111962e-06,
+    "fun": 121.01207393986228,
+    "outer": 13,
+    "inner": 158,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.31e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005670417012879625,
+    "converged": true,
+    "kkt": 1.3657393771460136e-06,
+    "fun": 121.20856311898982,
+    "outer": 13,
+    "inner": 153,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.37e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005899167008465156,
+    "converged": true,
+    "kkt": 1.7648292294225598e-06,
+    "fun": 121.19649428036868,
+    "outer": 13,
+    "inner": 156,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.76e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006244457996217534,
+    "converged": true,
+    "kkt": 1.9303034570761213e-06,
+    "fun": 121.19685604791965,
+    "outer": 13,
+    "inner": 157,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.93e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006138541008112952,
+    "converged": true,
+    "kkt": 1.9186194797349287e-06,
+    "fun": 121.19685997790167,
+    "outer": 13,
+    "inner": 157,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.92e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007953916996484622,
+    "converged": true,
+    "kkt": 9.385811584827763e-06,
+    "fun": 153.3126455753008,
+    "outer": 11,
+    "inner": 225,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 9.39e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.007957041991176084,
+    "converged": true,
+    "kkt": 9.385811584827763e-06,
+    "fun": 153.3126455753008,
+    "outer": 11,
+    "inner": 225,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 9.39e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0007993750041350722,
+    "converged": true,
+    "kkt": 8.10490075053849e-09,
+    "fun": 119.27612732726291,
+    "outer": 1,
+    "inner": 28,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.0040050419920589775,
+    "converged": true,
+    "kkt": 7.145214739878725e-07,
+    "fun": 119.29038621583399,
+    "outer": 9,
+    "inner": 98,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.15e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.006771166023099795,
+    "converged": true,
+    "kkt": 3.2759960983952396e-06,
+    "fun": 124.09976955308694,
+    "outer": 11,
+    "inner": 193,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 3.28e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004356833000201732,
+    "converged": true,
+    "kkt": 1.0648920711897603e-06,
+    "fun": 119.53786753537605,
+    "outer": 10,
+    "inner": 117,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.06e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0067237080074846745,
+    "converged": true,
+    "kkt": 1.6217625615766451e-06,
+    "fun": 120.71368875957958,
+    "outer": 11,
+    "inner": 192,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.62e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006128709006588906,
+    "converged": true,
+    "kkt": 2.227844279278912e-06,
+    "fun": 121.53982691162531,
+    "outer": 11,
+    "inner": 192,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.23e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006941208004718646,
+    "converged": true,
+    "kkt": 1.943435396167814e-06,
+    "fun": 121.17052371220231,
+    "outer": 11,
+    "inner": 184,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.94e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006575041014002636,
+    "converged": true,
+    "kkt": 4.153947629870203e-06,
+    "fun": 121.19562252099328,
+    "outer": 11,
+    "inner": 190,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.15e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006697875011013821,
+    "converged": true,
+    "kkt": 1.907517992005836e-06,
+    "fun": 121.19685729747717,
+    "outer": 11,
+    "inner": 192,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.91e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.006755374983185902,
+    "converged": true,
+    "kkt": 1.103805670865654e-06,
+    "fun": 121.19685367574738,
+    "outer": 11,
+    "inner": 192,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.10e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005051499989349395,
+    "converged": true,
+    "kkt": 4.06200163816095e-06,
+    "fun": 125.9303855197424,
+    "outer": 9,
+    "inner": 141,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.06e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0007913330045994371,
+    "converged": true,
+    "kkt": 8.10490075053849e-09,
+    "fun": 119.27612732726291,
+    "outer": 1,
+    "inner": 28,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.005000874982215464,
+    "converged": true,
+    "kkt": 4.06200163816095e-06,
+    "fun": 125.9303855197424,
+    "outer": 9,
+    "inner": 141,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.06e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004776707995915785,
+    "converged": true,
+    "kkt": 9.68647920984722e-07,
+    "fun": 119.66362873300305,
+    "outer": 11,
+    "inner": 117,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 9.69e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.006924500019522384,
+    "converged": true,
+    "kkt": 1.0917789246001064e-06,
+    "fun": 121.33537328921125,
+    "outer": 12,
+    "inner": 151,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.09e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004749875020934269,
+    "converged": true,
+    "kkt": 1.84427662386355e-06,
+    "fun": 121.138825395851,
+    "outer": 11,
+    "inner": 148,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.84e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004997209005523473,
+    "converged": true,
+    "kkt": 1.8353357367217882e-06,
+    "fun": 121.19564241639792,
+    "outer": 11,
+    "inner": 147,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.84e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.00511075000395067,
+    "converged": true,
+    "kkt": 6.829054675083768e-07,
+    "fun": 121.19685705764883,
+    "outer": 12,
+    "inner": 151,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.83e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.005126500007463619,
+    "converged": true,
+    "kkt": 1.8395886276501017e-06,
+    "fun": 121.19685583594517,
+    "outer": 11,
+    "inner": 148,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.84e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004908582981443033,
+    "converged": true,
+    "kkt": 2.3550272754135904e-06,
+    "fun": 125.27420528617296,
+    "outer": 10,
+    "inner": 137,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.36e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005042083008447662,
+    "converged": true,
+    "kkt": 2.3550272754135904e-06,
+    "fun": 125.27420528617296,
+    "outer": 10,
+    "inner": 137,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.36e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0009534999844618142,
+    "converged": true,
+    "kkt": 6.705617927593721e-08,
+    "fun": 119.2761273272629,
+    "outer": 2,
+    "inner": 26,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.0036917919933330268,
+    "converged": true,
+    "kkt": 7.626836513452417e-07,
+    "fun": 119.76833650589728,
+    "outer": 8,
+    "inner": 93,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.63e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.003812167007708922,
+    "converged": true,
+    "kkt": 1.1714447767374736e-06,
+    "fun": 121.57002015665148,
+    "outer": 8,
+    "inner": 100,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.17e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.003252416994655505,
+    "converged": true,
+    "kkt": 1.4122158482621217e-06,
+    "fun": 121.06748747399413,
+    "outer": 8,
+    "inner": 99,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.41e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0034384169848635793,
+    "converged": true,
+    "kkt": 1.5798229746621928e-06,
+    "fun": 121.18967555023556,
+    "outer": 8,
+    "inner": 100,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.58e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004077583987964317,
+    "converged": true,
+    "kkt": 6.690291511901592e-07,
+    "fun": 121.19686972756764,
+    "outer": 8,
+    "inner": 99,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.69e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.00327241700142622,
+    "converged": true,
+    "kkt": 6.540409351885046e-07,
+    "fun": 121.19685672224165,
+    "outer": 8,
+    "inner": 100,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.54e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.0033582079922780395,
+    "converged": true,
+    "kkt": 6.694283847252791e-07,
+    "fun": 121.19685883216346,
+    "outer": 8,
+    "inner": 101,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.69e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.0036901659914292395,
+    "converged": true,
+    "kkt": 3.313896062673294e-06,
+    "fun": 123.94554198508682,
+    "outer": 8,
+    "inner": 112,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 3.31e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0009204169909935445,
+    "converged": true,
+    "kkt": 6.705617927593721e-08,
+    "fun": 119.2761273272629,
+    "outer": 2,
+    "inner": 26,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.0035326250072102994,
+    "converged": true,
+    "kkt": 3.313896062673294e-06,
+    "fun": 123.94554198508682,
+    "outer": 8,
+    "inner": 112,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 3.31e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005216707999352366,
+    "converged": true,
+    "kkt": 1.8087972026847865e-06,
+    "fun": 119.99117151290653,
+    "outer": 12,
+    "inner": 147,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.81e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0035121249966323376,
+    "converged": true,
+    "kkt": 1.0017006175644383e-06,
+    "fun": 121.47442989290204,
+    "outer": 8,
+    "inner": 107,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.00e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004028875002404675,
+    "converged": true,
+    "kkt": 2.50171928162235e-06,
+    "fun": 121.12001369004336,
+    "outer": 8,
+    "inner": 111,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.50e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004135458002565429,
+    "converged": true,
+    "kkt": 2.455559709013677e-06,
+    "fun": 121.19389994722408,
+    "outer": 8,
+    "inner": 111,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.46e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004370999988168478,
+    "converged": true,
+    "kkt": 2.507249158290037e-06,
+    "fun": 121.19685937012207,
+    "outer": 8,
+    "inner": 110,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.51e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004425666993483901,
+    "converged": true,
+    "kkt": 9.560034239797233e-07,
+    "fun": 121.19685664605204,
+    "outer": 8,
+    "inner": 110,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 9.56e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.004215124994516373,
+    "converged": true,
+    "kkt": 1.5718658392671614e-06,
+    "fun": 123.67730642710671,
+    "outer": 9,
+    "inner": 114,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.57e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004248209006618708,
+    "converged": true,
+    "kkt": 1.5718658392671614e-06,
+    "fun": 123.67730642710671,
+    "outer": 9,
+    "inner": 114,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.57e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.0010520000068936497,
+    "converged": true,
+    "kkt": 2.863287740240139e-08,
+    "fun": 119.27612732726294,
+    "outer": 2,
+    "inner": 32,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.005244166997727007,
+    "converged": true,
+    "kkt": 6.565476571296358e-07,
+    "fun": 120.1247205821779,
+    "outer": 9,
+    "inner": 111,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.57e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.004700458986917511,
+    "converged": true,
+    "kkt": 1.1646408299981204e-06,
+    "fun": 122.25690617243372,
+    "outer": 9,
+    "inner": 122,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.16e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004458292009076104,
+    "converged": true,
+    "kkt": 1.0813027966349864e-06,
+    "fun": 121.03694019876613,
+    "outer": 9,
+    "inner": 119,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.08e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004815791005967185,
+    "converged": true,
+    "kkt": 1.0916414368011829e-06,
+    "fun": 121.17893050040962,
+    "outer": 9,
+    "inner": 114,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.09e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004741041018860415,
+    "converged": true,
+    "kkt": 1.0011511157870245e-06,
+    "fun": 121.19693735190933,
+    "outer": 9,
+    "inner": 117,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.00e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.00524420797592029,
+    "converged": true,
+    "kkt": 1.1528750878397886e-06,
+    "fun": 121.19685655186876,
+    "outer": 9,
+    "inner": 116,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.15e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005083124997327104,
+    "converged": true,
+    "kkt": 1.0784294577348419e-06,
+    "fun": 121.19686428047709,
+    "outer": 9,
+    "inner": 116,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.08e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005745083995861933,
+    "converged": true,
+    "kkt": 2.2264137378158466e-07,
+    "fun": 123.88570982978419,
+    "outer": 10,
+    "inner": 134,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.23e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.001064916985342279,
+    "converged": true,
+    "kkt": 2.863287740240139e-08,
+    "fun": 119.27612732726294,
+    "outer": 2,
+    "inner": 32,
+    "message": "KKT conditions satisfied."
+   },
+   {
+    "seconds": 0.0056099999928846955,
+    "converged": true,
+    "kkt": 2.2264137378158466e-07,
+    "fun": 123.88570982978419,
+    "outer": 10,
+    "inner": 134,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 2.23e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.004790916980709881,
+    "converged": true,
+    "kkt": 1.1024455703889657e-06,
+    "fun": 120.0651288551505,
+    "outer": 9,
+    "inner": 128,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.10e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004652250005165115,
+    "converged": true,
+    "kkt": 6.55067436738932e-07,
+    "fun": 122.49488177744497,
+    "outer": 10,
+    "inner": 132,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.55e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.0053410420077852905,
+    "converged": true,
+    "kkt": 1.5814357023913317e-06,
+    "fun": 120.98961043895937,
+    "outer": 10,
+    "inner": 129,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.58e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.004510333004873246,
+    "converged": true,
+    "kkt": 7.58131665890005e-07,
+    "fun": 121.20981044381452,
+    "outer": 10,
+    "inner": 130,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 7.58e-07 floored on an active set)."
+   },
+   {
+    "seconds": 0.005170999997062609,
+    "converged": true,
+    "kkt": 1.6615035747236107e-06,
+    "fun": 121.19648247970666,
+    "outer": 10,
+    "inner": 128,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.66e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005426457995781675,
+    "converged": true,
+    "kkt": 4.76858613751574e-06,
+    "fun": 121.1968560219486,
+    "outer": 10,
+    "inner": 130,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 4.77e-06 floored on an active set)."
+   },
+   {
+    "seconds": 0.005146917013917118,
+    "converged": true,
+    "kkt": 1.3470706736740112e-06,
+    "fun": 121.19686407950942,
+    "outer": 10,
+    "inner": 129,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 1.35e-06 floored on an active set)."
+   }
+  ],
+  "polish": [
+   {
+    "seconds": 0.00011183400056324899,
+    "accepted": true,
+    "nll_before": 119.27612732726291,
+    "nll_after": 119.27612732726291,
+    "max_abs_dtheta": 0.0
+   }
+  ]
+ },
+ "instrumented_status": {
+  "raw_converged": true,
+  "kkt_residual_stored": 9.131186651245571e-08,
+  "solver_message": "KKT conditions satisfied.",
+  "n_restarts": 0,
+  "n_outer_iter": 2,
+  "n_inner_iter": 26,
+  "log_likelihood": -119.27612732726291,
+  "warnings": []
+ },
+ "validation": {
+  "r_reference": {
+   "max_abs_dCI_vs_R": 2.402192844641604e-07,
+   "test_tolerance": "rtol=1e-3, atol=1e-6",
+   "nonfinite_ci_entries": 0
+  }
+ },
+ "determinism_max_abs_dtheta_vs_fresh": 0.0,
+ "memory": {
+  "traced_peak_mib": 0.1105203628540039,
+  "retained_with_caches_mib": 0.042385101318359375,
+  "retained_model_only_mib": 0.021821022033691406,
+  "score_matrix_mib": 0.006866455078125,
+  "maxrss_mib_end": 99.265625
+ },
+ "cprofile_cumulative": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    1.042    1.042 /Users/entropy/.claude/jobs/4365f609/tmp/fitbench/harness.py:300(run_op)\n      128    0.001    0.000    1.040    0.008 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:653(optimize)\n        1    0.000    0.000    1.040    1.040 /Users/entropy/Git/mltpy/src/mltpy/model.py:2001(confint)\n        1    0.000    0.000    1.040    1.040 /Users/entropy/Git/mltpy/src/mltpy/model.py:2244(_confint_profile)\n       12    0.000    0.000    1.040    0.087 /Users/entropy/Git/mltpy/src/mltpy/model.py:2310(_profile_root)\n      127    0.000    0.000    1.040    0.008 /Users/entropy/Git/mltpy/src/mltpy/model.py:2299(f)\n      127    0.000    0.000    1.040    0.008 /Users/entropy/Git/mltpy/src/mltpy/model.py:2146(_profile_loglik_at)\n      128    0.001    0.000    1.037    0.008 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1388(_optimize_auglag)\n      128    0.000    0.000    1.033    0.008 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:517(_restart_loop)\n      128    0.000    0.000    1.033    0.008 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1468(<lambda>)\n      128    0.015    0.000    1.033    0.008 /Users/entropy/Git/mltpy/src/mltpy/_auglag.py:191(auglag_minimize)\n     1190    0.005    0.000    0.983    0.001 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_minimize.py:54(minimize)\n     1189    0.029    0.000    0.974    0.001 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_lbfgsb_py.py:294(_minimize_lbfgsb)\n       12    0.000    0.000    0.926    0.077 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_zeros_py.py:712(brentq)\n       12    0.000    0.000    0.925    0.077 {built-in method scipy.optimize._zeros._brentq}\n      115    0.000    0.000    0.925    0.008 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_zeros_py.py:93(f_raise)\n    24454    0.014    0.000    0.839    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py:409(fun_and_grad)\n    47178    0.035    0.000    0.674    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py:71(_compute_if_needed)\n\n",
+ "cprofile_tottime": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n    24909    0.171    0.000    0.414    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:1622(_ll_and_grad_none)\n    23588    0.134    0.000    0.578    0.000 /Users/entropy/Git/mltpy/src/mltpy/_auglag.py:170(obj)\n   128858    0.058    0.000    0.058    0.000 {method 'reduce' of 'numpy.ufunc' objects}\n    47178    0.035    0.000    0.674    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py:71(_compute_if_needed)\n     1189    0.029    0.000    0.974    0.001 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_lbfgsb_py.py:294(_minimize_lbfgsb)\n    42261    0.028    0.000    0.028    0.000 {built-in method scipy.optimize._lbfgsb.setulb}\n    24909    0.025    0.000    0.459    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2875(_negative_log_likelihood_from_dist)\n    24909    0.023    0.000    0.023    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:165(logpdf)\n    24909    0.022    0.000    0.039    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:983(_inverse_hp)\n    56019    0.021    0.000    0.050    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/numpy/_core/fromnumeric.py:66(_wrapreduction)\n\n"
+}
