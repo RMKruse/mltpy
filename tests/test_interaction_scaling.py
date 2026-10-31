@@ -225,44 +225,46 @@ class TestStramRParity:
     """
 
     def test_gamma_and_loglik_match_r(self) -> None:
-        prefix = "stram_bs_bs_normal_"
-        required = [
-            REF_DIR / f"{prefix}y_train.txt",
-            REF_DIR / f"{prefix}x_train.txt",
-            REF_DIR / f"{prefix}x_s_train.txt",
-            REF_DIR / f"{prefix}y_support.txt",
-            REF_DIR / f"{prefix}gamma.txt",
-            REF_DIR / f"{prefix}loglik.txt",
-        ]
-        if not all(p.exists() for p in required):
-            pytest.skip(
-                f"{prefix}* fixtures not generated — run "
-                "Rscript reference/generate_reference.R"
-            )
-
-        y = np.loadtxt(required[0])
-        x = np.loadtxt(required[1])
-        x_s = np.atleast_2d(np.loadtxt(required[2])).reshape(-1, 1)
-        support = tuple(np.loadtxt(required[3]))
-        gamma_R = np.atleast_1d(np.loadtxt(required[4]))
-        ll_R = float(np.loadtxt(required[5]))
-
-        # Mirror the R bases: Bernstein-y order 2 (p=3) ⊗ Bernstein-x order 2 (q=3).
-        ib = InteractionBasis(
-            y_basis=BernsteinBasis(order=2, support=support),
-            x_basis=BernsteinBasis(order=2, support=(0.0, 1.0)),
+        model, (gamma_R, ll_R) = _fit_stram_fixture("gamma", "loglik")
+        assert_allclose(model.gamma_, np.atleast_1d(gamma_R), rtol=1e-6, atol=1e-10)
+        assert_allclose(
+            model.result_.log_likelihood, float(ll_R), rtol=1e-6, atol=1e-10
         )
-        model = ConditionalTransformationModel(
-            basis=ib,
-            scaling=x_s,
-            base_distribution="normal",
-            optimizer_config=OptimizerConfig(solver="auglag", random_state=0),
-        )
-        with pytest.warns(UserWarning, match="experimental"):
-            model.fit(y, X=x.reshape(-1, 1))
 
-        assert_allclose(model.gamma_, gamma_R, rtol=1e-6, atol=1e-10)
-        assert_allclose(model.result_.log_likelihood, ll_R, rtol=1e-6, atol=1e-10)
+
+def _fit_stram_fixture(
+    *extra: str,
+) -> tuple[ConditionalTransformationModel, list[np.ndarray]]:
+    """Fit mltpy on the ``stram_bs_bs_normal_*`` R fixture (single x_s column).
+
+    Skips the calling test unless the shared inputs and every
+    ``stram_bs_bs_normal_<name>.txt`` named in ``extra`` exist; returns the
+    fitted model together with the loaded ``extra`` arrays, in order.
+    """
+    prefix = "stram_bs_bs_normal_"
+    names = ["y_train", "x_train", "x_s_train", "y_support", *extra]
+    paths = [REF_DIR / f"{prefix}{name}.txt" for name in names]
+    if not all(p.exists() for p in paths):
+        pytest.skip(
+            f"{prefix}* fixtures not generated — run "
+            "Rscript reference/generate_reference.R"
+        )
+    y, x, x_s, support, *loaded = (np.loadtxt(p) for p in paths)
+
+    # Mirror the R bases: Bernstein-y order 2 (p=3) ⊗ Bernstein-x order 2 (q=3).
+    ib = InteractionBasis(
+        y_basis=BernsteinBasis(order=2, support=tuple(support)),
+        x_basis=BernsteinBasis(order=2, support=(0.0, 1.0)),
+    )
+    model = ConditionalTransformationModel(
+        basis=ib,
+        scaling=x_s.reshape(-1, 1),
+        base_distribution="normal",
+        optimizer_config=OptimizerConfig(solver="auglag", random_state=0),
+    )
+    with pytest.warns(UserWarning, match="experimental"):
+        model.fit(y, X=x.reshape(-1, 1))
+    return model, loaded
 
 
 # ---------------------------------------------------------------------------
@@ -494,38 +496,8 @@ class TestStramGammaVcovRParity:
     """
 
     def test_gamma_vcov_matches_r(self) -> None:
-        prefix = "stram_bs_bs_normal_"
-        required = [
-            REF_DIR / f"{prefix}y_train.txt",
-            REF_DIR / f"{prefix}x_train.txt",
-            REF_DIR / f"{prefix}x_s_train.txt",
-            REF_DIR / f"{prefix}y_support.txt",
-            REF_DIR / f"{prefix}gamma_vcov.txt",
-        ]
-        if not all(p.exists() for p in required):
-            pytest.skip(
-                f"{prefix}gamma_vcov fixtures not generated — run "
-                "Rscript reference/generate_reference.R"
-            )
-
-        y = np.loadtxt(required[0])
-        x = np.loadtxt(required[1])
-        x_s = np.atleast_2d(np.loadtxt(required[2])).reshape(-1, 1)
-        support = tuple(np.loadtxt(required[3]))
-        q_s = x_s.shape[1]
-        V_gamma_R = np.atleast_1d(np.loadtxt(required[4])).reshape(q_s, q_s)
-
-        ib = InteractionBasis(
-            y_basis=BernsteinBasis(order=2, support=support),
-            x_basis=BernsteinBasis(order=2, support=(0.0, 1.0)),
+        model, (V_gamma_R,) = _fit_stram_fixture("gamma_vcov")
+        # Single scaling column, so the γγ block is 1×1.
+        assert_allclose(
+            model.vcov()[-1:, -1:], V_gamma_R.reshape(1, 1), rtol=1e-4, atol=1e-8
         )
-        model = ConditionalTransformationModel(
-            basis=ib,
-            scaling=x_s,
-            base_distribution="normal",
-            optimizer_config=OptimizerConfig(solver="auglag", random_state=0),
-        )
-        with pytest.warns(UserWarning, match="experimental"):
-            model.fit(y, X=x.reshape(-1, 1))
-
-        assert_allclose(model.vcov()[-q_s:, -q_s:], V_gamma_R, rtol=1e-4, atol=1e-8)
