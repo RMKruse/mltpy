@@ -79,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   most `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3); otherwise auglag
   stops with `converged=False`. `Coxph(interacting=...)` with or without
   `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
-  / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). (#134)
+  / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). Decision
+  record: `docs/adr/0004-auglag-stall-acceptance.md`. (#134)
 
 ## [0.4.0] — 2026-05-25
 

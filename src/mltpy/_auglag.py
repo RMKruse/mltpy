@@ -384,7 +384,8 @@ def auglag_minimize(
         # ‖∇f‖∞ ≈ 366.  Nothing changes between outer iterations in that
         # regime (μ, λ and ρ are left as they are at a feasible iterate), so
         # repeating the inner solve is futile: stop and report
-        # non-convergence instead.
+        # non-convergence instead.  Rationale and evidence:
+        # docs/adr/0004-auglag-stall-acceptance.md.
         stalled = outer_iter >= 1 and (
             theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
         )
