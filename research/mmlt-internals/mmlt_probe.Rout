@@ -1,0 +1,255 @@
+R: R version 4.6.1 (2026-06-24) 
+tram       1.4.7
+mlt        1.8.4
+mvtnorm    1.4.2
+basefun    1.2.6
+variables  1.1.2
+alabama    2025.1.0
+mmlt lives in namespace: mlt 
+Mmlt lives in namespace: tram 
+
+== 1a. default fit (conditional = FALSE) ==
+[1] "mmmlt" "mmlt" 
+       y1.Bs1(y1)        y1.Bs2(y1)        y1.Bs3(y1)        y1.Bs4(y1) 
+       -2.0712200         0.2422941         0.2422941         1.9321338 
+       y1.Bs5(y1)        y2.Bs1(y2)        y2.Bs2(y2)        y2.Bs3(y2) 
+        3.2129260        -2.5457678        -0.9404882        -0.5482665 
+       y2.Bs4(y2)        y2.Bs5(y2) y2.y1.(Intercept) 
+        2.2101481         2.9344758        -0.7810620 
+convergence: 0 
+logLik: -850.940757985 
+
+-- coef types --
+Lambda :
+, , 1
+
+          y1        y2
+y1  1.000000         .
+y2 -0.781062  1.000000
+
+Omega :
+, , 1
+
+          y1        y2
+y1  1.000000         .
+y2 -0.781062  1.268881
+
+Lambdainv :
+, , 1
+
+         y1       y2
+y1 1.000000        .
+y2 0.781062 1.000000
+
+Omegainv :
+, , 1
+
+          y1        y2
+y1 1.0000000         .
+y2 0.6155520 0.7880962
+
+Precision :
+, , 1
+
+           y1         y2
+y1  1.6100579 -0.9910744
+y2 -0.9910744  1.6100579
+
+PartialCorr :
+, , 1
+
+         y1       y2
+y1 0.000000 0.615552
+y2 0.615552 0.000000
+
+Sigma :
+, , 1
+
+         y1       y2
+y1 1.000000 0.615552
+y2 0.615552 1.000000
+
+Corr :
+, , 1
+
+         y1       y2
+y1 1.000000 0.615552
+y2 0.615552 1.000000
+
+Spearman :
+, , 1
+
+          y1        y2
+y1 1.0000000 0.5975085
+y2 0.5975085 1.0000000
+
+Kendall :
+, , 1
+
+          y1        y2
+y1 1.0000000 0.4221338
+y2 0.4221338 1.0000000
+
+List of 2
+ $ y1: Named num [1:5] -2.071 0.242 0.242 1.932 3.213
+  ..- attr(*, "names")= chr [1:5] "y1.Bs1(y1)" "y1.Bs2(y1)" "y1.Bs3(y1)" "y1.Bs4(y1)" ...
+ $ y2: Named num [1:5] -2.546 -0.94 -0.548 2.21 2.934
+  ..- attr(*, "names")= chr [1:5] "y2.Bs1(y2)" "y2.Bs2(y2)" "y2.Bs3(y2)" "y2.Bs4(y2)" ...
+
+-- verify Corr from Lambda by hand (Omega = Lambda diag(sqrt(diag(Lambda^-1 Lambda^-T)))) --
+Sigma from Lambda: 1 0.781062 0.781062 1.610058 
+cov2cor: 0.615552  coef(type='Corr'): 0.615552 
+closed form -lam/sqrt(1+lam^2): 0.615552 
+Spearman 6/pi asin(r/2): 0.5975085  Kendall 2/pi asin(r): 0.4221338 
+
+== 1b. conditional = TRUE: same likelihood, different parameters ==
+[1] "cmmlt" "mmlt" 
+       y1.Bs1(y1)        y1.Bs2(y1)        y1.Bs3(y1)        y1.Bs4(y1) 
+       -2.0712315         0.2423190         0.2423190         1.9321217 
+       y1.Bs5(y1)        y2.Bs1(y2)        y2.Bs2(y2)        y2.Bs3(y2) 
+        3.2128499        -3.2302680        -1.1933644        -0.6956259 
+       y2.Bs4(y2)        y2.Bs5(y2) y2.y1.(Intercept) 
+        2.8044111         3.7234200        -0.7810582 
+logLik(cond) - logLik(marg): -6.862706e-08 
+Corr (cond): 0.6155502 
+
+== 1c. analytic score vs numerical gradient ==
+           y1.Bs1(y1) y1.Bs2(y1) y1.Bs3(y1)   y1.Bs4(y1)   y1.Bs5(y1)
+analytic 4.411286e-05   3.162862  -3.162844 8.732993e-05 1.037338e-05
+numDeriv 4.410532e-05   3.162862  -3.162844 8.734914e-05 1.035804e-05
+           y2.Bs1(y2)    y2.Bs2(y2)   y2.Bs3(y2)    y2.Bs4(y2)    y2.Bs5(y2)
+analytic 1.056597e-05 -6.175797e-05 4.151268e-06 -0.0001066160 -2.546138e-05
+numDeriv 1.056380e-05 -6.178923e-05 4.051577e-06 -0.0001066006 -2.545633e-05
+         y2.y1.(Intercept)
+analytic      0.0002625719
+numDeriv      0.0002625421
+off-optimum max |analytic - numDeriv|: 9.331559e-08 
+
+== 1d. vcov (inverse of optimiser Hessian) ==
+optim_hessian present: TRUE 
+       y1.Bs1(y1)        y1.Bs2(y1)        y1.Bs3(y1)        y1.Bs4(y1) 
+       0.12581214        0.10709305        0.10709414        0.29970943 
+       y1.Bs5(y1)        y2.Bs1(y2)        y2.Bs2(y2)        y2.Bs3(y2) 
+       0.37335047        0.20980943        0.32991747        0.41907932 
+       y2.Bs4(y2)        y2.Bs5(y2) y2.y1.(Intercept) 
+       0.34725035        0.27379849        0.07330256 
+max |optim_hessian - numDeriv::hessian(-logLik)| / max|H|: 4293.525 
+monotonicity slacks ui %*% theta - ci (0 = active constraint):
+[1] 2.313514 0.000000 1.689840 1.280792 1.605280 0.392222 2.758415 0.724328
+SE from vcov() vs SE from solve(numDeriv Hessian of -logLik):
+         y1.Bs1(y1) y1.Bs2(y1) y1.Bs3(y1) y1.Bs4(y1) y1.Bs5(y1) y2.Bs1(y2)
+vcov      0.1258121  0.1070931  0.1070941  0.2997094  0.3733505  0.2098094
+numDeriv  0.1364314  0.2707310  0.4332198  0.4519505  0.3879213  0.2098095
+         y2.Bs2(y2) y2.Bs3(y2) y2.Bs4(y2) y2.Bs5(y2) y2.y1.(Intercept)
+vcov      0.3299175  0.4190793  0.3472503  0.2737985        0.07330256
+numDeriv  0.3299460  0.4190813  0.3472970  0.2738128        0.07353936
+pseudo fit: free params: y2.y1.(Intercept)  vcov SE: 0.06236965  numDeriv SE: 0.06236965 
+
+== 1e. starting values / two-stage ('pseudo') vs joint ML ==
+marginal-fit coefs:
+   Bs1(y1)    Bs2(y1)    Bs3(y1)    Bs4(y1)    Bs5(y1)    Bs1(y2)    Bs2(y2) 
+-2.0848999  0.2506213  0.2506213  1.9660266  3.1132950 -2.5415766 -1.0018299 
+   Bs3(y2)    Bs4(y2)    Bs5(y2) 
+-0.4549337  2.1577549  2.9192561 
+joint-fit marginal coefs:
+y1.Bs1(y1) y1.Bs2(y1) y1.Bs3(y1) y1.Bs4(y1) y1.Bs5(y1) y2.Bs1(y2) y2.Bs2(y2) 
+-2.0712200  0.2422941  0.2422941  1.9321338  3.2129260 -2.5457678 -0.9404882 
+y2.Bs3(y2) y2.Bs4(y2) y2.Bs5(y2) 
+-0.5482665  2.2101481  2.9344758 
+pseudo logLik: -851.0191  jointML logLik: -850.9408 
+pseudo lambda: -0.780025  jointML lambda: -0.781062 
+pseudo keeps margins fixed: TRUE 
+analytic start for lambda (continuous, formula = ~1): solve(t(chol(S))) of the marginal z's, row-rescaled to unit diagonal:
+start lambda21 = -0.7800212 
+ACS (ACSiter = 1) logLik: -850.9408 
+independence LR: logLik(m1)+logLik(m2) = -922.3082 
+Warning message:
+In max(abs(pg)) : no non-missing arguments to max; returning -Inf
+fixed lambda = 0 logLik: -922.3082 
+
+== 1f. predict (deterministic vs MC) ==
+density (closed form):
+[1] 0.3986074 0.4533561 0.1086306
+trafo (Omega %*% z):
+          [,1]       [,2]       [,3]
+y1 -1.21277389 -1.1960283  0.2450375
+y2 -0.01322036 -0.2633256 -0.1864389
+joint distribution (lpmvnorm, args = object$args):
+List of 2
+ $ seed: num 1
+ $ M   : num 1000
+NULL
+                  [,1]       [,2]      [,3]
+seed1_M1000 0.07133753 0.06347729 0.4044396
+seed2_M1000 0.07165193 0.06277326 0.3978020
+seed2_M10   0.06926896 0.06347565 0.4156767
+TVPACK (deterministic): 0.07139496 0.06279628 0.4012286 
+max |MC(seed1,M1000) - TVPACK|: 0.00321106 
+marginal CDF margin 1 (= pnorm(trafo), no MC):
+    predict  pnorm_z1
+1 0.1126081 0.1126081
+2 0.1158428 0.1158428
+3 0.5967863 0.5967863
+
+== 1g. simulate (grid inversion, K = 50) ==
+            y1       y2
+[1,] 0.5203442 1.255657
+[2,] 0.4294395 2.823250
+[3,] 1.3462969 1.040265
+
+== 2. formula = ~ x (lambda(x) = alpha + x gamma) ==
+y2.y1.(Intercept)           y2.y1.x 
+       -0.7156575        -0.1375696 
+Corr at x = 0, 0.5, 1:
+        1         2         3 
+0.5819766 0.6172026 0.6490725 
+coef(type='Corr') without newdata errors: TRUE 
+
+== 3. mixed continuous / right-censored / ordinal ==
+event rate: 0.675 
+convergence: 0  logLik (default args seed=1, M=1000): -653.400525099 
+, , 1
+
+         y         t         o
+y 1.000000 0.4455480 0.2897930
+t 0.445548 1.0000000 0.4126808
+o 0.289793 0.4126808 1.0000000
+
+logLik (seed=7): -653.39703814 
+Error in BB::BBoptim(par = theta, fn = f, gr = g, control = control, quiet = quiet) : 
+  All calls to spg failed. Last error: Error in spg(par = par, fn = fn, gr = gr, method = cpars[1], project = project,  : 
+  Failure in initial function evaluation!Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+
+
+Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+Error in lpmvnorm(lower = lower, upper = upper, mean = dmean, invchol = cd$invchol,  : 
+  Length of W incorrect
+explicit w with per-observation dJ in {1, 2}: convergence = 1 ; logLik() errors: TRUE 
+mixed: max |analytic - numDeriv| score at optimum: 9.084273e-07 
+conditional = TRUE with non-probit margin errors: TRUE 
+per-observation censoring patterns (event indicator of t):
+
+  0   1 
+ 65 135 
+
+== 4. continuous + two ordinal margins: default w is set.seed(1); runif ==
+logLik default: -680.309951698417  logLik explicit W1: -680.309951698417 
+identical stored w: TRUE 
+logLik seed 7: -680.318075723472 
+max |coef(seed1) - coef(seed7)|: 0.003528728 
+logLik at fixed parm, w(seed1) vs w(seed7): -680.309951698 -680.319102885 
+, , 1
+
+           y        o1        o2
+y  1.0000000 0.4328469 0.2661109
+o1 0.4328469 1.0000000 0.4672490
+o2 0.2661109 0.4672490 1.0000000
+
