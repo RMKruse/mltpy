@@ -2662,3 +2662,71 @@ suppressPackageStartupMessages(library(tram))
 .write_survreg_stram("weibull",     "MinExtrVal", 20261110)
 .write_survreg_stram("lognormal",   "Normal",     20261111)
 .write_survreg_stram("loglogistic", "Logistic",   20261112)
+
+# ---------------------------------------------------------------------------
+# Interaction auglag false-stall reproduction — issue #142
+#
+# Bernstein-y (order 6, support (-4, 4)) ⊗ Bernstein-x (order 3, support
+# (-1, 1)), Normal base, exact data.  On this data mltpy's auglag used to
+# stall after a failed inner L-BFGS-B solve and report converged=True at a
+# non-stationary point (logLik ≈ -2604.7 at n = 1000 instead of ≈ -1403.9).
+#
+# The training data were drawn with NumPy's PCG64 stream, which R cannot
+# replay, so they are read from files written by
+# ``python reference/write_interaction_stall_data.py``:
+#
+#   reference/interaction_stall_n<n>_y_train.txt — training y, length n
+#   reference/interaction_stall_n<n>_x_train.txt — training x, length n
+#
+# Writes, for n ∈ {1000, 2000}:
+#
+#   reference/interaction_stall_n<n>_theta.txt  — coef(fit) in mlt's order
+#                                                 (y-index fastest, i.e.
+#                                                 column-major over Θ; length
+#                                                 p*q = 28)
+#   reference/interaction_stall_n<n>_loglik.txt — scalar logLik
+#
+# Precision: as in the stram_bs_bs_normal block (#125), the MLE is not
+# interior (a Θ column sits on its monotonicity boundary) and the default
+# alabama fit stops short of it, so the fit is polished with mlt's projected
+# ``spg`` optimiser, which stays exactly inside ``ui θ ≥ ci``.
+#
+# Fixtures materialised with R 4.6.1, mlt 1.8.4, basefun 1.2.6,
+# variables 1.1.2, BB 2026.1.0, alabama 2025.1.0.
+# ---------------------------------------------------------------------------
+
+.write_interaction_stall <- function(n) {
+  path <- function(name) {
+    file.path(out_dir, sprintf("interaction_stall_n%d_%s.txt", n, name))
+  }
+  y_st <- scan(path("y_train"), quiet = TRUE)
+  x_st <- scan(path("x_train"), quiet = TRUE)
+  stopifnot(length(y_st) == n, length(x_st) == n)
+
+  b_y_st <- Bernstein_basis(numeric_var("y", support = c(-4, 4)),
+                            order = 6, ui = "increasing")
+  b_x_st <- Bernstein_basis(numeric_var("x", support = c(-1, 1)), order = 3)
+  ctm_st <- ctm(response = b_y_st, interacting = b_x_st, todistr = "Normal")
+  df_st  <- data.frame(y = y_st, x = x_st)
+  fit0_st <- mlt(ctm_st, data = df_st)
+  fit_st  <- mlt(ctm_st, data = df_st, theta = coef(fit0_st),
+                 optim = mltoptim(spg = list(ftol = 1e-15, gtol = 1e-10,
+                                             maxit = 100000L, quiet = TRUE,
+                                             checkGrad = FALSE))["spg"])
+  # Converged, feasible (every Θ column non-decreasing), and not worse than
+  # the default fit.
+  Theta_st <- matrix(coef(fit_st), 7L, 4L)
+  stopifnot(fit_st$convergence == 0,
+            min(diff(Theta_st)) >= 0,
+            as.numeric(logLik(fit_st)) >= as.numeric(logLik(fit0_st)))
+  theta_st <- coef(fit_st)
+  ll_st    <- as.numeric(logLik(fit_st))
+
+  writeLines(format(theta_st, digits = 15), con = path("theta"))
+  writeLines(format(ll_st, digits = 15), con = path("loglik"))
+  cat(sprintf("interaction_stall n=%d ref: p*q=%d, ll=%.6f\n",
+              n, length(theta_st), ll_st))
+}
+
+.write_interaction_stall(1000L)
+.write_interaction_stall(2000L)

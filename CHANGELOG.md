@@ -94,6 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   feasible values. Restart selection, the fallback and the polish now score
   every candidate by the unpenalised likelihood and discard any whose θ is
   infeasible. Unweighted fits are unchanged. (#134)
+- Regression coverage for the false auglag stall reported in #142
+  (Bernstein-y order 6 ⊗ Bernstein-x order 3, n = 1000: `converged=True`, no
+  warning, log-likelihood −2604.7 against −1403.9 at the optimum, KKT residual
+  114). The #134 fixes above (merged in #136) resolve it;
+  `tests/test_interaction_stall.py` now pins the issue's data and configuration
+  at n = 1000 and n = 2000: first-attempt convergence with no
+  `ConvergenceWarning`, a KKT residual at the
+  floating-point floor, and log-likelihood (`rtol=1e-6`) and Θ (`rtol=1e-3`;
+  stacked active monotonicity rows leave Θ weakly determined) parity with an
+  R `mlt` fit polished with the projected `spg` optimiser (fixtures
+  `reference/interaction_stall_*`, data written by
+  `reference/write_interaction_stall_data.py`). The stationarity check in
+  `TestAuglagFirstAttempt` is now relative to |f| (`1e-8·(1 + |f|)`) instead
+  of an absolute 1e-6, which the scaled fit met with 6% headroom and failed
+  on another platform. (#142)
 
 ## [0.4.0] — 2026-05-25
 

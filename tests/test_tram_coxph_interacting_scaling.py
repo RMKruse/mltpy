@@ -237,9 +237,16 @@ class TestAuglagFirstAttempt:
         kind: str,
     ) -> None:
         """‖∇NLL‖∞ at the returned θ is at the floating-point floor of a
-        n = 1000 likelihood, not the ~366 of the stalled line search."""
+        n = 1000 likelihood, not the ~366 of the stalled line search.
+
+        The floor scales with |f| (ADR 0004, Decision 3: healthy stalls sit
+        near 4.3e-9 · (1 + |f|)), so the bound is relative.  An absolute 1e-6
+        bound left 6% headroom on the scaled fit (9.4e-7) and failed on
+        another platform at 1.6e-6 (issue #142).  The bound used here,
+        1e-8 · (1 + |f|) ≈ 9e-6, is still seven orders below the stall.
+        """
         model = auglag_nopolish_fits[kind]
-        _, grad = negative_log_likelihood(
+        nll, grad = negative_log_likelihood(
             model.theta_,
             model.basis,
             mev_ref["y_train"],
@@ -249,7 +256,7 @@ class TestAuglagFirstAttempt:
             base_distribution="min_extreme_value",
             scaling=mev_ref["x_s_train"].reshape(-1, 1) if kind == "scaled" else None,
         )
-        assert np.max(np.abs(grad)) < 1e-6
+        assert np.max(np.abs(grad)) < 1e-8 * (1.0 + abs(nll))
 
     def test_scaled_matches_r_without_polish(
         self, auglag_nopolish_fits: dict[str, Coxph], mev_ref: dict[str, np.ndarray]
