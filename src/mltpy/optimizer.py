@@ -38,6 +38,14 @@ from mltpy.likelihood import (
 )
 from mltpy.variables import CensoredData, CensoringType
 
+# Objective value returned for an infeasible θ (non-finite log-likelihood,
+# typically h' ≤ 0 after a trial step leaves the monotone cone).  Finite so
+# that line searches (SLSQP, L-BFGS-B inside auglag) can backtrack from it; an
+# ``inf`` value stalls L-BFGS-B's line search (issue #134).  Paired with the
+# subgradient of the monotonicity-violation penalty — see ``_make_objective``
+# and ``_optimize_interaction``.
+_INFEASIBLE_NLL = 1e10
+
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
 # ---------------------------------------------------------------------------
@@ -284,7 +292,6 @@ def _make_objective(
         Objective function mapping a parameter vector ``theta`` to a scalar
         negative log-likelihood (and optionally its gradient vector).
     """
-    _BIG = 1e10
     resolved_dist = _get_dist(base_distribution) if dist is None else dist
     n_params = basis.order + 1
     # Forward-difference matrix D: monotonicity is D @ theta_b >= 0.  Identical
@@ -315,14 +322,14 @@ def _make_objective(
                 # Gives SLSQP a descent direction toward the monotone cone
                 # instead of the stationary-point signal a zero gradient
                 # conveys.  Magnitude is left unscaled (natural units: adjacent
-                # theta_b differences) — pairing _BIG with a huge gradient
-                # would misrepresent the local slope.  Beta block stays zero
+                # theta_b differences) — pairing _INFEASIBLE_NLL with a huge
+                # gradient would misrepresent the local slope.  Beta block stays zero
                 # because beta does not enter the monotonicity constraint.
                 grad = np.zeros_like(theta)
                 if _D is not None:
                     g = _D @ theta[:n_params]
                     grad[:n_params] = _D.T @ np.minimum(g, 0.0)
-                return _BIG, grad
+                return _INFEASIBLE_NLL, grad
     else:
 
         def obj(theta: NDArray[np.float64]) -> Any:
@@ -340,7 +347,7 @@ def _make_objective(
                     scaling=scaling,
                 )
             except InfeasibleParameterError:
-                return _BIG
+                return _INFEASIBLE_NLL
 
     return obj
 
@@ -1057,7 +1064,6 @@ def _optimize_interaction(
     p = basis.n_y_params
     q = basis.n_x_params
     pq = p * q
-    total_params = pq + q_s
 
     Theta_init = np.outer(np.linspace(0.0, 1.0, p), np.ones(q))
     theta_init = np.concatenate([Theta_init.ravel(), np.zeros(q_s, dtype=np.float64)])
@@ -1083,7 +1089,18 @@ def _optimize_interaction(
             )
             return cast(tuple[float, NDArray[np.float64]], result)
         except InfeasibleParameterError:
-            return float("inf"), np.zeros(total_params)
+            # Same contract as the shift path's ``_make_objective``: a finite
+            # penalty plus the subgradient of the column-wise monotonicity
+            # violation P(θ) = 0.5·‖min(0, A_ineq @ θ − b_ineq)‖², with
+            # A_ineq = (D ⊗ I_q) padded by q_s zero γ columns.  Returning
+            # ``(inf, 0)`` here stalled L-BFGS-B's line search on the first
+            # trial step that left the cone, and auglag then reported the
+            # unmoved start point as converged (issue #134).  When θ is inside
+            # the cone (h' = 0 at a data point without a negative difference)
+            # the subgradient is zero and the finite value alone makes the
+            # line search backtrack.
+            viol = np.minimum(cm.A_ineq @ theta - cm.b_ineq, 0.0)
+            return _INFEASIBLE_NLL, cm.A_ineq.T @ viol
 
     def perturb(theta_seed: NDArray[np.float64]) -> NDArray[np.float64]:
         # Perturb-and-project only the vec(Θ) block; leave γ untouched.

@@ -65,6 +65,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sibling `stram_*` blocks use (the default alabama fit stopped ~5e-5 short
   on `γ` and ~1e-8 infeasible). (#125)
 
+### Fixed
+
+- Auglag stalled early on `InteractionBasis` fits and reported
+  `converged=True`. On a trial step that left the column-wise monotone cone, the
+  interaction objective returned `(inf, 0)`. That stalled the inner L-BFGS-B
+  line search: on the `stram_bs_bs_mev` fixture the fit stopped at NLL ≈ 2248
+  (optimum ≈ 893, ‖∇‖∞ ≈ 366), and the feasible-and-stalled exit accepted the
+  unmoved point. Only the Newton-CG polish rescued the fit, leaving Θ about
+  1e-5 off the optimum. The objective now matches the shift path: it returns a
+  finite penalty (1e10) and the subgradient of the monotonicity violation. The
+  stall exit now requires either an active constraint or a stationarity of at
+  most `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3); otherwise auglag
+  stops with `converged=False`. `Coxph(interacting=...)` with or without
+  `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
+  / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). (#134)
+
 ## [0.4.0] — 2026-05-25
 
 ### Performance

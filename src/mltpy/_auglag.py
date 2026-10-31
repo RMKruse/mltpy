@@ -77,8 +77,13 @@ class AugLagOptions:
         small parameter change rather than on the raw KKT residual.  It matters
         on degenerate active sets (stacked monotonicity boundaries) where the
         augmented-Lagrangian stationarity floors at ~1e-5 even though θ has
-        stopped moving and matches the reference fit to many decimals.  Default
-        ``1e-8``.
+        stopped moving and matches the reference fit to many decimals.  The
+        stall exit is taken only when some constraint is active (an equality
+        row, a positive inequality multiplier, or an inequality within
+        ``feas_tol`` of its boundary) or when the stationarity meets the
+        companion Gill–Murray–Wright test ``‖∇L_A‖∞ ≤ theta_tol^(2/3) · (1 +
+        |f|)``; a stall that meets neither means the inner solve failed, and
+        the loop stops with ``converged=False``.  Default ``1e-8``.
     inner_method:
         ``scipy.optimize.minimize`` method used for each unconstrained inner
         solve.  Default ``"L-BFGS-B"`` matches alabama's inner solver.
@@ -361,15 +366,51 @@ def auglag_minimize(
         # perturb θ within noise while inflating wasted work.  Guard with
         # ``outer_iter >= 1`` so the very first (often large) inner step never
         # short-circuits the loop.
-        if (
-            outer_iter >= 1
-            and feasibility < options.feas_tol
-            and theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
-        ):
+        #
+        # The active-set floor argument only holds when some constraint is
+        # active — an equality row, a positive multiplier, or an inequality at
+        # its boundary.  With every constraint slack and every multiplier zero
+        # the problem is locally unconstrained (∇L_A = ∇f), and the stall is
+        # accepted only when the stationarity also meets the companion
+        # gradient test of Gill, Murray & Wright (1981, §8.2.3): with the step
+        # test read as U2 (θ_tol = √τ_F, τ_F the relative precision of f),
+        # U3 is ‖∇f‖∞ ≤ τ_F^(1/3)·(1 + |f|) = θ_tol^(2/3)·(1 + |f|).  That
+        # accepts the gradient floor of a large-|f| likelihood fit (~1e-6 at
+        # |f| ~ 1e3) yet rejects a stall far from stationarity — issue #134,
+        # where an infeasible trial step stalls L-BFGS-B's line search at
+        # ‖∇f‖∞ ≈ 366.  Nothing changes between outer iterations in that
+        # regime (μ, λ and ρ are left as they are at a feasible iterate), so
+        # repeating the inner solve is futile: stop and report
+        # non-convergence instead.
+        stalled = outer_iter >= 1 and (
+            theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
+        )
+        if stalled and feasibility < options.feas_tol:
+            constraint_active = (
+                m_eq > 0
+                or bool(np.any(mu_ineq > 0.0))
+                or (m_ineq > 0 and bool(np.any(g <= options.feas_tol)))
+            )
+            stationarity_floor = options.theta_tol ** (2.0 / 3.0) * (
+                1.0 + abs(float(_f))
+            )
+            if not constraint_active and stationarity > stationarity_floor:
+                message = (
+                    "Inner solver stalled: parameters stopped moving at a "
+                    "feasible point with no active constraint "
+                    f"(KKT residual {kkt_residual:.2e} above the stationarity "
+                    f"floor {stationarity_floor:.2e})."
+                )
+                break
             converged = True
+            floor_reason = (
+                "floored on an active set"
+                if constraint_active
+                else f"within the stationarity floor {stationarity_floor:.2e}"
+            )
             message = (
                 "Converged: feasible and parameter change below tolerance "
-                f"(KKT residual {kkt_residual:.2e} floored on an active set)."
+                f"(KKT residual {kkt_residual:.2e} {floor_reason})."
             )
             # The current θ is the converged point; record it as best.
             best_kkt = kkt_residual

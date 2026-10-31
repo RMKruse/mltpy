@@ -203,6 +203,129 @@ class TestInequalityQP:
 
 
 # ---------------------------------------------------------------------------
+# Stall-based convergence: only on an active set (issue #134)
+# ---------------------------------------------------------------------------
+
+
+def _pinned_obj(x0: np.ndarray, f0: float = 0.0, slope: float = 1.0) -> callable:
+    """Objective the inner solver cannot leave: f = ``f0`` with ∇f = ``slope``
+    (every component) at ``x0`` and ``(inf, 0)`` everywhere else.
+
+    Mimics the issue-#134 failure mode — every L-BFGS-B trial step lands on a
+    non-finite value, so θ never moves while ‖∇f‖∞ = ``slope`` stays above
+    ``outer_tol``.
+    """
+
+    def obj(theta: np.ndarray) -> tuple[float, np.ndarray]:
+        if np.array_equal(theta, x0):
+            return f0, np.full_like(theta, slope)
+        return float("inf"), np.zeros_like(theta)
+
+    return obj
+
+
+class TestStallConvergenceRequiresActiveSet:
+    """A feasible iterate whose θ stopped moving is only accepted as converged
+    when some constraint is active.  With every constraint slack and no
+    multiplier, a stall means the inner solver failed, not that the KKT
+    residual floored on a degenerate active set."""
+
+    @pytest.mark.parametrize(
+        "A,b",
+        [
+            # Slack inequality: g = 1 > 0 at x0, μ stays 0.
+            (np.array([[1.0, 0.0]]), np.array([-1.0])),
+            # No constraints at all.
+            (None, None),
+        ],
+        ids=["slack-inequality", "unconstrained"],
+    )
+    def test_stall_without_active_constraint_not_converged(
+        self, A: np.ndarray | None, b: np.ndarray | None
+    ) -> None:
+        x0 = np.zeros(2)
+        result = auglag_minimize(
+            _pinned_obj(x0), x0, A_ineq=A, b_ineq=b, C_eq=None, d_eq=None
+        )
+        assert not result.converged
+        assert result.kkt_residual > 1e-3
+        np.testing.assert_array_equal(result.theta, x0)
+        assert "stall" in result.message.lower()
+
+    def test_stall_without_active_constraint_stops_early(self) -> None:
+        """The loop gives up as soon as the inactive stall is detected rather
+        than burning the remaining outer budget on an immobile θ."""
+        x0 = np.zeros(2)
+        result = auglag_minimize(
+            _pinned_obj(x0),
+            x0,
+            A_ineq=np.array([[1.0, 0.0]]),
+            b_ineq=np.array([-1.0]),
+            C_eq=None,
+            d_eq=None,
+        )
+        assert result.n_outer_iter == 2
+
+    @pytest.mark.parametrize(
+        "f0,slope,expect_converged",
+        [
+            # Bound θ_tol^(2/3)·(1+|f|) ≈ 4.6e-6 · 1001 ≈ 4.6e-3.
+            (1000.0, 1e-6, True),  # numerical floor of a large-|f| fit
+            (1000.0, 1e-1, False),  # far above the floor
+            # |f| ≈ 0: bound ≈ 4.6e-6.
+            (0.0, 1e-6, True),
+            (0.0, 1e-4, False),
+        ],
+    )
+    def test_stall_without_active_constraint_stationarity_bound(
+        self, f0: float, slope: float, expect_converged: bool
+    ) -> None:
+        """Without an active constraint a stall is accepted only when the
+        stationarity also meets the Gill–Murray–Wright U3 test
+        ‖∇L_A‖∞ ≤ θ_tol^(2/3)·(1 + |f|) — the gradient floor attainable when
+        f itself is only resolved to relative precision θ_tol²."""
+        x0 = np.zeros(2)
+        result = auglag_minimize(
+            _pinned_obj(x0, f0=f0, slope=slope),
+            x0,
+            A_ineq=np.array([[1.0, 0.0]]),
+            b_ineq=np.array([-1.0]),
+            C_eq=None,
+            d_eq=None,
+        )
+        assert result.converged is expect_converged
+
+    def test_stall_on_active_equality_still_converges(self) -> None:
+        """The alabama-parity stall exit is preserved when a constraint is
+        active: here an equality pins θ at x0 (λ ≠ 0 absorbs ∇f)."""
+        x0 = np.array([0.5, 0.5])
+        result = auglag_minimize(
+            _pinned_obj(x0),
+            x0,
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=np.ones((1, 2)),
+            d_eq=np.array([1.0]),
+        )
+        assert result.converged
+        assert "parameter change below tolerance" in result.message
+
+    def test_stall_on_active_inequality_still_converges(self) -> None:
+        """Same as above with an inequality binding at x0 (g = 0)."""
+        x0 = np.array([0.5, 0.5])
+        result = auglag_minimize(
+            _pinned_obj(x0),
+            x0,
+            A_ineq=np.array([[1.0, 0.0]]),
+            b_ineq=np.array([0.5]),
+            C_eq=None,
+            d_eq=None,
+        )
+        assert result.converged
+        assert "parameter change below tolerance" in result.message
+
+
+# ---------------------------------------------------------------------------
 # Equality-constrained QP: closed-form optimum
 # ---------------------------------------------------------------------------
 

@@ -30,6 +30,7 @@ from mltpy import (
     InteractionBasis,
     OptimizerConfig,
     log_likelihood,
+    negative_log_likelihood,
 )
 from mltpy.basis import BernsteinBasis
 from mltpy.tram import Coxph
@@ -93,13 +94,10 @@ def _theta_r_mltpy_layout(mev_ref: dict[str, np.ndarray]) -> np.ndarray:
 
 # Solvers fitted against the R reference, with the relative tolerance each
 # reaches on the weakly-determined Θ block (and the S / hazard predictions
-# built from it).  γ and ℓ meet rtol=1e-6 under the default auglag solver;
-# Θ under auglag sits ~1e-5 off the optimum because its inner L-BFGS-B stalls
-# on an infeasible trial step and the result is finished by the Newton-CG
-# polish.  trust-constr converges tightly, showing the residual is solver
-# precision rather than a model mismatch (see also
-# test_loglik_at_r_theta_matches_r).
-_SOLVER_THETA_RTOL = {"auglag": 1e-4, "trust-constr": 1e-6}
+# built from it).  Both meet the CLAUDE.md R-parity tolerance; auglag used to
+# need 1e-4 because its inner L-BFGS-B stalled on an infeasible trial step and
+# only the Newton-CG polish rescued the fit (issue #134).
+_SOLVER_THETA_RTOL = {"auglag": 1e-6, "trust-constr": 1e-6}
 
 
 @pytest.fixture(scope="module")
@@ -181,6 +179,80 @@ class TestRParity:
         got = getattr(mev_fits[solver], method)(t, X=x, X_scale=x_s)
         expected = mev_ref["survivor" if method == "survival" else "hazard"]
         assert_allclose(got, expected, rtol=_SOLVER_THETA_RTOL[solver], atol=1e-10)
+
+
+@pytest.fixture(scope="module", params=["scaled", "unscaled"])
+def auglag_nopolish_fit(
+    request: pytest.FixtureRequest, mev_ref: dict[str, np.ndarray]
+) -> tuple[str, Coxph]:
+    a, b = mev_ref["y_support"]
+    scaled = request.param == "scaled"
+    model = Coxph(
+        support=(float(a), float(b)),
+        order=_ORDER_Y,
+        interacting=_x_basis(),
+        scaling=mev_ref["x_s_train"].reshape(-1, 1) if scaled else None,
+        optimizer_config=OptimizerConfig(solver="auglag", random_state=0, polish=False),
+    )
+    if scaled:
+        with pytest.warns(UserWarning, match="experimental"):
+            model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
+    else:
+        model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
+    return request.param, model
+
+
+class TestAuglagFirstAttempt:
+    """Issue #134: the default auglag solver must reach the MLE on its own —
+    without the Newton-CG polish and without a perturbed restart.
+
+    The interaction objective used to return ``(inf, 0)`` on infeasible trial
+    steps, which stalled L-BFGS-B's line search at NLL ≈ 2248 (‖∇‖∞ ≈ 366) and
+    was then reported as ``converged=True``.  The unscaled fit shares the
+    defect (it predates scaling=) so both are exercised.
+    """
+
+    def test_converges_without_restart(
+        self, auglag_nopolish_fit: tuple[str, Coxph]
+    ) -> None:
+        _, model = auglag_nopolish_fit
+        result = model.result_
+        assert result is not None
+        assert result.converged
+        assert result.n_restarts == 0
+
+    def test_reaches_stationary_point(
+        self, auglag_nopolish_fit: tuple[str, Coxph], mev_ref: dict[str, np.ndarray]
+    ) -> None:
+        """‖∇NLL‖∞ at the returned θ is at the floating-point floor of a
+        n = 1000 likelihood, not the ~366 of the stalled line search."""
+        kind, model = auglag_nopolish_fit
+        _, grad = negative_log_likelihood(
+            model.theta_,
+            model.basis,
+            mev_ref["y_train"],
+            mev_ref["x_train"].reshape(-1, 1),
+            CensoringType.NONE,
+            gradient=True,
+            base_distribution="min_extreme_value",
+            scaling=mev_ref["x_s_train"].reshape(-1, 1) if kind == "scaled" else None,
+        )
+        assert np.max(np.abs(grad)) < 1e-6
+
+    def test_scaled_matches_r_without_polish(
+        self, auglag_nopolish_fit: tuple[str, Coxph], mev_ref: dict[str, np.ndarray]
+    ) -> None:
+        kind, model = auglag_nopolish_fit
+        if kind != "scaled":
+            pytest.skip("R reference exists for the scaled fit only")
+        result = model.result_
+        assert result is not None
+        assert_allclose(
+            result.log_likelihood, float(mev_ref["loglik"]), rtol=1e-6, atol=1e-10
+        )
+        assert_allclose(
+            model.theta_, _theta_r_mltpy_layout(mev_ref), rtol=1e-6, atol=1e-10
+        )
 
 
 # ---------------------------------------------------------------------------
