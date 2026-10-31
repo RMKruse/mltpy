@@ -215,22 +215,108 @@ cat(sprintf(
 ))
 
 # ---------------------------------------------------------------------------
-# max_extreme_value (standard Gumbel, right) reference
+# .auglag_reference(): multi-start explicit-constraint reference fit (#156)
 #
-# Fit mlt with todistr = "MaxExtrVal" on uncensored data, then write:
+# Minimises fn (a negative log-likelihood built on mlt's own likelihood) over
+# the linear rows A %*% theta >= 0 with alabama::auglag from every start in
+# `starts`, at tolerances far below mlt()'s defaults.  Enforces, via
+# stopifnot, the convergence record a reference fixture needs:
+#   * every start converges and all starts agree (theta spread < 1e-6);
+#   * KKT at the best fit: the rows with slack < 1e-8 are exactly
+#     `expected_active`, their multipliers solve g = A_act' lambda with
+#     lambda > 1e-3, and the stationarity residual is < 1e-5.
+# Used where plain mlt() reports convergence = 0 short of the optimum on a
+# surface that is flat along an active constraint face.
+# Last run with R 4.6.1, mlt 1.8-4, alabama 2025.1.0.
+# ---------------------------------------------------------------------------
+
+.auglag_reference <- function(fn, gr, A, starts, expected_active) {
+  fits <- lapply(starts, function(s) suppressWarnings(alabama::auglag(
+    par = s, fn = fn, gr = gr,
+    hin = function(th) drop(A %*% th), hin.jac = function(th) A,
+    control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500L,
+                         method = "BFGS", kkt2.check = FALSE),
+    control.optim = list(maxit = 5000L, reltol = 1e-15)
+  )))
+  conv   <- vapply(fits, `[[`, integer(1), "convergence")
+  value  <- vapply(fits, `[[`, numeric(1), "value")
+  TH     <- t(vapply(fits, `[[`, numeric(ncol(A)), "par"))
+  spread <- max(apply(TH, 2, function(z) diff(range(z))))
+  stopifnot(all(conv == 0L), spread < 1e-6, diff(range(value)) < 1e-9)
+
+  theta <- TH[which.min(value), ]
+  g     <- gr(theta)
+  slack <- drop(A %*% theta)
+  act   <- which(slack < 1e-8)
+  A_act <- A[act, , drop = FALSE]
+  lam   <- qr.solve(t(A_act), g)
+  stat  <- max(abs(g - drop(t(A_act) %*% lam)))
+  stopifnot(identical(act, unname(expected_active)), all(lam > 1e-3),
+            stat < 1e-5, all(slack > -1e-10))
+  list(theta = theta, n_conv = sum(conv == 0L), n_starts = length(conv),
+       spread = spread, active = act, lambda = lam, stationarity = stat)
+}
+
+.report_auglag_reference <- function(label, ref, dll, dth) {
+  cat(sprintf(paste0(
+    "%s: %d/%d auglag starts converged, theta spread %.1e; ",
+    "active rows {%s}, multipliers {%s}, stationarity %.1e; ",
+    "cross-check |dll| %.1e, |dtheta| %.1e\n"),
+    label, ref$n_conv, ref$n_starts, ref$spread,
+    paste(ref$active, collapse = ", "),
+    paste(sprintf("%.4g", ref$lambda), collapse = ", "),
+    ref$stationarity, dll, dth))
+}
+
+# ---------------------------------------------------------------------------
+# max_extreme_value (standard Gumbel, right) reference (issue #156)
+#
+# Model: todistr = "MaxExtrVal", order-4 Bernstein on (0, 1), exact data, no
+# covariates.  Writes:
 #   mlt_maxextrval_theta.txt — Bernstein coefficients (order=4, 5 values)
 #   mlt_maxextrval_y.txt     — 200 observations on (0, 1)
-#   mlt_maxextrval_ll.txt    — scalar log-likelihood
+#   mlt_maxextrval_ll.txt    — scalar log-likelihood (mlt's own loglik at theta)
+#
+# The Gumbel density is positive on the whole line, so there is no -Inf
+# barrier and plain mlt() is not stalled.  But two monotonicity rows are
+# active at the MLE (theta_b[1] = theta_b[2] = theta_b[3]) and the surface is
+# flat along that face: mlt() reports convergence = 0 with theta ~1.8e-6 and
+# logLik ~1.8e-8 short of the optimum, and even mltoptim(abstol = reltol =
+# 1e-12) does not close the theta gap.  The reference is therefore the
+# multi-start explicit-constraint fit on mlt's own loglik / scorei, with
+# plain mlt() kept as a cross-check (it was the fixture before #156).
 # ---------------------------------------------------------------------------
 
 set.seed(11)
 y_mev  <- runif(200, 0.02, 0.98)
 b_mev  <- Bernstein_basis(m, order = 4, ui = "increasing")
 ctm_mev <- ctm(b_mev, todistr = "MaxExtrVal")
-fit_mev <- mlt(ctm_mev, data = data.frame(y = y_mev))
+d_mev  <- data.frame(y = y_mev)
+w_mev  <- rep(1, nrow(d_mev))
+fit_mev <- mlt(ctm_mev, data = d_mev)
+mlt_mev <- mlt(ctm_mev, data = d_mev, dofit = FALSE)
 
-theta_mev <- coef(fit_mev)
-ll_mev    <- as.numeric(logLik(fit_mev))
+# Monotonicity rows D theta_b >= 0; row k is theta_b[k] - theta_b[k-1] >= 0
+# (0-indexed theta_b, mltpy's convention).
+A_mev <- diff(diag(5L))
+set.seed(2024)
+starts_mev <- c(list(unname(coef(fit_mev))),
+                replicate(9, cumsum(c(rnorm(1, 0, 2), rexp(4))), simplify = FALSE))
+ref_mev <- .auglag_reference(
+  fn = function(th) -mlt_mev$loglik(th, weights = w_mev),
+  gr = function(th) -colSums(mlt_mev$scorei(th, weights = w_mev)),
+  A = A_mev, starts = starts_mev,
+  expected_active = c(mono_1_2 = 2L, mono_2_3 = 3L)
+)
+
+theta_mev <- setNames(ref_mev$theta, names(coef(fit_mev)))
+ll_mev    <- mlt_mev$loglik(theta_mev, weights = w_mev)
+
+dll_mev <- abs(as.numeric(logLik(fit_mev)) - ll_mev)
+dth_mev <- max(abs(coef(fit_mev) - theta_mev))
+stopifnot(fit_mev$convergence == 0, dll_mev < 1e-7, dth_mev < 1e-4)
+.report_auglag_reference("MaxExtrVal (cross-check: plain mlt())",
+                         ref_mev, dll_mev, dth_mev)
 
 writeLines(format(theta_mev, digits = 15),
            con = file.path(out_dir, "mlt_maxextrval_theta.txt"))
@@ -316,46 +402,27 @@ starts_exp <- c(
   list(seq(0.1, 5.0, length.out = p_exp)),
   replicate(9, cumsum(c(runif(1, 0, 2), rexp(p_exp - 1L))), simplify = FALSE)
 )
-fits_exp <- lapply(starts_exp, function(s) suppressWarnings(alabama::auglag(
-  par = s, fn = nll_exp, gr = grad_exp,
-  hin = function(th) drop(A_exp %*% th), hin.jac = function(th) A_exp,
-  control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500L,
-                       method = "BFGS", kkt2.check = FALSE),
-  control.optim = list(maxit = 5000L, reltol = 1e-15)
-)))
-conv_exp  <- vapply(fits_exp, `[[`, integer(1), "convergence")
-value_exp <- vapply(fits_exp, `[[`, numeric(1), "value")
-TH_exp    <- t(vapply(fits_exp, `[[`, numeric(p_exp), "par"))
-spread_exp <- max(apply(TH_exp, 2, function(z) diff(range(z))))
-stopifnot(all(conv_exp == 0L), spread_exp < 1e-6,
-          diff(range(value_exp)) < 1e-9)
+# Row 1 is the support row theta_b[0] >= 0; row 1 + k is the monotonicity
+# row theta_b[k] - theta_b[k-1] >= 0 (0-indexed theta_b, mltpy's convention).
+ref_exp <- .auglag_reference(
+  fn = nll_exp, gr = grad_exp, A = A_exp, starts = starts_exp,
+  expected_active = c(support = 1L, mono_2_3 = 4L)
+)
 
-theta_exp <- setNames(TH_exp[which.min(value_exp), ], names(coef(mlt_exp)))
+# theta_b[0] is stored as the solver returns it (~ -5e-13, within the 1e-10
+# slack allowed above).  h(y_i) > 0 at every observation regardless, so mlt's
+# loglik is finite there; it is not snapped to 0 to keep the file solver
+# output.
+theta_exp <- setNames(ref_exp$theta, names(coef(mlt_exp)))
 ll_exp    <- mlt_exp$loglik(theta_exp, weights = w_exp)
-
-# KKT: g = A_act' lambda with lambda > 0 on the active rows.
-g_exp     <- grad_exp(theta_exp)
-slack_exp <- drop(A_exp %*% theta_exp)
-act_exp   <- which(slack_exp < 1e-8)
-A_act     <- A_exp[act_exp, , drop = FALSE]
-lam_exp   <- qr.solve(t(A_act), g_exp)
-stat_exp  <- max(abs(g_exp - drop(t(A_act) %*% lam_exp)))
-stopifnot(identical(act_exp, c(1L, 4L)), all(lam_exp > 1e-3), stat_exp < 1e-5,
-          all(slack_exp > -1e-10))
 
 fit_exp_fixed <- mlt(ctm_exp, data = d_exp, fixed = c("Bs1(y)" = 0),
                      optim = mltoptim(abstol = 1e-12, reltol = 1e-12))
 dll_fixed <- abs(as.numeric(logLik(fit_exp_fixed)) - ll_exp)
 dth_fixed <- max(abs(coef(fit_exp_fixed) - theta_exp))
 stopifnot(fit_exp_fixed$convergence == 0, dll_fixed < 1e-8, dth_fixed < 1e-4)
-
-cat(sprintf(paste0(
-  "Exponential: %d/%d auglag starts converged, theta spread %.1e; ",
-  "active rows {%s}, multipliers {%s}, stationarity %.1e; ",
-  "mlt(fixed Bs1 = 0): |dll| %.1e, |dtheta| %.1e\n"),
-  sum(conv_exp == 0L), length(conv_exp), spread_exp,
-  paste(act_exp, collapse = ", "), paste(sprintf("%.4g", lam_exp), collapse = ", "),
-  stat_exp, dll_fixed, dth_fixed))
+.report_auglag_reference("Exponential (cross-check: mlt(fixed Bs1 = 0))",
+                         ref_exp, dll_fixed, dth_fixed)
 
 writeLines(format(theta_exp, digits = 15),
            con = file.path(out_dir, "mlt_exponential_theta.txt"))

@@ -240,11 +240,13 @@ answer and replaced by an explicit-constraint reference where it does not.
   so it is not suitable. This is cross-checked by analytic-vs-finite-difference
   gradient and Jacobian tests and a KKT residual check. It validates mltpy's
   optimiser on mltpy's model, not R's modelling choice.
-- **Unscaled shift + exponential:** the existing fixture
-  `reference/mlt_exponential_*.txt` comes from a stalled `mlt()` fit (logLik
-  −154.91, true optimum −7.51 under this rule), and its test only checks
-  `≥ R − 0.5`. It is regenerated under this rule in
-  [#156](https://github.com/RMKruse/mltpy/issues/156).
+- **Unscaled shift + exponential:** the fixture
+  `reference/mlt_exponential_*.txt` came from a stalled `mlt()` fit (logLik
+  −154.91, true optimum −7.51 under this rule), and its test only checked
+  `≥ R − 0.5`. [#156](https://github.com/RMKruse/mltpy/issues/156)
+  regenerated it under this rule as a multi-start explicit-constraint
+  `alabama::auglag` fit on mlt's likelihood (logLik −7.5084028, cross-checked
+  by `mlt(fixed = c("Bs1(y)" = 0))`), and the test now compares logLik and θ.
 
 ---
 

@@ -1586,11 +1586,10 @@ class TestExponentialWithCovariates:
 @pytest.mark.parametrize(
     ("name", "stem", "theta_rtol", "theta_atol"),
     [
-        # Two monotonicity rows are active at the optimum
-        # (theta_b[1] = theta_b[2] = theta_b[3]), so the logLik is flat to ~1e-8
-        # over ~1e-6 moves of theta_b[0]: mltpy stops ~2e-6 from R's θ at a
-        # logLik within 3e-9 of it.  θ is compared at rtol=1e-5 for that reason.
-        ("max_extreme_value", "maxextrval", 1e-5, 1e-7),
+        # CLAUDE.md tolerances.  Two monotonicity rows are active at the MLE
+        # (theta_b[1] = theta_b[2] = theta_b[3]) and plain mlt() stopped ~1.8e-6
+        # short in θ there, so the fixture is the explicit-constraint optimum.
+        ("max_extreme_value", "maxextrval", 1e-6, 1e-10),
         # The support row theta_b[0] >= 0 is active (ADR 0005 lower-support-end
         # rule).  mltpy's auglag leaves theta_b[0] ~1e-8 on the feasible side,
         # so CLAUDE.md's atol=1e-10 cannot hold on that coordinate; the slack
@@ -1601,10 +1600,12 @@ class TestExponentialWithCovariates:
 def test_integration_r_reference_new_distributions(name, stem, theta_rtol, theta_atol):
     """mltpy's fit reaches the R reference optimum in logLik and θ.
 
-    The exponential fixture is an explicit-constraint ``alabama::auglag`` fit
-    on mlt's likelihood under the lower-support-end rule, not a plain
-    ``mlt()`` fit (which stalls against the ``dexp`` -Inf barrier); see the
-    exponential section of ``reference/generate_reference.R`` (issue #156).
+    Both fixtures are multi-start explicit-constraint ``alabama::auglag`` fits
+    on mlt's own likelihood, not plain ``mlt()`` fits: for the exponential
+    link ``mlt()`` stalls against the ``dexp`` -Inf barrier and R has no
+    lower-support-end row; for max_extreme_value it stops short along a flat
+    active monotonicity face.  See ``.auglag_reference()`` in
+    ``reference/generate_reference.R`` (issue #156).
     """
     required = [REF_DIR / f"mlt_{stem}_{kind}.txt" for kind in ("theta", "y", "ll")]
     if not all(p.exists() for p in required):
