@@ -1,7 +1,7 @@
 # ADR 0002 — Scaling Terms (Heteroskedastic CTMs)
 
 **Date:** 2026-05-21  
-**Status:** Accepted (Decision 2 superseded by [ADR 0003](0003-scaling-with-interaction.md))  
+**Status:** Accepted (Decision 2 superseded by [ADR 0003](0003-scaling-with-interaction.md); Decision 3's exponential corner case superseded by [ADR 0005](0005-exponential-scaling-constraint.md))  
 **Deciders:** RMKruse  
 **Issue:** [#69 Scaling Terms: ADR for scaled-baseline API and monotonicity strategy](https://github.com/RMKruse/mltpy/issues/69)  
 **Parent:** [#28 Scaling Terms (epic)](https://github.com/RMKruse/mltpy/issues/28), [#33 Architectural extensions](https://github.com/RMKruse/mltpy/issues/33)
@@ -178,6 +178,11 @@ non-trivially and need their own integration ADR before being mixed.
 
 ## Decision 3 — Monotonicity Strategy
 
+> **Superseded by [ADR 0005](0005-exponential-scaling-constraint.md)** for the
+> `"exponential"` corner case below: the combination is now supported via the
+> exact nonlinear support constraint. The monotonicity argument (`D @ theta_b ≥ 0`
+> suffices, `γ` unconstrained) still holds.
+
 **Chosen:** The existing `D @ theta_b ≥ 0` constraint suffices for every
 base distribution except `"exponential"`; `γ` is unconstrained.  No new
 rows are added to `constraints.py` for the scaled path.
@@ -220,7 +225,7 @@ does not extend directly.  Three options were considered:
 3. **Forbid `base_distribution="exponential"` with `scaling != None`**
    for v0.4.  Raise `ValueError` at `MLT.__init__`.
 
-**Chosen:** option (3).  The exponential link is the rarest of the seven
+**Chosen:** option (3) — *superseded by ADR 0005, which adopts option (1)*.  The exponential link is the rarest of the seven
 base distributions and the only one that requires support-feasibility
 rows; combining it with scaling has no R `tram` parity to chase (R does
 not expose this combination either).  Lifting the restriction would
