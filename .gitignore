@@ -54,3 +54,4 @@ Claude.md
 mltpy.egg-info/
 
 .coverage
+.scratch/
