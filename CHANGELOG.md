@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   quantiles with `X_scale_new`, and an R-parity check against the
   `stram_bs_bs_mev_*` fixture. Cross-referenced from notebooks 04 / 05, whose
   stale "scaling + interacting is out of scope" takeaway is corrected. (#111)
+- R-parity fixtures `reference/stram_bs_bs_normal_*` for the base
+  `ConditionalTransformationModel(basis=InteractionBasis(...), scaling=...)`
+  path (`mlt::ctm`, Bernstein-y ⊗ Bernstein-x, Normal base), materialised with
+  R 4.6.1 / mlt 1.8.4. The previously skipping ratchets now run: `γ`, `Θ` and
+  log-likelihood match R at `rtol=1e-6` and `γ`'s variance at `rtol=1e-4`.
+  This MLE has an active monotonicity row, so the R fit is polished with
+  mlt's projected `spg` optimiser instead of the unconstrained BFGS step the
+  sibling `stram_*` blocks use (the default alabama fit stopped ~5e-5 short
+  on `γ` and ~1e-8 infeasible). (#125)
 
 ## [0.4.0] — 2026-05-25
 

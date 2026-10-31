@@ -411,7 +411,9 @@ class TestStramRParity:
     prefix ``stram_bs_bs_normal_*`` (mlt::ctm with response = Bernstein-y,
     interacting = Bernstein-x, scaling = linear x_s, Normal base).  γ is
     sign-aligned with mltpy, so no flip is applied (ADR 0003 Decision 6).
-    Skips until the fixtures have been materialised under R.
+    Materialised in #125.  The MLE has one active monotonicity row (the middle
+    Θ column is flat in its first two entries), so the R fit is polished with
+    mlt's projected ``spg`` optimiser rather than an unconstrained BFGS step.
     """
 
     def test_gamma_and_loglik_match_r(self) -> None:
@@ -420,6 +422,15 @@ class TestStramRParity:
         assert_allclose(
             model.result_.log_likelihood, float(ll_R), rtol=1e-6, atol=1e-10
         )
+
+    def test_theta_matches_r(self) -> None:
+        model, (theta_R,) = _fit_stram_fixture("theta")
+        p, q = 3, 3
+        # mlt orders vec(Θ) with the y-basis index fastest (column-major on
+        # the (p, q) matrix); the trailing entry is γ.
+        Theta_R = theta_R[: p * q].reshape(p, q, order="F")
+        assert_allclose(model.Theta_, Theta_R, rtol=1e-6, atol=1e-10)
+        assert_allclose(model.gamma_, theta_R[p * q :], rtol=1e-6, atol=1e-10)
 
 
 def _fit_stram_fixture(
@@ -679,11 +690,11 @@ class TestStramGammaVcovRParity:
     """R-parity ratchet for γ's covariance on the stram path — issue #105.
 
     ``stram_bs_bs_normal_gamma_vcov.txt`` is R's ``vcov(fit)`` restricted to
-    the scaling coefficients (``reference/generate_reference.R``).  The
-    fixture's MLE is interior, so R's ``vcov.mlt`` is ``solve(Hessian)``;
-    mltpy's Hessian is finite-difference on this path (ADR 0003 Decision 4),
-    hence rtol=1e-4 — the bound the shift-path vcov parity tests also use.
-    Skips until the fixtures are materialised under R (#125).
+    the scaling coefficients (``reference/generate_reference.R``).  R's
+    ``vcov.mlt`` is ``solve(Hessian)`` and ignores the fixture's one active
+    monotonicity row, as does mltpy's default ``inv(H)``; mltpy's Hessian is
+    finite-difference on this path (ADR 0003 Decision 4), hence rtol=1e-4 —
+    the bound the shift-path vcov parity tests also use.  Materialised in #125.
     """
 
     def test_gamma_vcov_matches_r(self) -> None:

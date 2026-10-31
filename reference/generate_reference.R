@@ -1827,10 +1827,19 @@ cat(sprintf("profile_ci_baseline: p=%d rows written\n",
 #                      (issue #105: Wald SEs for γ on the interaction path)
 #   *_loglik.txt     — scalar logLik
 #
-# NOTE: this block requires mlt >= 1.7 (the version that added ``scaling`` /
-# ``scale_shift`` to ``ctm``); it was authored against the ADR 0003 design and
-# must be run under R to materialise the .txt fixtures (the Python ratchet
-# skips until they exist).
+# Active constraint and precision (issue #125): unlike the sibling stram blocks
+# this MLE is NOT interior — the middle Θ column (x = 0.5) sits on the
+# monotonicity boundary, Θ[1, 2] = Θ[2, 2].  The default alabama fit stops at
+# abstol = 1e-7, which leaves γ ~5e-5 (relative) short of the optimum and the
+# boundary row infeasible by ~1e-8.  The plain-BFGS polish the sibling blocks
+# use is unconstrained and so not valid here; instead the fit is polished with
+# mlt's ``spg`` optimiser (BB::BBoptim with an exact linear projection onto
+# ``ui θ ≥ ci``), which lands on the boundary exactly.  Starting the same
+# polish from a tighter-auglag point reproduces γ to ~2e-9 (relative).
+#
+# Requires mlt >= 1.7 (``scaling`` / ``scale_shift`` in ``ctm``).  Fixtures
+# materialised with R 4.6.1, mlt 1.8.4, basefun 1.2.6, variables 1.1.2,
+# BB 2026.1.0, alabama 2025.1.0 (tram 1.4.7 installed; not used by this block).
 # ---------------------------------------------------------------------------
 set.seed(20260525)
 n_st <- 300L
@@ -1839,7 +1848,7 @@ q_st <- 3L  # number of Bernstein-x functions
 x_st   <- runif(n_st, 0, 1)
 x_s_st <- rnorm(n_st)
 # Heteroskedastic conditional response: location shifts mildly with x, spread
-# grows with x_s.  Interior MLE (no stacked active constraints).
+# grows with x_s.  The MLE has one active monotonicity row (see above).
 y_st <- 0.5 + 1.0 * x_st + rnorm(n_st, sd = exp(0.5 * 0.3 * x_s_st)) * 0.6
 a_st <- min(y_st) - 0.2
 b_st <- max(y_st) + 0.2
@@ -1857,7 +1866,17 @@ ctm_st <- ctm(response = b_y_st,
               scaling = b_s_st,
               scale_shift = FALSE,
               todistr = "Normal")
-fit_st <- mlt(ctm_st, data = df_st)
+fit0_st <- mlt(ctm_st, data = df_st)
+fit_st  <- mlt(ctm_st, data = df_st, theta = coef(fit0_st),
+               optim = mltoptim(spg = list(ftol = 1e-15, gtol = 1e-10,
+                                           maxit = 100000L, quiet = TRUE,
+                                           checkGrad = FALSE))["spg"])
+# Converged, feasible (every Θ column non-decreasing), and on the boundary.
+Theta_st <- matrix(coef(fit_st)[1:(p_st * q_st)], p_st, q_st)
+stopifnot(fit_st$convergence == 0,
+          min(diff(Theta_st)) >= 0,
+          min(diff(Theta_st)) < 1e-8,
+          as.numeric(logLik(fit_st)) > as.numeric(logLik(fit0_st)))
 
 theta_st <- coef(fit_st)
 ll_st    <- as.numeric(logLik(fit_st))
@@ -1865,9 +1884,9 @@ ll_st    <- as.numeric(logLik(fit_st))
 # identifiable by the scaling-basis column name(s).
 scl_names_st <- colnames(model.matrix(b_s_st, data = df_st))
 gamma_st <- theta_st[scl_names_st]
-# γγ block of the inverse observed information.  The fixture lands at an
-# interior MLE, so vcov.mlt reduces to solve(Hessian) — the quantity mltpy's
-# vcov() returns from the finite-difference interaction Hessian.
+# γγ block of the inverse observed information.  vcov.mlt is solve(Hessian)
+# and ignores the active monotonicity row — the same quantity mltpy's default
+# vcov() returns as inv(H) from the finite-difference interaction Hessian.
 gamma_vcov_st <- vcov(fit_st)[scl_names_st, scl_names_st, drop = FALSE]
 
 writeLines(format(y_st, digits = 15),
