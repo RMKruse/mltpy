@@ -1439,6 +1439,7 @@ class ConditionalTransformationModel:
         X: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -1454,6 +1455,13 @@ class ConditionalTransformationModel:
             Optional per-observation weights.
         offset:
             Optional per-observation offset added to ``h``.
+        X_scale:
+            Scaling-design matrix of shape ``(n, q_s)``. Required when the
+            model was fitted with ``scaling=``, including on training data;
+            pass the training scaling matrix to reproduce the fitted
+            log-likelihood (with the same weights and offset). A 1-D array
+            is accepted for a single scaling column. Must be ``None`` for
+            models fitted without scaling.
 
         Returns
         -------
@@ -1463,6 +1471,19 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        ValueError
+            If ``X_scale`` is missing for a scaled model, supplied for an
+            unscaled model, has the wrong shape, or contains non-finite values.
+
+        Notes
+        -----
+        Evaluates the sum of observation log-likelihoods, including scaling,
+        censoring, weights and offsets as in :meth:`fit`.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1), scaling=X_s).fit(y, X)
+        >>> ll = model.score(y, X, X_scale=X_s)
         """
         self._check_is_fitted()
         if self.theta_ is None:
@@ -1472,6 +1493,38 @@ class ConditionalTransformationModel:
         y_clean, X_clean = self._validate_input(y, X)
         n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
+        X_scale_clean: NDArray[np.float64] | None = None
+        if self.scaling is not None:
+            if X_scale is None:
+                raise ValueError(
+                    "Model was fitted with scaling=; X_scale must be provided "
+                    f"(shape ({n}, {self.scaling.shape[1]}))."
+                )
+            X_scale_clean = np.asarray(X_scale, dtype=float)
+            if X_scale_clean.ndim == 1:
+                X_scale_clean = X_scale_clean[:, None]
+            if X_scale_clean.ndim != 2:
+                raise ValueError(
+                    "X_scale must be a 2-D array of shape (n, q_s); "
+                    f"got shape {X_scale_clean.shape}."
+                )
+            if X_scale_clean.shape[0] != n:
+                raise ValueError(
+                    f"X_scale has {X_scale_clean.shape[0]} rows but y has {n} "
+                    "observations; both must match."
+                )
+            if X_scale_clean.shape[1] != self.scaling.shape[1]:
+                raise ValueError(
+                    f"X_scale has {X_scale_clean.shape[1]} columns but the "
+                    f"fitted model has q_s={self.scaling.shape[1]} scaling "
+                    "coefficients."
+                )
+            if not np.all(np.isfinite(X_scale_clean)):
+                raise ValueError("X_scale must be finite (no NaN or inf).")
+        elif X_scale is not None:
+            raise ValueError(
+                "Model was not fitted with scaling=; X_scale must be None."
+            )
         cens = CensoringType.NONE if self.censoring is None else self.censoring
         return log_likelihood(
             self.theta_,
@@ -1482,6 +1535,7 @@ class ConditionalTransformationModel:
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
+            scaling=X_scale_clean,
         )
 
     _ACTIVE_CONSTRAINT_TOL: float = 1e-8

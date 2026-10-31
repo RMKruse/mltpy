@@ -417,10 +417,15 @@ class TestStramRParity:
     """
 
     def test_gamma_and_loglik_match_r(self) -> None:
-        model, (gamma_R, ll_R) = _fit_stram_fixture("gamma", "loglik")
+        model, (gamma_R, ll_R, y, x, x_s) = _fit_stram_fixture(
+            "gamma", "loglik", "y_train", "x_train", "x_s_train"
+        )
         assert_allclose(model.gamma_, np.atleast_1d(gamma_R), rtol=1e-6, atol=1e-10)
         assert_allclose(
             model.result_.log_likelihood, float(ll_R), rtol=1e-6, atol=1e-10
+        )
+        assert_allclose(
+            model.score(y, X=x, X_scale=x_s), float(ll_R), rtol=1e-6, atol=1e-10
         )
 
     def test_theta_matches_r(self) -> None:

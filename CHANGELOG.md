@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `score(..., X_scale=...)` now includes scaling for both shift and interaction
+  models. Scaled fits require an explicit scaling design, including when scoring
+  training data; unscaled fits reject it. Missing or invalid designs raise
+  `ValueError` instead of returning an incorrect likelihood or a matrix error.
+  (#144)
 - Auglag stalled early on `InteractionBasis` fits and reported
   `converged=True`. On a trial step that left the column-wise monotone cone, the
   interaction objective returned `(inf, 0)`. That stalled the inner L-BFGS-B

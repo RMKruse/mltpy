@@ -128,6 +128,12 @@ def test_scaling_log_likelihood_matches_R(scaling_ref: dict) -> None:
         rtol=1e-6,
         atol=1e-8,
     )
+    np.testing.assert_allclose(
+        model.score(scaling_ref["y"], X=scaling_ref["x_d"], X_scale=scaling_ref["x_s"]),
+        scaling_ref["log_likelihood"],
+        rtol=1e-6,
+        atol=1e-8,
+    )
 
 
 def test_scaling_gamma_exposed(scaling_ref: dict) -> None:
