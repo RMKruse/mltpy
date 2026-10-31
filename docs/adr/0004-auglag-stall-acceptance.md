@@ -39,8 +39,13 @@ R-parity results.
 
 **Chosen:** Every objective handed to a solver returns a **finite** value
 on an infeasible θ (non-finite log-likelihood, typically h′ ≤ 0). It
-returns `_INFEASIBLE_NLL = 1e10` (module constant in `optimizer.py`)
-together with the subgradient of the monotonicity-violation penalty
+returns a penalty scaled to the fit's own objective,
+
+    penalty = max(1e10, 1e6 · (1 + |NLL(θ_init)|)),
+
+(`_infeasible_penalty` in `optimizer.py`, with floor `_INFEASIBLE_NLL` and
+headroom `_INFEASIBLE_NLL_HEADROOM`), together with the subgradient of the
+monotonicity-violation penalty
 
     P(θ) = ½ ‖min(0, A θ − b)‖²,   ∇P = Aᵀ min(0, A θ − b).
 
@@ -54,9 +59,47 @@ interaction path (`_optimize_interaction.obj`) now matches it.
 the cone but h′ = 0 at some data point, the subgradient is zero and the
 finite value alone makes the search backtrack.
 
+**The penalty is a line-search signal, never a likelihood.** A finite
+penalty is an ordinary number to the solver and to restart selection.
+Review of the first cut, which used a fixed 1e10, showed this goes wrong
+once a valid likelihood exceeds the constant. On the unscaled
+`stram_bs_bs_mev` fixture with every weight 1e8, the feasible NLL is
+≈ 9.2e10. Every auglag attempt descended into the infeasible region to the
+"cheaper" 1e10, restart selection kept it as the best fit, and `fit()`
+raised `InfeasibleParameterError` from the Hessian. On the shift path,
+which had used 1e10 since before #134, a weighted `Coxph` fit returned
+log-likelihood −1e10. Two guards close this:
+
+- **Scale.** The penalty is anchored to the NLL at the feasible start that
+  every restart derives from. The 1e10 floor dominates for every unweighted
+  fixture (|f| ≲ 1e4), so those fits are unchanged. A rescaled objective
+  keeps the penalty-to-objective ratio of ~1e6 that the unweighted fits
+  already have. When the start itself is infeasible, the floor is used.
+- **Verification.** `_restart_loop` re-scores every candidate with the
+  unpenalised likelihood (`_make_true_nll`) instead of trusting the solver's
+  `.fun`. A candidate whose θ is infeasible or whose likelihood is not
+  finite is discarded like a `LinAlgError` attempt: it is never retained
+  and never ends the loop as converged. If no attempt survives, the fit
+  falls back to `θ_init` with `converged=False`. The reported
+  log-likelihood, including after the Newton-CG polish, is always this
+  verified value.
+
+With both guards, the weighted fit reproduces the unit-weight MLE on its
+first attempt (θ to ~1e-8 relative, NLL exactly 1e8 × the unit value). This
+is pinned by
+`tests/test_tram_coxph_interacting_scaling.py::TestHeavyWeightsNeverReturnPenalty`
+for both the interaction and the shift path.
+
 **Rejected:** bounding the inner line search so it stays inside the cone.
 That would mean replacing L-BFGS-B's line search, a larger and riskier
 change than matching an existing contract.
+
+**Rejected:** a penalty of `+inf` or NaN to mark infeasibility
+unambiguously. That is what stalled L-BFGS-B in #134.
+
+**Rejected:** scaling the penalty by total weight or sample size. The
+objective's magnitude also depends on the per-observation density scale, so
+the start NLL is the direct measure.
 
 ---
 

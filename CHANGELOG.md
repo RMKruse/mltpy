@@ -85,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
   / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). Decision
   record: `docs/adr/0004-auglag-stall-acceptance.md`. (#134)
+- The finite infeasibility penalty could be returned as a fitted result when a
+  valid weighted likelihood exceeded it. With every weight 1e8, the
+  interaction fit settled on the 1e10 penalty as "NLL 1e10" and `fit()` raised
+  `InfeasibleParameterError` from the Hessian, and a weighted shift-path
+  `Coxph` reported log-likelihood −1e10. The penalty is now
+  `max(1e10, 1e6·(1 + |NLL(θ_init)|))`, so it stays above the fit's own
+  feasible values. Restart selection, the fallback and the polish now score
+  every candidate by the unpenalised likelihood and discard any whose θ is
+  infeasible. Unweighted fits are unchanged. (#134)
 
 ## [0.4.0] — 2026-05-25
 

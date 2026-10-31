@@ -266,6 +266,100 @@ class TestAuglagFirstAttempt:
         )
 
 
+# Uniform weight large enough that the feasible NLL (≈ 923 · 1e8 ≈ 9.2e10 on
+# this fixture) exceeds the 1e10 infeasibility-penalty floor.
+_HEAVY_WEIGHT = 1e8
+
+
+@pytest.fixture(scope="module")
+def heavy_weight_fits(
+    mev_ref: dict[str, np.ndarray], auglag_nopolish_fits: dict[str, Coxph]
+) -> dict[str, tuple[Coxph, Coxph]]:
+    """``(unit-weight fit, every-weight-1e8 fit)`` per path, auglag with
+    ``polish=False`` and default restarts, keyed ``"interaction"`` /
+    ``"shift"``.  The heavy fit must not raise in ``fit()``."""
+    a, b = mev_ref["y_support"]
+    y = mev_ref["y_train"]
+    heavy = np.full(y.shape[0], _HEAVY_WEIGHT)
+
+    def coxph(interacting: BernsteinBasis | None) -> Coxph:
+        return Coxph(
+            support=(float(a), float(b)),
+            order=_ORDER_Y,
+            interacting=interacting,
+            optimizer_config=OptimizerConfig(
+                solver="auglag", random_state=0, polish=False
+            ),
+        )
+
+    fits: dict[str, tuple[Coxph, Coxph]] = {}
+    ia = coxph(_x_basis())
+    ia.fit(y, X=mev_ref["x_train"], weights=heavy)
+    fits["interaction"] = (auglag_nopolish_fits["unscaled"], ia)
+
+    x_shift = mev_ref["x_train"].reshape(-1, 1)
+    unit, shift = coxph(None), coxph(None)
+    unit.fit(y, X=x_shift)
+    shift.fit(y, X=x_shift, weights=heavy)
+    fits["shift"] = (unit, shift)
+    return fits
+
+
+class TestHeavyWeightsNeverReturnPenalty:
+    """Review of #136: the finite infeasibility penalty (``_INFEASIBLE_NLL``,
+    1e10) must never be mistaken for a likelihood.
+
+    With every weight at 1e8 the feasible NLL exceeds 1e10, so the fixed
+    penalty used to be the lowest value the solver could find: every auglag
+    attempt descended into the infeasible region, restart selection kept the
+    penalty as "NLL 1e10", and ``fit()`` then raised
+    ``InfeasibleParameterError`` from the Hessian (interaction path) or
+    reported log-likelihood −1e10 (shift path).  A uniform weight rescales
+    the objective without moving the MLE, so the heavy fit must reproduce
+    the unit-weight fit.
+    """
+
+    _PATHS = ["interaction", "shift"]
+
+    @pytest.mark.parametrize("path", _PATHS)
+    def test_reaches_unit_weight_mle(
+        self, heavy_weight_fits: dict[str, tuple[Coxph, Coxph]], path: str
+    ) -> None:
+        unit, heavy = heavy_weight_fits[path]
+        assert heavy.result_ is not None and unit.result_ is not None
+        assert heavy.result_.converged
+        assert heavy.result_.n_restarts == 0
+        assert_allclose(heavy.theta_, unit.theta_, rtol=1e-6, atol=1e-10)
+        assert_allclose(
+            heavy.result_.log_likelihood,
+            _HEAVY_WEIGHT * unit.result_.log_likelihood,
+            rtol=1e-8,
+        )
+
+    def test_reported_loglik_is_the_likelihood_at_theta(
+        self,
+        heavy_weight_fits: dict[str, tuple[Coxph, Coxph]],
+        mev_ref: dict[str, np.ndarray],
+    ) -> None:
+        """The returned value is the real weighted likelihood, which here is
+        far below −1e10 — not the penalty."""
+        _, heavy = heavy_weight_fits["interaction"]
+        assert heavy.result_ is not None
+        y = mev_ref["y_train"]
+        ll = log_likelihood(
+            heavy.theta_,
+            heavy.basis,
+            y,
+            mev_ref["x_train"].reshape(-1, 1),
+            CensoringType.NONE,
+            base_distribution="min_extreme_value",
+            weights=np.full(y.shape[0], _HEAVY_WEIGHT),
+        )
+        assert_allclose(heavy.result_.log_likelihood, ll, rtol=1e-12)
+        assert ll < -1e10
+        assert np.all(np.isfinite(heavy.hessian_))
+
+
 # ---------------------------------------------------------------------------
 # Convenience surface (synthetic data)
 # ---------------------------------------------------------------------------

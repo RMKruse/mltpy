@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -10,14 +11,18 @@ import pytest
 from mltpy._auglag import AugLagOptions
 from mltpy.basis import BernsteinBasis
 from mltpy.constraints import MonotonicityConstraint
-from mltpy.likelihood import negative_log_likelihood
+from mltpy.likelihood import InfeasibleParameterError, negative_log_likelihood
 from mltpy.optimizer import (
+    _INFEASIBLE_NLL,
+    _INFEASIBLE_NLL_HEADROOM,
     OptimizationResult,
     OptimizerConfig,
+    _infeasible_penalty,
     _initial_theta,
     _make_objective,
     _perturb_and_project,
     _project_to_feasible,
+    _restart_loop,
     optimize,
 )
 from mltpy.variables import CensoredData, CensoringType
@@ -510,6 +515,119 @@ class TestMakeObjectivePenalty:
             _, grad = obj(theta)
             theta = theta - step * grad
         assert np.all(D @ theta >= -1e-9)
+
+
+class TestInfeasiblePenaltyScale:
+    """The penalty must dominate this fit's feasible objective values whatever
+    their scale (review of #136: with large weights a fixed 1e10 sat *below*
+    the likelihood and became the solver's minimum)."""
+
+    def test_floor_for_ordinary_objective(self):
+        theta = np.zeros(2)
+        assert _infeasible_penalty(theta, lambda t: 923.0) == _INFEASIBLE_NLL
+
+    @pytest.mark.parametrize("f_init", [9.2e10, -9.2e10])
+    def test_scales_with_objective_magnitude(self, f_init):
+        penalty = _infeasible_penalty(np.zeros(2), lambda t: f_init)
+        assert penalty == _INFEASIBLE_NLL_HEADROOM * (1.0 + abs(f_init))
+        assert penalty > abs(f_init)
+
+    def test_infeasible_or_nonfinite_start_falls_back_to_floor(self):
+        def raises(t):
+            raise InfeasibleParameterError("h' <= 0")
+
+        assert _infeasible_penalty(np.zeros(2), raises) == _INFEASIBLE_NLL
+        assert _infeasible_penalty(np.zeros(2), lambda t: np.inf) == _INFEASIBLE_NLL
+
+    def test_make_objective_returns_given_penalty(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
+        for use_gradient in (True, False):
+            obj = _make_objective(
+                basis, y, None, CensoringType.NONE, use_gradient, penalty=4.2e17
+            )
+            out = obj(theta_bad)
+            assert (out[0] if use_gradient else out) == 4.2e17
+
+
+class TestRestartLoopVerifiesLikelihood:
+    """``_restart_loop`` scores candidates by the unpenalised likelihood, never
+    by the solver's ``.fun``, which is the penalty on an infeasible θ."""
+
+    @staticmethod
+    def _run(results):
+        it = iter(results)
+        return lambda t: next(it)
+
+    @staticmethod
+    def _nll(result):
+        if result.infeasible:
+            raise InfeasibleParameterError("h' <= 0")
+        return result.true_nll
+
+    def test_penalty_result_is_never_retained(self):
+        """A penalty value below the real likelihood loses to the real fit,
+        and its ``converged`` flag does not end the loop."""
+        penalty = SimpleNamespace(
+            fun=1e10, true_nll=None, infeasible=True, ok=True, name="penalty"
+        )
+        real = SimpleNamespace(
+            fun=9.2e10, true_nll=9.2e10, infeasible=False, ok=True, name="real"
+        )
+        best, best_nll, n_restarts = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=3),
+            lambda t: t,
+            self._run([penalty, real]),
+            lambda r: r.ok,
+            self._nll,
+        )
+        assert best.name == "real"
+        assert best_nll == 9.2e10
+        assert n_restarts == 1
+
+    def test_selects_on_verified_value(self):
+        a = SimpleNamespace(fun=1.0, true_nll=5.0, infeasible=False, name="a")
+        b = SimpleNamespace(fun=2.0, true_nll=3.0, infeasible=False, name="b")
+        best, best_nll, _ = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=1),
+            lambda t: t,
+            self._run([a, b]),
+            lambda r: False,
+            self._nll,
+        )
+        assert best.name == "b"
+        assert best_nll == 3.0
+
+    def test_all_infeasible_returns_none(self):
+        bad = [
+            SimpleNamespace(fun=1e10, true_nll=None, infeasible=True),
+            SimpleNamespace(fun=1e10, true_nll=np.inf, infeasible=False),
+        ]
+        best, best_nll, _ = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=1),
+            lambda t: t,
+            self._run(bad),
+            lambda r: True,
+            self._nll,
+        )
+        assert best is None
+        assert best_nll == np.inf
+
+    def test_verbose_warns_on_discarded_attempt(self):
+        bad = SimpleNamespace(fun=1e10, true_nll=None, infeasible=True)
+        with pytest.warns(RuntimeWarning, match="infeasible"):
+            _restart_loop(
+                np.zeros(2),
+                OptimizerConfig(max_restarts=0, verbose=True),
+                lambda t: t,
+                self._run([bad]),
+                lambda r: True,
+                self._nll,
+            )
 
 
 # ---------------------------------------------------------------------------

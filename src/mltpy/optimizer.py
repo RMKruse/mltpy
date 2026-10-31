@@ -44,7 +44,52 @@ from mltpy.variables import CensoredData, CensoringType
 # ``inf`` value stalls L-BFGS-B's line search (issue #134).  Paired with the
 # subgradient of the monotonicity-violation penalty — see ``_make_objective``
 # and ``_optimize_interaction``.
+#
+# ``_INFEASIBLE_NLL`` is only the *floor*.  A weighted likelihood can exceed
+# any fixed constant (n = 1000 with every weight 1e8 sits near 9e10), and a
+# penalty below the feasible objective turns the infeasible region into the
+# minimum the solver descends to.  Each fit therefore scales the penalty to
+# its own objective via ``_infeasible_penalty``, and ``_restart_loop`` checks
+# the true likelihood before retaining a candidate (ADR 0004, Decision 1).
 _INFEASIBLE_NLL = 1e10
+# Penalty headroom over ``1 + |NLL(θ_init)|``.  The unweighted R-parity fits
+# see a penalty-to-objective ratio of ~1e6–1e7 (1e10 against |f| ~ 1e3), so
+# the floor keeps those fits unchanged and a rescaled objective gets the same
+# ratio.
+_INFEASIBLE_NLL_HEADROOM = 1e6
+
+
+def _infeasible_penalty(
+    theta_init: NDArray[np.float64],
+    true_nll: Callable[[NDArray[np.float64]], float],
+) -> float:
+    """Penalty value for an infeasible θ, scaled to this fit's objective.
+
+    Parameters
+    ----------
+    theta_init : NDArray[np.float64]
+        The feasible starting point every restart is derived from.
+    true_nll : Callable[[NDArray[np.float64]], float]
+        Unpenalised negative log-likelihood; raises
+        :class:`~mltpy.likelihood.InfeasibleParameterError` when θ is
+        infeasible.
+
+    Returns
+    -------
+    float
+        ``max(_INFEASIBLE_NLL, _INFEASIBLE_NLL_HEADROOM · (1 + |NLL(θ_init)|))``.
+        Falls back to the floor when the start itself is infeasible or its
+        likelihood is not finite; ``_restart_loop`` still rejects any penalty
+        value that a solver returns as its result.
+    """
+    try:
+        f_init = float(true_nll(theta_init))
+    except InfeasibleParameterError:
+        return _INFEASIBLE_NLL
+    if not np.isfinite(f_init):
+        return _INFEASIBLE_NLL
+    return max(_INFEASIBLE_NLL, _INFEASIBLE_NLL_HEADROOM * (1.0 + abs(f_init)))
+
 
 # ---------------------------------------------------------------------------
 # Configuration and result dataclasses
@@ -249,6 +294,7 @@ def _make_objective(
     weights: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     scaling: NDArray[np.float64] | None = None,
+    penalty: float = _INFEASIBLE_NLL,
 ) -> Callable[[NDArray[np.float64]], Any]:
     """Return a closure suitable for ``scipy.optimize.minimize``.
 
@@ -257,7 +303,7 @@ def _make_objective(
     and ``jac=None`` should be used.
 
     :class:`~mltpy.likelihood.InfeasibleParameterError` from an infeasible
-    ``theta`` (h' ≤ 0) is caught and replaced by a large penalty so that the
+    ``theta`` (h' ≤ 0) is caught and replaced by ``penalty`` so that the
     optimiser can back off rather than crash.  Any other exception — including
     plain ``ValueError`` for unsupported ``base_distribution`` or shape
     mismatches — propagates out so that genuine bugs are not silenced.
@@ -285,6 +331,10 @@ def _make_objective(
     offset : NDArray[np.float64] | None, default=None
         Per-observation offsets added to ``h`` before distribution calls
         (already validated by the caller).
+    penalty : float, default=_INFEASIBLE_NLL
+        Value returned for an infeasible ``theta``.  Solver paths pass
+        :func:`_infeasible_penalty` so that it dominates this fit's feasible
+        objective values whatever their scale (e.g. large weights).
 
     Returns
     -------
@@ -322,14 +372,14 @@ def _make_objective(
                 # Gives SLSQP a descent direction toward the monotone cone
                 # instead of the stationary-point signal a zero gradient
                 # conveys.  Magnitude is left unscaled (natural units: adjacent
-                # theta_b differences) — pairing _INFEASIBLE_NLL with a huge
+                # theta_b differences) — pairing the penalty value with a huge
                 # gradient would misrepresent the local slope.  Beta block stays zero
                 # because beta does not enter the monotonicity constraint.
                 grad = np.zeros_like(theta)
                 if _D is not None:
                     g = _D @ theta[:n_params]
                     grad[:n_params] = _D.T @ np.minimum(g, 0.0)
-                return _INFEASIBLE_NLL, grad
+                return penalty, grad
     else:
 
         def obj(theta: NDArray[np.float64]) -> Any:
@@ -347,9 +397,51 @@ def _make_objective(
                     scaling=scaling,
                 )
             except InfeasibleParameterError:
-                return _INFEASIBLE_NLL
+                return penalty
 
     return obj
+
+
+def _make_true_nll(
+    basis: BernsteinBasis | InteractionBasis,
+    y: NDArray[np.float64] | CensoredData,
+    X: NDArray[np.float64] | None,
+    censoring: CensoringType,
+    dist: DistOps,
+    weights: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    scaling: NDArray[np.float64] | None,
+) -> Callable[[NDArray[np.float64]], float]:
+    """Unpenalised negative log-likelihood ``θ ↦ NLL(θ)`` for one fit.
+
+    Unlike the solver objective, it does not absorb
+    :class:`~mltpy.likelihood.InfeasibleParameterError` into a penalty: an
+    infeasible θ raises.  Used to anchor :func:`_infeasible_penalty`, to
+    verify candidates in :func:`_restart_loop`, and to score the
+    fallback / polished θ, so that a reported log-likelihood is always a real
+    one.
+    """
+
+    def true_nll(theta: NDArray[np.float64]) -> float:
+        return float(
+            cast(
+                float,
+                _negative_log_likelihood_from_dist(
+                    theta,
+                    basis,
+                    y,
+                    X,
+                    censoring,
+                    gradient=False,
+                    dist=dist,
+                    weights=weights,
+                    offset=offset,
+                    scaling=scaling,
+                ),
+            )
+        )
+
+    return true_nll
 
 
 def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
@@ -527,10 +619,11 @@ def _restart_loop(
     perturb_fn: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     run_fn: Callable[[NDArray[np.float64]], Any],
     success_fn: Callable[[Any], bool],
+    nll_fn: Callable[[Any], float],
     *,
     label: str = "optimizer.py",
     message_fn: Callable[[Any], str] | None = None,
-) -> tuple[Any, int]:
+) -> tuple[Any, float, int]:
     """Run the shared perturb-and-project restart loop and return the best result.
 
     Every solver path (auglag / SLSQP / trust-constr, shift and interaction
@@ -538,9 +631,16 @@ def _restart_loop(
     each subsequent attempt perturbs and re-projects the start, retrying up to
     ``config.max_restarts`` extra times.  A :class:`numpy.linalg.LinAlgError`
     from any attempt is caught and (optionally) warned, then skipped.  The best
-    result by objective value (``.fun``) is retained even when convergence is
-    never reported, so the caller can return ``converged=False`` with the
-    closest fit rather than nothing.
+    result by *verified* negative log-likelihood is retained even when
+    convergence is never reported, so the caller can return
+    ``converged=False`` with the closest fit rather than nothing.
+
+    The solver's own ``.fun`` is not trusted for this: on an infeasible θ the
+    objective returns a finite penalty, which is an ordinary number to the
+    solver and to a comparison.  Each result is re-scored with ``nll_fn``
+    (the unpenalised likelihood), and a result whose θ is infeasible or whose
+    likelihood is not finite is discarded like a ``LinAlgError`` attempt — it
+    is neither retained nor allowed to end the loop as converged.
 
     Parameters
     ----------
@@ -559,6 +659,10 @@ def _restart_loop(
     success_fn : Callable[[Any], bool]
         Predicate marking a result as converged (``r.success`` for scipy,
         ``r.converged`` for auglag).  A truthy value breaks the loop.
+    nll_fn : Callable[[Any], float]
+        Unpenalised negative log-likelihood at a result's θ.  Raises
+        :class:`~mltpy.likelihood.InfeasibleParameterError` (or returns a
+        non-finite value) when that θ is infeasible.
     label : str, default="optimizer.py"
         Prefix for the ``RuntimeWarning`` messages (e.g.
         ``"optimizer.py (interaction)"``).
@@ -569,9 +673,11 @@ def _restart_loop(
 
     Returns
     -------
-    tuple[Any, int]
-        ``(best_result, n_restarts_used)``.  ``best_result`` is ``None`` only
-        when every attempt raised ``LinAlgError``.
+    tuple[Any, float, int]
+        ``(best_result, best_nll, n_restarts_used)``.  ``best_nll`` is the
+        verified likelihood of ``best_result``.  ``best_result`` is ``None``
+        (and ``best_nll`` is ``inf``) only when every attempt raised
+        ``LinAlgError`` or ended at an infeasible θ.
     """
     best_result: Any = None
     best_nll = float("inf")
@@ -595,8 +701,23 @@ def _restart_loop(
                 )
             continue
 
-        if result.fun < best_nll:
-            best_nll = float(result.fun)
+        try:
+            nll = float(nll_fn(result))
+        except InfeasibleParameterError:
+            nll = float("nan")
+        if not np.isfinite(nll):
+            if config.verbose:
+                warnings.warn(
+                    f"{label}: attempt {attempt + 1} ended at an infeasible θ "
+                    f"(objective {float(result.fun):.6g} is the infeasibility "
+                    "penalty, not a likelihood); discarding it",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            continue
+
+        if nll < best_nll:
+            best_nll = nll
             best_result = result
 
         if success_fn(result):
@@ -610,7 +731,7 @@ def _restart_loop(
                 stacklevel=2,
             )
 
-    return best_result, n_restarts_used
+    return best_result, best_nll, n_restarts_used
 
 
 def _fallback_result(
@@ -619,7 +740,9 @@ def _fallback_result(
     message: str,
     compute_nll: Callable[[], float],
 ) -> OptimizationResult:
-    """Build the ``converged=False`` result when every restart raised LinAlgError.
+    """Build the ``converged=False`` result when no restart left a usable θ.
+
+    That is, every attempt raised ``LinAlgError`` or ended at an infeasible θ.
 
     Returns ``theta_init`` (the only feasible point we are certain of) with its
     log-likelihood, leaving the auglag-only diagnostic fields at their ``None``
@@ -856,20 +979,8 @@ def _optimize_scipy(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
     )
-    obj = _make_objective(
-        basis,
-        y,
-        X,
-        censoring,
-        config.use_gradient,
-        base_distribution=base_distribution,
-        dist=dist,
-        weights=weights,
-        offset=offset,
-        scaling=scaling,
-    )
-    jac = True if config.use_gradient else None
-    options = _scipy_options(config)
+
+    true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
 
     # fixed_params (issue #86) — reduction approach for the scipy paths.
     # Rather than appending equality constraints (the auglag treatment, #85),
@@ -882,13 +993,31 @@ def _optimize_scipy(
     free_idx: NDArray[np.intp] | None = None
     fixed_idx: NDArray[np.intp] | None = None
     fixed_vals: NDArray[np.float64] | None = None
-    obj_used: Callable[[NDArray[np.float64]], Any] = obj
-    constraints_used: Any = constraints
     if config.fixed_params:
         free_idx, fixed_idx, fixed_vals = _fixed_params_split(
             config.fixed_params, total_params
         )
         theta_init[fixed_idx] = fixed_vals
+
+    obj = _make_objective(
+        basis,
+        y,
+        X,
+        censoring,
+        config.use_gradient,
+        base_distribution=base_distribution,
+        dist=dist,
+        weights=weights,
+        offset=offset,
+        scaling=scaling,
+        penalty=_infeasible_penalty(theta_init, true_nll),
+    )
+    jac = True if config.use_gradient else None
+    options = _scipy_options(config)
+
+    obj_used: Callable[[NDArray[np.float64]], Any] = obj
+    constraints_used: Any = constraints
+    if free_idx is not None and fixed_idx is not None and fixed_vals is not None:
         _free_idx = free_idx
         _fixed_idx = fixed_idx
         _fixed_vals = fixed_vals
@@ -971,54 +1100,43 @@ def _optimize_scipy(
             options=options,
         )
 
-    best_scipy_result, n_restarts_used = _restart_loop(
+    def _full_theta(x: NDArray[np.float64]) -> NDArray[np.float64]:
+        # Reduction path returns the optimum on the free subvector; lift it
+        # back to the full layout (fixed entries restored to their pinned
+        # values) so downstream consumers see the unchanged
+        # ``[theta_b | beta | gamma]`` representation regardless of whether
+        # fixed_params was used.
+        if free_idx is None or fixed_idx is None or fixed_vals is None:
+            return np.asarray(x, dtype=np.float64)
+        full = np.empty(total_params, dtype=np.float64)
+        full[free_idx] = x
+        full[fixed_idx] = fixed_vals
+        return full
+
+    best_scipy_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
         _perturb,
         _run,
         lambda r: bool(r.success),
+        lambda r: true_nll(_full_theta(r.x)),
         message_fn=lambda r: str(r.message),
     )
 
     if best_scipy_result is None:
-        # Every attempt hit a numerical linear-algebra failure — return the
-        # initial point as fallback so the caller can surface a
-        # ConvergenceWarning rather than re-raising.
+        # No attempt left a usable θ (numerical linear-algebra failure or an
+        # infeasible end point) — return the initial point as fallback so the
+        # caller can surface a ConvergenceWarning rather than re-raising.
         return _fallback_result(
             theta_init,
             n_restarts_used,
-            "All optimisation attempts raised LinAlgError.",
-            lambda: cast(
-                float,
-                _negative_log_likelihood_from_dist(
-                    theta_init,
-                    basis,
-                    y,
-                    X,
-                    censoring,
-                    gradient=False,
-                    dist=dist,
-                    weights=weights,
-                    offset=offset,
-                    scaling=scaling,
-                ),
-            ),
+            "All optimisation attempts raised LinAlgError or ended at an infeasible θ.",
+            lambda: true_nll(theta_init),
         )
 
-    # Reduction path returns the optimum on the free subvector; lift it back
-    # to the full layout (fixed entries restored to their pinned values) so
-    # downstream consumers see the unchanged ``[theta_b | beta | gamma]``
-    # representation regardless of whether fixed_params was used.
-    if free_idx is not None and fixed_idx is not None and fixed_vals is not None:
-        final_theta = np.empty(total_params, dtype=np.float64)
-        final_theta[free_idx] = best_scipy_result.x
-        final_theta[fixed_idx] = fixed_vals
-    else:
-        final_theta = best_scipy_result.x
-
     return OptimizationResult(
-        theta=final_theta,
-        log_likelihood=float(-best_scipy_result.fun),
+        theta=_full_theta(best_scipy_result.x),
+        log_likelihood=float(-best_nll),
         converged=bool(best_scipy_result.success),
         n_iter=int(getattr(best_scipy_result, "nit", 0)),
         n_restarts=n_restarts_used,
@@ -1073,6 +1191,12 @@ def _optimize_interaction(
     else:
         rng = np.random.default_rng(config.random_state)
 
+    true_nll = _make_true_nll(
+        basis, y, x_arr, CensoringType.NONE, dist, weights, offset, scaling
+    )
+
+    penalty = _infeasible_penalty(theta_init, true_nll)
+
     def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         try:
             result = _negative_log_likelihood_from_dist(
@@ -1098,9 +1222,11 @@ def _optimize_interaction(
             # unmoved start point as converged (issue #134).  When θ is inside
             # the cone (h' = 0 at a data point without a negative difference)
             # the subgradient is zero and the finite value alone makes the
-            # line search backtrack.
+            # line search backtrack.  ``penalty`` is scaled to this fit's
+            # objective so that it stays above every feasible value even
+            # under large weights (see ``_infeasible_penalty``).
             viol = np.minimum(cm.A_ineq @ theta - cm.b_ineq, 0.0)
-            return _INFEASIBLE_NLL, cm.A_ineq.T @ viol
+            return penalty, cm.A_ineq.T @ viol
 
     def perturb(theta_seed: NDArray[np.float64]) -> NDArray[np.float64]:
         # Perturb-and-project only the vec(Θ) block; leave γ untouched.
@@ -1112,13 +1238,13 @@ def _optimize_interaction(
     if config.solver == "auglag":
         return _interaction_auglag(
             obj=obj,
+            true_nll=true_nll,
             theta_init=theta_init,
             cm=cm,
             config=config,
             basis=basis,
             y=y,
             x_arr=x_arr,
-            dist=dist,
             base_distribution=base_distribution,
             weights=weights,
             offset=offset,
@@ -1128,30 +1254,24 @@ def _optimize_interaction(
 
     return _interaction_scipy(
         obj=obj,
+        true_nll=true_nll,
         theta_init=theta_init,
         cm=cm,
         config=config,
-        basis=basis,
-        y=y,
-        x_arr=x_arr,
-        dist=dist,
-        weights=weights,
-        offset=offset,
         perturb=perturb,
-        scaling=scaling,
     )
 
 
 def _interaction_auglag(
     *,
     obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    true_nll: Callable[[NDArray[np.float64]], float],
     theta_init: NDArray[np.float64],
     cm: Any,
     config: OptimizerConfig,
     basis: InteractionBasis,
     y: NDArray[np.float64] | CensoredData,
     x_arr: NDArray[np.float64],
-    dist: DistOps,
     base_distribution: BaseDistribution,
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
@@ -1163,7 +1283,7 @@ def _interaction_auglag(
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
 
-    best_result, n_restarts_used = _restart_loop(
+    best_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
         perturb,
@@ -1177,6 +1297,7 @@ def _interaction_auglag(
             options=auglag_opts,
         ),
         lambda r: bool(r.converged),
+        lambda r: true_nll(r.theta),
         label="optimizer.py (interaction)",
     )
 
@@ -1184,27 +1305,14 @@ def _interaction_auglag(
         return _fallback_result(
             theta_init,
             n_restarts_used,
-            "All interaction-model auglag attempts raised LinAlgError.",
-            lambda: cast(
-                float,
-                _negative_log_likelihood_from_dist(
-                    theta_init,
-                    basis,
-                    y,
-                    x_arr,
-                    CensoringType.NONE,
-                    gradient=False,
-                    dist=dist,
-                    weights=weights,
-                    offset=offset,
-                    scaling=scaling,
-                ),
-            ),
+            "All interaction-model auglag attempts raised LinAlgError or "
+            "ended at an infeasible θ.",
+            lambda: true_nll(theta_init),
         )
 
     # Newton-CG polish: only when all Kronecker-constraint multipliers are inactive
     ia_final_theta = best_result.theta
-    ia_final_nll = best_result.fun
+    ia_final_nll = best_nll
     if config.polish and np.all(best_result.mu_ineq < 1e-6):
         theta_polished = _ncg_polish(
             best_result.theta,
@@ -1222,7 +1330,7 @@ def _interaction_auglag(
         )
         if theta_polished is not None:
             ia_final_theta = theta_polished
-            ia_final_nll = float(obj(theta_polished)[0])
+            ia_final_nll = true_nll(theta_polished)
 
     ia_c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
@@ -1245,17 +1353,11 @@ def _interaction_auglag(
 def _interaction_scipy(
     *,
     obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    true_nll: Callable[[NDArray[np.float64]], float],
     theta_init: NDArray[np.float64],
     cm: Any,
     config: OptimizerConfig,
-    basis: InteractionBasis,
-    y: NDArray[np.float64] | CensoredData,
-    x_arr: NDArray[np.float64],
-    dist: DistOps,
-    weights: NDArray[np.float64] | None,
-    offset: NDArray[np.float64] | None,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
-    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
     """SLSQP / trust-constr path for the interaction basis.
 
@@ -1280,7 +1382,7 @@ def _interaction_scipy(
 
     options = _scipy_options(config)
 
-    best_scipy_result, n_restarts_used = _restart_loop(
+    best_scipy_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
         perturb,
@@ -1293,6 +1395,7 @@ def _interaction_scipy(
             options=options,
         ),
         lambda r: bool(r.success),
+        lambda r: true_nll(r.x),
         label="optimizer.py (interaction)",
     )
 
@@ -1300,27 +1403,14 @@ def _interaction_scipy(
         return _fallback_result(
             theta_init,
             n_restarts_used,
-            "All interaction-model scipy attempts raised LinAlgError.",
-            lambda: cast(
-                float,
-                _negative_log_likelihood_from_dist(
-                    theta_init,
-                    basis,
-                    y,
-                    x_arr,
-                    CensoringType.NONE,
-                    gradient=False,
-                    dist=dist,
-                    weights=weights,
-                    offset=offset,
-                    scaling=scaling,
-                ),
-            ),
+            "All interaction-model scipy attempts raised LinAlgError or "
+            "ended at an infeasible θ.",
+            lambda: true_nll(theta_init),
         )
 
     return OptimizationResult(
         theta=best_scipy_result.x,
-        log_likelihood=float(-best_scipy_result.fun),
+        log_likelihood=float(-best_nll),
         converged=bool(best_scipy_result.success),
         n_iter=int(getattr(best_scipy_result, "nit", 0)),
         n_restarts=n_restarts_used,
@@ -1461,6 +1551,8 @@ def _optimize_auglag(
             C_eq=np.vstack([cm.C_eq, extra_rows]),
             d_eq=np.concatenate([cm.d_eq, extra_rhs]),
         )
+    true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
+
     # auglag always needs gradients for the L-BFGS-B inner solver
     obj = _make_objective(
         basis,
@@ -1473,12 +1565,13 @@ def _optimize_auglag(
         weights=weights,
         offset=offset,
         scaling=scaling,
+        penalty=_infeasible_penalty(theta_init, true_nll),
     )
     auglag_opts = (
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
 
-    best_auglag_result, n_restarts_used = _restart_loop(
+    best_auglag_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
         lambda t: _perturb_and_project(t, n_params, rng, nonneg_lower=nonneg_lower),
@@ -1492,6 +1585,7 @@ def _optimize_auglag(
             options=auglag_opts,
         ),
         lambda r: bool(r.converged),
+        lambda r: true_nll(r.theta),
         message_fn=lambda r: str(r.message),
     )
 
@@ -1499,29 +1593,15 @@ def _optimize_auglag(
         return _fallback_result(
             theta_init,
             n_restarts_used,
-            "All auglag attempts raised LinAlgError.",
-            lambda: cast(
-                float,
-                _negative_log_likelihood_from_dist(
-                    theta_init,
-                    basis,
-                    y,
-                    X,
-                    censoring,
-                    gradient=False,
-                    dist=dist,
-                    weights=weights,
-                    offset=offset,
-                    scaling=scaling,
-                ),
-            ),
+            "All auglag attempts raised LinAlgError or ended at an infeasible θ.",
+            lambda: true_nll(theta_init),
         )
 
     # Newton-CG polish: only for interior-MLE fits (no active inequalities, no
     # equality constraints — the unconstrained trust-ncg would violate lower/upper
     # boundary pins if cm.C_eq has rows).
     final_theta = best_auglag_result.theta
-    final_nll = best_auglag_result.fun
+    final_nll = best_nll
     if (
         config.polish
         and cm.C_eq.shape[0] == 0
@@ -1542,7 +1622,7 @@ def _optimize_auglag(
         )
         if theta_polished is not None:
             final_theta = theta_polished
-            final_nll = float(obj(theta_polished)[0])
+            final_nll = true_nll(theta_polished)
 
     c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
