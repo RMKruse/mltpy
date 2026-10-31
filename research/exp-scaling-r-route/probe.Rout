@@ -1,0 +1,957 @@
+
+R version 4.6.1 (2026-06-24) -- "Happy Hop"
+Copyright (C) 2026 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin23
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+  Natural language support but running in an English locale
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> ## Probe for GitHub issue #126:
+> ## "Can R mlt fit an exponential-link CTM with a scaling term?"
+> ##
+> ## Run:  R CMD BATCH --no-save --no-restore probe.R probe.Rout
+> ##
+> ## Sections
+> ##   0. versions
+> ##   1. source evidence: .Exponential, .log, exact loglik/score, ctm() signature
+> ##   2. constraint rows: what ui/ci R actually passes to auglag
+> ##   3. tram-level routes: tram::tram(distribution = "Exponential", y ~ x | z),
+> ##      tram::Survreg(dist = "exponential", y ~ x | z), tram::Aareg(... | z)
+> ##   4. raw ctm fixture A: Bernstein(y) + shift x_d + scale x_s, y on R
+> ##   5. raw ctm fixture B: Bernstein(y) + scale x_s only, y > 0, support [0, b]
+> ##   6. formula / sign check: h computed by hand vs predict(type = "trafo")
+> ##   7. what happens when h(y_i | x_i) < 0 (barrier, not a constraint)
+> ##   8. values a fixture would store for fixture A's plain mlt() fit (stuck)
+> ##   9. explicit-constraint fits: mlt likelihood + alabama::auglag(hin = ...),
+> ##      under R semantics (h(y_i|x_i) >= 0) and mltpy semantics (h(a|x_i) >= 0)
+> ##  10. fixture B: mlt(fixed = c("Bs1(y)" = 0)) and tram::Aareg routes
+> ##  11. the existing no-covariate fixture reference/mlt_exponential_*.txt
+> ##  12. tight-tolerance mlt() on the fixed-Bs1 route; data dump for crosscheck.py
+> ##
+> ## Writes fixtures.csv and fixtures_theta.csv (read by crosscheck.py).
+> 
+> suppressPackageStartupMessages({
++   library(mlt)
++   library(tram)
++   library(survival)
++ })
+> options(digits = 10, width = 110)
+> 
+> hr <- function(txt) cat("\n", strrep("=", 78), "\n## ", txt, "\n",
++                          strrep("=", 78), "\n", sep = "")
+> 
+> ## ---------------------------------------------------------------------------
+> hr("0. versions")
+
+==============================================================================
+## 0. versions
+==============================================================================
+> cat(R.version.string, "\n")
+R version 4.6.1 (2026-06-24) 
+> for (p in c("mlt", "tram", "basefun", "variables", "alabama"))
++   cat(sprintf("%-10s %s\n", p, as.character(packageVersion(p))))
+mlt        1.8.4
+tram       1.4.7
+basefun    1.2.6
+variables  1.1.2
+alabama    2025.1.0
+> 
+> ## ---------------------------------------------------------------------------
+> hr("1. source evidence")
+
+==============================================================================
+## 1. source evidence
+==============================================================================
+> cat("-- mlt:::.Exponential (todistr object; note: no 'support' element)\n")
+-- mlt:::.Exponential (todistr object; note: no 'support' element)
+> print(mlt:::.Exponential)
+function () 
+list(parm = function(x) NULL, p = pexp, d = dexp, q = qexp, dd = function(x) -dexp(x = x), 
+    ddd = function(x) dexp(x = x), dd2d = function(x) -1, call = ".Exponential", 
+    name = "exponential")
+<bytecode: 0xab3bd7818>
+<environment: namespace:mlt>
+> cat("names(.Exponential()):", names(mlt:::.Exponential()), "\n")
+names(.Exponential()): parm p d q dd ddd dd2d call name 
+> cat("-- dexp(-0.1, log = TRUE) =", dexp(-0.1, log = TRUE),
++     "; pexp(-0.1) =", pexp(-0.1), "\n")
+-- dexp(-0.1, log = TRUE) = -Inf ; pexp(-0.1) = 0 
+> cat("-- mlt:::.mlt_loglik_exact\n");  print(mlt:::.mlt_loglik_exact)
+-- mlt:::.mlt_loglik_exact
+function (d, mm, mmprime, offset = 0, mmtrunc = NULL) 
+{
+    if (is.null(mmtrunc)) 
+        return(function(beta) d$d(offset + .xmb(mm, beta), log = TRUE) + 
+            .log(.xmb(mmprime, beta)))
+    return(function(beta) d$d(offset + .xmb(mm, beta), log = TRUE) + 
+        .log(.xmb(mmprime, beta)) - ..mlt_loglik_interval(d, 
+        mmtrunc$left, mmtrunc$right, offset, beta))
+}
+<bytecode: 0xab3bc5b28>
+<environment: namespace:mlt>
+> cat("-- mlt:::.mlt_score_exact (dd2d = -1 for Exponential, everywhere)\n")
+-- mlt:::.mlt_score_exact (dd2d = -1 for Exponential, everywhere)
+> print(mlt:::.mlt_score_exact)
+function (d, mm, mmprime, offset = 0, mmtrunc = NULL) 
+{
+    function(beta, Xmult = TRUE) {
+        mmb <- drop(.xmb(mm, beta)) + offset
+        ret <- d$dd2d(mmb)
+        if (Xmult) 
+            ret <- ret * mm + mmprime/drop(.xmb(mmprime, beta))
+        if (!is.null(mmtrunc)) 
+            ret <- ret - ..mlt_score_interval(d, mmtrunc$left, 
+                mmtrunc$right, offset, beta, Xmult)
+        return(ret)
+    }
+}
+<bytecode: 0xab3ba3658>
+<environment: namespace:mlt>
+> cat("-- mlt:::.log (log h'; h' < 0 -> -Inf)\n"); print(mlt:::.log)
+-- mlt:::.log (log h'; h' < 0 -> -Inf)
+function (x) 
+{
+    ret <- x
+    if (any(is.na(x))) {
+        ret[] <- -Inf
+        return(ret)
+    }
+    neg <- x < 0
+    if (any(neg, na.rm = TRUE)) {
+        ret[neg] <- -Inf
+        ret[!neg] <- log(x[!neg])
+    }
+    else {
+        ret <- log(x)
+    }
+    dim(ret) <- dim(x)
+    return(ret)
+}
+<bytecode: 0xab3b9c7b0>
+<environment: namespace:mlt>
+> cat("-- args(mlt::ctm)\n"); print(args(mlt::ctm))
+-- args(mlt::ctm)
+function (response, interacting = NULL, shifting = NULL, scaling = NULL, 
+    scale_shift = FALSE, data = NULL, todistr = c("Normal", "Logistic", 
+        "MinExtrVal", "MaxExtrVal", "Exponential", "Laplace", 
+        "Cauchy"), sumconstr = inherits(interacting, c("formula", 
+        "formula_basis")), ...) 
+NULL
+> 
+> ## ---------------------------------------------------------------------------
+> ## Data-generating process (both fixtures).
+> ## Z ~ Exp(1); true h(y | x) = 2 * y * exp(0.5 * x_s * g0) + x_d * b0,
+> ## i.e. h_0(y) = 2y is linear (exactly representable by any Bernstein order
+> ## >= 1), y = (Z - x_d * b0) / (2 * exp(0.5 * x_s * g0)).
+> g0 <- 0.6; b0 <- 0.5
+> 
+> set.seed(126)
+> nA   <- 150
+> xdA  <- rnorm(nA); xsA <- rnorm(nA); zA <- rexp(nA)
+> yA   <- (zA - xdA * b0) / (2 * exp(0.5 * xsA * g0))
+> dA   <- data.frame(y = yA, x_d = xdA, x_s = xsA)
+> supA <- range(yA)
+> 
+> set.seed(1126)
+> nB   <- 150
+> xsB  <- rnorm(nB); zB <- rexp(nB)
+> yB   <- zB / (2 * exp(0.5 * xsB * g0))
+> dB   <- data.frame(y = yB, x_s = xsB)
+> supB <- c(0, max(yB))
+> 
+> order_y <- 4L
+> 
+> ## ---------------------------------------------------------------------------
+> hr("2. constraint rows that reach the optimiser")
+
+==============================================================================
+## 2. constraint rows that reach the optimiser
+==============================================================================
+> yvA  <- numeric_var("y", support = supA)
+> bsA  <- Bernstein_basis(yvA, order = order_y, ui = "increasing")
+> mA   <- ctm(bsA, shifting = ~ x_d, scaling = ~ x_s, data = dA,
++             todistr = "Exponential")
+> cat("ctm() accepted scaling + todistr = 'Exponential'; class:", class(mA), "\n")
+ctm() accepted scaling + todistr = 'Exponential'; class: ctm 
+> cat("coef names (ctm order):", names(coef(mA)), "\n")
+coef names (ctm order): Bs1(y) Bs2(y) Bs3(y) Bs4(y) Bs5(y) sft_x_d scl_x_s 
+> cat("model$todistr$name:", mA$todistr$name, "; scale_shift:", mA$scale_shift, "\n")
+model$todistr$name: exponential ; scale_shift: FALSE 
+> s0  <- mlt(mA, data = dA, dofit = FALSE)
+> YA  <- model.matrix(mA, data = dA)
+> uiA <- attr(YA, "constraint")$ui; ciA <- attr(YA, "constraint")$ci
+> cat("ui (rows passed to alabama::auglag as hin = ui %*% par - ci):\n")
+ui (rows passed to alabama::auglag as hin = ui %*% par - ci):
+> print(as(uiA, "matrix")); cat("ci:", ciA, "\n")
+     [,1] [,2] [,3] [,4] [,5] [,6] [,7]
+[1,]   -1    1    0    0    0    0    0
+[2,]    0   -1    1    0    0    0    0
+[3,]    0    0   -1    1    0    0    0
+[4,]    0    0    0   -1    1    0    0
+[5,]    0    0    0    0    0    1    0
+[6,]    0    0    0    0    0    0    1
+ci: 0 0 0 0 -Inf -Inf 
+> cat("=> only the Bernstein 'increasing' rows; no row on theta_b[0], none on\n",
++     "   theta_b[0]*exp(0.5 x_s g) + x_d b, nothing involving todistr.\n")
+=> only the Bernstein 'increasing' rows; no row on theta_b[0], none on
+    theta_b[0]*exp(0.5 x_s g) + x_d b, nothing involving todistr.
+> 
+> ## ---------------------------------------------------------------------------
+> hr("3. tram-level routes")
+
+==============================================================================
+## 3. tram-level routes
+==============================================================================
+> cat("-- 3a tram::tram(y ~ x_d | x_s, distribution = 'Exponential')\n")
+-- 3a tram::tram(y ~ x_d | x_s, distribution = 'Exponential')
+> fT <- try(tram::tram(y ~ x_d | x_s, data = dA, distribution = "Exponential",
++                      transformation = "smooth", order = order_y,
++                      support = supA, add = c(0, 0)))
+Error in optim(par = par, fn = fun, gr = gradient, control = control.optim,  : 
+  initial value in 'vmmin' is not finite
+Error in sign(mu) : non-numeric argument to mathematical function
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  auglag did not converge, trying constrOptim
+Error in stats::optim(par = theta, fn = objfun, gr = g, method = method,  : 
+  initial value in 'vmmin' is not finite
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  constrOptim did not converge, trying optim
+Error in optim(par = par, fn = fun, gr = gradient, control = control.optim,  : 
+  initial value in 'vmmin' is not finite
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  Optimisation did not converge
+Error in BB::BBoptim(par = theta, fn = f, gr = g, project = "projectLinear",  : 
+  All calls to spg failed. Last error: Error in spg(par = par, fn = fn, gr = gr, method = cpars[1], project = project,  : 
+  Failure in initial function evaluation!
+
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  auglag did not converge, trying spg
+Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  spg did not converge, trying nloptr
+> if (!inherits(fT, "try-error")) {
++   cat("class:", class(fT), "\n")
++   print(coef(as.mlt(fT)))
++   cat("logLik:", as.numeric(logLik(fT)), " convergence:",
++       as.mlt(fT)$convergence, "\n")
++ }
+class: stram tram mlt_fit mlt_setup mlt 
+        Bs1(y)         Bs2(y)         Bs3(y)         Bs4(y)         Bs5(y)            x_d        scl_x_s 
+-0.15293181958 -0.15293180468  0.97315568448  4.93198585939  4.93198587429 -0.01459156801 -0.01044730231 
+logLik: -Inf  convergence: 1 
+> cat("\n-- 3b tram::Survreg(Surv(y) ~ x_d | x_s, dist = 'exponential'), y > 0\n")
+
+-- 3b tram::Survreg(Surv(y) ~ x_d | x_s, dist = 'exponential'), y > 0
+> dS <- data.frame(y = yB, x_d = rnorm(nB), x_s = xsB)
+> fS <- try(tram::Survreg(Surv(y) ~ x_d | x_s, data = dS, dist = "exponential"))
+> if (!inherits(fS, "try-error")) {
++   cat("class:", class(fS), "\n")
++   cat("todistr used by Survreg(dist='exponential'):",
++       as.mlt(fS)$model$todistr$name, "\n")
++   print(coef(as.mlt(fS)))
++   cat("fixed:", names(as.mlt(fS)$fixed), "=", as.mlt(fS)$fixed, "\n")
++ }
+class: Survreg stram tram mlt_fit mlt_setup mlt 
+todistr used by Survreg(dist='exponential'): minimum extreme value 
+  (Intercept)  log(Surv(y))           x_d       scl_x_s 
+0.60473661281 1.00000000000 0.07830861211 0.20336815647 
+fixed: log(Surv(y)) = 1 
+> cat("\n-- 3c tram::Aareg(y ~ 0 | x_s)  (Aareg is the only tram class with todistr = Exponential)\n")
+
+-- 3c tram::Aareg(y ~ 0 | x_s)  (Aareg is the only tram class with todistr = Exponential)
+> fAa <- try(tram::Aareg(y ~ 0 | x_s, data = dS))
+Warning message:
+In tram::Aareg(y ~ 0 | x_s, data = dS) :
+  no time-varying terms specified for this model
+> if (!inherits(fAa, "try-error")) {
++   cat("class:", class(fAa), "\n"); print(coef(as.mlt(fAa)))
++   cat("todistr:", as.mlt(fAa)$model$todistr$name, "; convergence:",
++       as.mlt(fAa)$convergence, "; logLik:", as.numeric(logLik(fAa)), "\n")
++   cat("fixed:", names(as.mlt(fAa)$fixed), "=", as.mlt(fAa)$fixed, "\n")
++   cat("response support:", support(as.vars(as.mlt(fAa)$model$bases$response))$y, "\n")
++   cat("Aareg(y ~ x_d | x_s) (shift term):\n")
++   print(try(tram::Aareg(y ~ x_d | x_s, data = dS)))
++ }
+class: Aareg stram tram mlt_fit mlt_setup mlt 
+      Bs1(y)       Bs2(y)       Bs3(y)       Bs4(y)       Bs5(y)       Bs6(y)       Bs7(y)      scl_x_s 
+0.0000000000 1.1409568019 2.6358067530 2.9875363185 5.0329544793 5.0329544608 7.0735433731 0.7041594757 
+todistr: exponential ; convergence: 0 ; logLik: -61.47778294 
+fixed: Bs1(y) = 0 
+response support: 0 3.842083338 
+Aareg(y ~ x_d | x_s) (shift term):
+Error in tram::Aareg(y ~ x_d | x_s, data = dS) : 
+  no constant linear terms allowed in this model
+In addition: Warning message:
+In tram::Aareg(y ~ x_d | x_s, data = dS) :
+  no time-varying terms specified for this model
+[1] "Error in tram::Aareg(y ~ x_d | x_s, data = dS) : \n  no constant linear terms allowed in this model\n"
+attr(,"class")
+[1] "try-error"
+attr(,"condition")
+<simpleError in tram::Aareg(y ~ x_d | x_s, data = dS): no constant linear terms allowed in this model>
+> 
+> ## ---------------------------------------------------------------------------
+> ## helpers
+> hfun <- function(fit, data, at = NULL) {
++   ## h(y|x) by hand from coefficients: theta_b' a(y) * exp(0.5 x_s g) + x_d b
++   cf <- coef(fit)
++   ynm <- if (is.null(at)) data$y else rep(at, nrow(data))
++   B  <- model.matrix(fit$model$bases$response, data = data.frame(y = ynm))
++   tb <- cf[grepl("^Bs", names(cf))]
++   g  <- cf[grepl("^scl_", names(cf))]
++   b  <- cf[!grepl("^Bs|^scl_", names(cf))]
++   s  <- exp(0.5 * drop(as.matrix(data[, sub("^scl_", "", names(g)), drop = FALSE]) %*% g))
++   sh <- if (length(b)) drop(as.matrix(data[, sub("^sft_", "", names(b)), drop = FALSE]) %*% b) else 0
++   drop(B %*% tb) * s + sh
++ }
+> `%||%` <- function(a, b) if (is.null(a)) b else a
+> 
+> report <- function(fit, data, a, label) {
++   cat("\n--", label, "\n")
++   cat("convergence:", fit$convergence, "\n")
++   print(coef(fit))
++   cat("logLik:", format(as.numeric(logLik(fit)), digits = 15), "\n")
++   h_obs <- hfun(fit, data)
++   h_low <- hfun(fit, data, at = a)
++   cat(sprintf("min_i h(y_i | x_i)          = % .6e\n", min(h_obs)))
++   cat(sprintf("min_i h(a | x_i), a=%8.5f = % .6e   (#rows < 0: %d of %d)\n",
++               a, min(h_low), sum(h_low < 0), length(h_low)))
++   invisible(list(h_obs = h_obs, h_low = h_low))
++ }
+> 
+> ## ---------------------------------------------------------------------------
+> hr("4. raw ctm, fixture A: Bernstein(y) + shift x_d + scale x_s (y on R)")
+
+==============================================================================
+## 4. raw ctm, fixture A: Bernstein(y) + shift x_d + scale x_s (y on R)
+==============================================================================
+> cat("n =", nA, "; support =", supA, "; order =", order_y, "\n")
+n = 150 ; support = -0.600042098 2.396528535 ; order = 4 
+> cat("-- 4a default start (mlt's .mlt_start, no theta supplied)\n")
+-- 4a default start (mlt's .mlt_start, no theta supplied)
+> th_def <- try(mlt:::.mlt_start(mA, data = dA, y = R(dA$y),
++                                pstart = mlt:::pstart(dA$y), offset = rep(0, nA)))
+> print(th_def)
+        Bs1(y)         Bs2(y)         Bs3(y)         Bs4(y)         Bs5(y)        sft_x_d        scl_x_s 
+-0.15293181958 -0.15293180468  0.97315568448  4.93198585939  4.93198587429  0.01459156801 -0.01044730231 
+> fA_def <- try(mlt(mA, data = dA))
+Error in optim(par = par, fn = fun, gr = gradient, control = control.optim,  : 
+  initial value in 'vmmin' is not finite
+Error in sign(mu) : non-numeric argument to mathematical function
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  auglag did not converge, trying constrOptim
+Error in stats::optim(par = theta, fn = objfun, gr = g, method = method,  : 
+  initial value in 'vmmin' is not finite
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  constrOptim did not converge, trying optim
+Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  Optimisation did not converge
+> if (!inherits(fA_def, "try-error")) rA_def <- report(fA_def, dA, supA[1], "4a fit")
+
+-- 4a fit 
+convergence: 1 
+        Bs1(y)         Bs2(y)         Bs3(y)         Bs4(y)         Bs5(y)        sft_x_d        scl_x_s 
+-0.15293181958 -0.15293180468  0.97315568448  4.93198585939  4.93198587429  0.01459156801 -0.01044730231 
+logLik: -Inf 
+min_i h(y_i | x_i)          = -1.166217e-01
+min_i h(a | x_i), a=-0.60004 = -1.851540e-01   (#rows < 0: 150 of 150)
+> 
+> cat("\n-- 4b supplied feasible start: theta_b = seq(0.1, 5, length = 5), b = g = 0\n")
+
+-- 4b supplied feasible start: theta_b = seq(0.1, 5, length = 5), b = g = 0
+> thA <- c(seq(0.1, 5, length.out = order_y + 1), 0, 0)
+> names(thA) <- names(coef(mA))
+> cat("start loglik:", sum(mlt(mA, data = dA, theta = thA, dofit = FALSE)$logliki(thA, rep(1, nA))),
++     "\n")
+start loglik: -201.3392235 
+> fA <- mlt(mA, data = dA, theta = thA)
+> rA <- report(fA, dA, supA[1], "4b fit")
+
+-- 4b fit 
+convergence: 0 
+         Bs1(y)          Bs2(y)          Bs3(y)          Bs4(y)          Bs5(y)         sft_x_d 
+-0.001695152724  1.213650912121  2.454833825733  3.719709224287  4.976051781316  0.000673134578 
+        scl_x_s 
+ 0.008412704586 
+logLik: -185.454584448142 
+min_i h(y_i | x_i)          =  1.025252e-09
+min_i h(a | x_i), a=-0.60004 = -3.151873e-03   (#rows < 0: 147 of 150)
+> cat("True (DGP) theta for comparison: theta_b = 2*a + 2*(b-a)*k/4, b0 =", b0,
++     ", g0 =", g0, "\n")
+True (DGP) theta for comparison: theta_b = 2*a + 2*(b-a)*k/4, b0 = 0.5 , g0 = 0.6 
+> print(2 * supA[1] + 2 * diff(supA) * (0:order_y) / order_y)
+[1] -1.2000841960  0.2982011206  1.7964864372  3.2947717538  4.7930570704
+> cat("logLik at DGP theta:",
++     sum(fA$logliki(c(2 * supA[1] + 2 * diff(supA) * (0:order_y) / order_y,
++                      b0, g0), rep(1, nA))), "\n")
+logLik at DGP theta: -31.09443568 
+> 
+> cat("\n-- 4c tram::tram on the same data (negative = TRUE): logLik equal, b flips\n")
+
+-- 4c tram::tram on the same data (negative = TRUE): logLik equal, b flips
+> if (!inherits(fT, "try-error")) {
++   cat("raw ctm logLik:", format(as.numeric(logLik(fA)), digits = 15),
++       "  tram logLik:", format(as.numeric(logLik(fT)), digits = 15), "\n")
++   cat("raw coef:  ", format(coef(fA), digits = 8), "\n")
++   cat("tram coef: ", format(coef(as.mlt(fT)), digits = 8), "\n")
++ }
+raw ctm logLik: -185.454584448142   tram logLik: -Inf 
+raw coef:   -0.00169515272  1.21365091212  2.45483382573  3.71970922429  4.97605178132  0.00067313458  0.00841270459 
+tram coef:  -0.152931820 -0.152931805  0.973155684  4.931985859  4.931985874 -0.014591568 -0.010447302 
+> 
+> cat("\n-- 4d raw ctm with shift only (no scaling), same data, for contrast\n")
+
+-- 4d raw ctm with shift only (no scaling), same data, for contrast
+> mA0 <- ctm(bsA, shifting = ~ x_d, data = dA, todistr = "Exponential")
+> fA0 <- mlt(mA0, data = dA, theta = c(seq(0.1, 5, length.out = order_y + 1), 0))
+> cat("coef names:", names(coef(fA0)), "\n")
+coef names: Bs1(y) Bs2(y) Bs3(y) Bs4(y) Bs5(y) x_d 
+> rA0 <- report(fA0, dA, supA[1], "4d fit (shift only)")
+
+-- 4d fit (shift only) 
+convergence: 0 
+          Bs1(y)           Bs2(y)           Bs3(y)           Bs4(y)           Bs5(y)              x_d 
+-0.0018343772702  1.2162987970665  2.4518037715707  3.7096440237419  4.9580087158378  0.0007298203275 
+logLik: -185.62214043322 
+min_i h(y_i | x_i)          =  5.110647e-10
+min_i h(a | x_i), a=-0.60004 = -3.412301e-03   (#rows < 0: 147 of 150)
+> 
+> ## ---------------------------------------------------------------------------
+> hr("5. raw ctm, fixture B: Bernstein(y) + scale x_s only (y > 0, support [0, b])")
+
+==============================================================================
+## 5. raw ctm, fixture B: Bernstein(y) + scale x_s only (y > 0, support [0, b])
+==============================================================================
+> yvB <- numeric_var("y", support = supB)
+> bsB <- Bernstein_basis(yvB, order = order_y, ui = "increasing")
+> mB  <- ctm(bsB, scaling = ~ x_s, data = dB, todistr = "Exponential")
+> cat("coef names:", names(coef(mB)), "\n")
+coef names: Bs1(y) Bs2(y) Bs3(y) Bs4(y) Bs5(y) scl_x_s 
+> cat("-- 5a default start\n")
+-- 5a default start
+> fB_def <- try(mlt(mB, data = dB))
+Error in optim(par = par, fn = fun, gr = gradient, control = control.optim,  : 
+  initial value in 'vmmin' is not finite
+Error in sign(mu) : non-numeric argument to mathematical function
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  auglag did not converge, trying constrOptim
+Error in stats::optim(par = theta, fn = objfun, gr = g, method = method,  : 
+  initial value in 'vmmin' is not finite
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  constrOptim did not converge, trying optim
+Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  Optimisation did not converge
+> if (!inherits(fB_def, "try-error")) rB_def <- report(fB_def, dB, supB[1], "5a fit")
+
+-- 5a fit 
+convergence: 1 
+         Bs1(y)          Bs2(y)          Bs3(y)          Bs4(y)          Bs5(y)         scl_x_s 
+-0.015695858107  2.057454295605  2.611301491304  4.700043220820  5.947711389835 -0.003288904655 
+logLik: -Inf 
+min_i h(y_i | x_i)          = -3.173891e-04
+min_i h(a | x_i), a= 0.00000 = -1.577126e-02   (#rows < 0: 150 of 150)
+> cat("\n-- 5b supplied start\n")
+
+-- 5b supplied start
+> fB <- mlt(mB, data = dB, theta = c(seq(0.1, 5, length.out = order_y + 1), 0))
+> rB <- report(fB, dB, supB[1], "5b fit")
+
+-- 5b fit 
+convergence: 0 
+         Bs1(y)          Bs2(y)          Bs3(y)          Bs4(y)          Bs5(y)         scl_x_s 
+-0.009532800481  1.273053110177  2.516234333721  3.757164384691  4.988648285952  0.001803367768 
+logLik: -73.6627170299193 
+min_i h(y_i | x_i)          =  6.705840e-10
+min_i h(a | x_i), a= 0.00000 = -9.555124e-03   (#rows < 0: 150 of 150)
+> cat("theta_b[0] =", coef(fB)[1], " (h(0|x) = theta_b[0] * exp(0.5 x_s g))\n")
+theta_b[0] = -0.009532800481  (h(0|x) = theta_b[0] * exp(0.5 x_s g))
+> cat("min(y) =", min(yB), "\n")
+min(y) = 0.00713966786 
+> 
+> ## ---------------------------------------------------------------------------
+> hr("6. formula and sign check against predict(type = 'trafo')")
+
+==============================================================================
+## 6. formula and sign check against predict(type = 'trafo')
+==============================================================================
+> nd <- dA[1:5, ]
+> hp <- predict(fA, newdata = nd, type = "trafo")
+> cat("predict(type='trafo') is a y-grid x row matrix; take diag at y = nd$y:\n")
+predict(type='trafo') is a y-grid x row matrix; take diag at y = nd$y:
+> hp_obs <- sapply(1:5, function(i) predict(fA, newdata = nd[i, ], q = nd$y[i], type = "trafo"))
+> print(cbind(by_hand = hfun(fA, nd), predict = hp_obs))
+       by_hand      predict
+1 0.9527158029 0.9527158029
+2 1.0800990455 1.0800990455
+3 1.2362068387 1.2362068387
+4 0.7144188872 0.7144188872
+5 1.5179177227 1.5179177227
+> cat("max |diff| =", max(abs(hfun(fA, nd) - hp_obs)), "\n")
+max |diff| = 2.220446049e-16 
+> cat("=> raw ctm: h = theta_b'a(y) * exp(0.5 * x_s * g) + x_d * b  ('+' on shift)\n")
+=> raw ctm: h = theta_b'a(y) * exp(0.5 * x_s * g) + x_d * b  ('+' on shift)
+> cat("by-hand logLik sum(log dexp(h) + log h'):\n")
+by-hand logLik sum(log dexp(h) + log h'):
+> Bp  <- model.matrix(bsA, data = data.frame(y = dA$y), deriv = c(y = 1L))
+> hpr <- drop(Bp %*% coef(fA)[1:(order_y + 1)]) * exp(0.5 * dA$x_s * coef(fA)["scl_x_s"])
+> cat(format(sum(dexp(rA$h_obs, log = TRUE) + log(hpr)), digits = 15),
++     " vs logLik:", format(as.numeric(logLik(fA)), digits = 15), "\n")
+-185.454584448142  vs logLik: -185.454584448142 
+> 
+> ## ---------------------------------------------------------------------------
+> hr("7. the support condition is a likelihood barrier, not a constraint")
+
+==============================================================================
+## 7. the support condition is a likelihood barrier, not a constraint
+==============================================================================
+> th <- coef(fA)
+> shift_down <- th; shift_down["Bs1(y)"] <- th["Bs1(y)"] - 0.05
+> shift_down[2:(order_y + 1)] <- th[2:(order_y + 1)] - 0.05  # parallel shift of h_0
+> cat("logLik at fitted theta     :", sum(fA$logliki(th, rep(1, nA))), "\n")
+logLik at fitted theta     : -185.4545844 
+> cat("logLik with h_0 shifted -0.05:", sum(fA$logliki(shift_down, rep(1, nA))), "\n")
+logLik with h_0 shifted -0.05: -Inf 
+> cat("score at shifted theta (finite? smooth extension dd2d = -1):\n")
+score at shifted theta (finite? smooth extension dd2d = -1):
+> print(colSums(fA$scorei(shift_down, rep(1, nA))))
+       Bs1(y)        Bs2(y)        Bs3(y)        Bs4(y)        Bs5(y)       sft_x_d       scl_x_s 
+-73.540666060 -58.095898870 -19.649452002  -1.114725106   2.361376665   2.169883684   6.154009620 
+> cat("rows whose h(y_i|x_i) is within 1e-4 of 0 at the optimum:",
++     sum(rA$h_obs < 1e-4), "\n")
+rows whose h(y_i|x_i) is within 1e-4 of 0 at the optimum: 1 
+> cat("argmin row: y =", dA$y[which.min(rA$h_obs)], ", x_d =",
++     dA$x_d[which.min(rA$h_obs)], ", x_s =", dA$x_s[which.min(rA$h_obs)], "\n")
+argmin row: y = -0.600042098 , x_d = 2.513464906 , x_s = -0.4567390149 
+> 
+> ## ---------------------------------------------------------------------------
+> hr("8. fixture-generator sketch: values a parity test would read")
+
+==============================================================================
+## 8. fixture-generator sketch: values a parity test would read
+==============================================================================
+> cat("theta (R raw ctm order, = mltpy [theta_b | beta | gamma], no sign flip):\n")
+theta (R raw ctm order, = mltpy [theta_b | beta | gamma], no sign flip):
+> cat(format(coef(fA), digits = 15), sep = "\n")
+-0.001695152723762793
+ 1.213650912120918246
+ 2.454833825733389929
+ 3.719709224287125693
+ 4.976051781315590006
+ 0.000673134578041769
+ 0.008412704585869131
+> cat("logLik:", format(as.numeric(logLik(fA)), digits = 15), "\n")
+logLik: -185.454584448142 
+> cat("Hessian-based vcov available at the (stuck) mlt() optimum? ")
+Hessian-based vcov available at the (stuck) mlt() optimum? > v <- try(vcov(fA)); cat(!inherits(v, "try-error"), "\n")
+Error in solve.default(H + (step - 1) * lam * diag(nrow(H))) : 
+  Lapack routine dgesv: system is exactly singular: U[6,6] = 0
+Error in vcov.mlt(fA) : Hessian is not invertible
+FALSE 
+> if (!inherits(v, "try-error")) print(sqrt(diag(v)))
+> 
+> ## ---------------------------------------------------------------------------
+> hr("9. explicit-constraint fits: mlt's likelihood + alabama::auglag with hin")
+
+==============================================================================
+## 9. explicit-constraint fits: mlt's likelihood + alabama::auglag with hin
+==============================================================================
+> ## Objective: -sum(log f_Z(h_i) + log h'_i), with log f_Z(h) = -h extended to
+> ## the whole line (finite everywhere; equals mlt's logLik wherever h_i >= 0,
+> ## checked in section 6).  Gradient by hand, checked against mlt's own score.
+> library(alabama)
+Loading required package: numDeriv
+> p   <- order_y + 1L
+> BA  <- model.matrix(bsA, data = data.frame(y = dA$y))
+> BpA <- model.matrix(bsA, data = data.frame(y = dA$y), deriv = c(y = 1L))
+> aA  <- drop(model.matrix(bsA, data = data.frame(y = supA[1])))  # a(y = a) = e_1
+> cat("a(lower support end) =", aA, "\n")
+a(lower support end) = 1 0 0 0 0 
+> Dm  <- diff(diag(p))
+> mk <- function(B, Bp, xd, xs) {
++   parts <- function(th) {
++     tb <- th[1:p]; b <- if (is.null(xd)) 0 else th[p + 1]; g <- th[length(th)]
++     s <- exp(0.5 * xs * g)
++     h0 <- drop(B %*% tb); h0p <- drop(Bp %*% tb)
++     list(tb = tb, b = b, g = g, s = s, h0 = h0, h0p = h0p,
++          h = h0 * s + (if (is.null(xd)) 0 else xd * b), hp = h0p * s,
++          hlow = tb[1] * s + (if (is.null(xd)) 0 else xd * b))
++   }
++   nll <- function(th) { q <- parts(th); sum(q$h) - sum(log(q$hp)) }
++   grad <- function(th) {
++     q <- parts(th)
++     gb <- colSums(B * q$s) - colSums(Bp / q$h0p)
++     gg <- sum(0.5 * xs * q$s * q$h0) - sum(0.5 * xs)
++     c(gb, if (is.null(xd)) NULL else sum(xd), gg)
++   }
++   ## R semantics: h(y_i | x_i) >= 0 at every observation (what dexp's -Inf enforces)
++   hin_obs <- function(th) { q <- parts(th); c(Dm %*% q$tb, q$h) }
++   jac_obs <- function(th) {
++     q <- parts(th)
++     J <- cbind(B * q$s, if (is.null(xd)) NULL else xd, 0.5 * xs * q$s * q$h0)
++     rbind(cbind(Dm, matrix(0, p - 1, length(th) - p)), J)
++   }
++   ## mltpy semantics: h(a | x_i) = theta_b[0] * exp(0.5 x_s g) + x_d b >= 0
++   hin_low <- function(th) { q <- parts(th); c(Dm %*% q$tb, q$hlow) }
++   jac_low <- function(th) {
++     q <- parts(th)
++     J <- cbind(q$s, matrix(0, length(q$s), p - 1),
++                if (is.null(xd)) NULL else xd, 0.5 * xs * q$s * q$tb[1])
++     rbind(cbind(Dm, matrix(0, p - 1, length(th) - p)), J)
++   }
++   list(parts = parts, nll = nll, grad = grad, hin_obs = hin_obs,
++        jac_obs = jac_obs, hin_low = hin_low, jac_low = jac_low)
++ }
+> oA <- mk(BA, BpA, dA$x_d, dA$x_s)
+> th0 <- c(seq(0.1, 5, length.out = p), 0, 0)
+> cat("objective check vs mlt logLik at the section-4b theta:",
++     format(-oA$nll(coef(fA)), digits = 15), "vs",
++     format(as.numeric(logLik(fA)), digits = 15), "\n")
+objective check vs mlt logLik at the section-4b theta: -185.454584448142 vs -185.454584448142 
+> cat("gradient check vs -colSums(mlt score) at th0: max |diff| =",
++     max(abs(oA$grad(th0) + colSums(fA$scorei(th0)))), "\n")
+gradient check vs -colSums(mlt score) at th0: max |diff| = 1.421085472e-14 
+> 
+> fit_al <- function(o, th, which) {
++   hin <- if (which == "obs") o$hin_obs else o$hin_low
++   jac <- if (which == "obs") o$jac_obs else o$jac_low
++   auglag(par = th, fn = o$nll, gr = o$grad, hin = hin, hin.jac = jac,
++          control.outer = list(trace = FALSE, eps = 1e-9, itmax = 200,
++                               kkt2.check = FALSE),
++          control.optim = list(maxit = 2000))
++ }
+> show_al <- function(r, o, label, nms) {
++   q <- o$parts(r$par)
++   cat("\n--", label, "\n")
++   cat("convergence:", r$convergence, "; outer iters:", r$outer.iterations,
++       "; kkt1:", r$kkt1, "\n")
++   names(r$par) <- nms; print(r$par)
++   cat("logLik:", format(-r$value, digits = 15), "\n")
++   cat(sprintf("min_i h(y_i|x_i) = % .3e ; min_i h(a|x_i) = % .3e (#<0: %d)\n",
++               min(q$h), min(q$hlow), sum(q$hlow < -1e-8)))
++   r$par <- setNames(r$par, nms)
++   invisible(r)
++ }
+> nmA <- names(coef(mA))
+> thA_dgp <- c(2 * supA[1] + 2 * diff(supA) * (0:order_y) / order_y, b0, g0)
+> cat("\n### fixture A (shift + scale)\n")
+
+### fixture A (shift + scale)
+> alA_obs <- show_al(fit_al(oA, th0, "obs"), oA, "A / R semantics  h(y_i|x_i) >= 0", nmA)
+
+-- A / R semantics  h(y_i|x_i) >= 0 
+convergence: 0 ; outer iters: 11 ; kkt1: TRUE 
+       Bs1(y)        Bs2(y)        Bs3(y)        Bs4(y)        Bs5(y)       sft_x_d       scl_x_s 
+-1.5471206919  0.9287295218  0.9367344159  4.2477898682  6.0507999864  0.5411816250  0.5637078276 
+logLik: -28.1164878900751 
+min_i h(y_i|x_i) = -2.930e-12 ; min_i h(a|x_i) = -3.557e+00 (#<0: 147)
+There were 19 warnings (use warnings() to see them)
+> alA_low <- show_al(fit_al(oA, th0, "low"), oA, "A / mltpy semantics h(a|x_i) >= 0", nmA)
+
+-- A / mltpy semantics h(a|x_i) >= 0 
+convergence: 0 ; outer iters: 13 ; kkt1: FALSE 
+          Bs1(y)           Bs2(y)           Bs3(y)           Bs4(y)           Bs5(y)          sft_x_d 
+-5.485086726e-11  3.266424142e-02  3.266426287e-02  5.461570651e+00  6.613363241e+00  9.781339480e-11 
+         scl_x_s 
+ 4.877002084e-01 
+logLik: -93.6454488558984 
+min_i h(y_i|x_i) =  1.968e-10 ; min_i h(a|x_i) = -2.689e-10 (#<0: 0)
+There were 50 or more warnings (use warnings() to see the first 50)
+> cat("\nmlt() (section 4b) logLik:", as.numeric(logLik(fA)),
++     "  DGP-theta logLik:", -oA$nll(thA_dgp), "\n")
+
+mlt() (section 4b) logLik: -185.4545844   DGP-theta logLik: -31.09443568 
+> 
+> cat("\n-- multi-start stability (5 random feasible starts each)\n")
+
+-- multi-start stability (5 random feasible starts each)
+> set.seed(9)
+> starts <- lapply(1:5, function(k) c(sort(runif(p, 0.5, 6)), rnorm(1, 0, 0.1),
++                                      rnorm(1, 0, 0.3)))
+> ms <- function(which) {
++   hin <- if (which == "obs") oA$hin_obs else oA$hin_low
++   t(sapply(starts, function(st) {
++     if (any(hin(st) < 0)) st <- th0
++     r <- fit_al(oA, st, which); c(r$par, ll = -r$value, conv = r$convergence)
++   }))
++ }
+> for (w in c("low", "obs")) {
++   res <- ms(w)
++   cat(if (w == "low") "mltpy semantics:\n" else "R semantics:\n"); print(res)
++   cat("max |dtheta| across starts:",
++       max(apply(res[, 1:(p + 2)], 2, function(z) diff(range(z)))), "\n")
++ }
+mltpy semantics:
+                                                                                                       
+[1,] -6.803782626e-11 0.03266430729 0.03266430947 5.461669951 6.613333977 -5.872576147e-11 0.4876958457
+[2,]  4.176634779e-12 0.03266760104 0.03266760294 5.461667443 6.613342839 -5.892986888e-13 0.4876835639
+[3,]  4.626864089e-12 0.03266447757 0.03266448558 5.461571119 6.613363048 -8.225316207e-13 0.4876984930
+[4,]  2.473437061e-11 0.03266387905 0.03266387832 5.461669823 6.613342261 -7.047932151e-11 0.4876838721
+[5,]  3.584309348e-11 0.03266344547 0.03266344743 5.461668953 6.613343108 -5.735913581e-11 0.4876843108
+               ll conv
+[1,] -93.64544880    0
+[2,] -93.64544882    0
+[3,] -93.64544884    0
+[4,] -93.64544881    0
+[5,] -93.64544882    0
+max |dtheta| across starts: 9.88314151e-05 
+R semantics:
+                                                                                                        ll
+[1,] -1.547120701 0.9287295286 0.9367344240 4.247789872 6.050799986 0.5411816281 0.5637078291 -28.11648789
+[2,] -1.547120685 0.9287295064 0.9367344456 4.247789828 6.050799961 0.5411816236 0.5637078207 -28.11648789
+[3,] -1.547120780 0.9287296021 0.9367344316 4.247789978 6.050800031 0.5411816529 0.5637078511 -28.11648789
+[4,] -1.547120670 0.9287294912 0.9367344449 4.247789807 6.050799952 0.5411816186 0.5637078160 -28.11648789
+[5,] -1.547120698 0.9287295209 0.9367344398 4.247789851 6.050799973 0.5411816275 0.5637078256 -28.11648789
+     conv
+[1,]    0
+[2,]    0
+[3,]    0
+[4,]    0
+[5,]    0
+max |dtheta| across starts: 1.700354408e-07 
+There were 50 or more warnings (use warnings() to see the first 50)
+> 
+> cat("\n-- mlt() warm-started at the explicit-constraint optimum (R semantics)\n")
+
+-- mlt() warm-started at the explicit-constraint optimum (R semantics)
+> fA_warm <- mlt(mA, data = dA, theta = alA_obs$par)
+Error in optim(par = par, fn = fun, gr = gradient, control = control.optim,  : 
+  initial value in 'vmmin' is not finite
+Error in sign(mu) : non-numeric argument to mathematical function
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  auglag did not converge, trying constrOptim
+Error in stats::optim(par = theta, fn = objfun, gr = g, method = method,  : 
+  initial value in 'vmmin' is not finite
+In addition: Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  constrOptim did not converge, trying optim
+Warning message:
+In object$optimfct(theta, weights = weights, subset = subset, offset = offset,  :
+  Optimisation did not converge
+> report(fA_warm, dA, supA[1], "mlt() warm start")
+
+-- mlt() warm start 
+convergence: 1 
+       Bs1(y)        Bs2(y)        Bs3(y)        Bs4(y)        Bs5(y)       sft_x_d       scl_x_s 
+-1.5471206919  0.9287295218  0.9367344159  4.2477898682  6.0507999864  0.5411816250  0.5637078276 
+logLik: -Inf 
+min_i h(y_i | x_i)          = -2.929657e-12
+min_i h(a | x_i), a=-0.60004 = -3.556849e+00   (#rows < 0: 147 of 150)
+> cat("max |coef(mlt warm) - alabama R-semantics| =",
++     max(abs(coef(fA_warm) - alA_obs$par)), "\n")
+max |coef(mlt warm) - alabama R-semantics| = 0 
+> v <- try(vcov(fA_warm)); if (!inherits(v, "try-error")) { cat("SEs:\n"); print(sqrt(diag(v))) }
+Error in solve.default(H + (step - 1) * lam * diag(nrow(H))) : 
+  Lapack routine dgesv: system is exactly singular: U[6,6] = 0
+Error in vcov.mlt(fA_warm) : Hessian is not invertible
+> 
+> ## ---------------------------------------------------------------------------
+> hr("10. fixture B (scale only): theta_b[0] = 0 route, no barrier involved")
+
+==============================================================================
+## 10. fixture B (scale only): theta_b[0] = 0 route, no barrier involved
+==============================================================================
+> BB  <- model.matrix(bsB, data = data.frame(y = dB$y))
+> BpB <- model.matrix(bsB, data = data.frame(y = dB$y), deriv = c(y = 1L))
+> oB  <- mk(BB, BpB, NULL, dB$x_s)
+> thB0 <- c(seq(0.1, 5, length.out = p), 0)
+> nmB <- names(coef(mB))
+> alB_low <- show_al(fit_al(oB, thB0, "low"), oB, "B / mltpy semantics theta_b[0] * s_i >= 0", nmB)
+
+-- B / mltpy semantics theta_b[0] * s_i >= 0 
+convergence: 0 ; outer iters: 8 ; kkt1: TRUE 
+         Bs1(y)          Bs2(y)          Bs3(y)          Bs4(y)          Bs5(y)         scl_x_s 
+3.277111849e-10 1.733474416e+00 3.877801820e+00 4.328995366e+00 7.118872679e+00 7.050472803e-01 
+logLik: -61.6395588027279 
+min_i h(y_i|x_i) =  1.199e-02 ; min_i h(a|x_i) =  1.173e-10 (#<0: 0)
+Warning messages:
+1: In log(q$hp) : NaNs produced
+2: In log(q$hp) : NaNs produced
+3: In log(q$hp) : NaNs produced
+4: In log(q$hp) : NaNs produced
+5: In log(q$hp) : NaNs produced
+6: In log(q$hp) : NaNs produced
+7: In log(q$hp) : NaNs produced
+8: In log(q$hp) : NaNs produced
+> alB_obs <- show_al(fit_al(oB, thB0, "obs"), oB, "B / R semantics h(y_i|x_i) >= 0", nmB)
+
+-- B / R semantics h(y_i|x_i) >= 0 
+convergence: 0 ; outer iters: 13 ; kkt1: FALSE 
+        Bs1(y)         Bs2(y)         Bs3(y)         Bs4(y)         Bs5(y)        scl_x_s 
+-0.01367704864  1.82634098221  3.66626959008  4.47815554779  7.12425796845  0.70287920768 
+logLik: -59.5494534829386 
+min_i h(y_i|x_i) =  3.312e-10 ; min_i h(a|x_i) = -3.403e-02 (#<0: 150)
+There were 18 warnings (use warnings() to see them)
+> cat("\n-- raw mlt() with fixed = c('Bs1(y)' = 0), DEFAULT start\n")
+
+-- raw mlt() with fixed = c('Bs1(y)' = 0), DEFAULT start
+> fBf <- mlt(mB, data = dB, fixed = c("Bs1(y)" = 0))
+> report(fBf, dB, supB[1], "mlt(fixed Bs1 = 0), default start")
+
+-- mlt(fixed Bs1 = 0), default start 
+convergence: 0 
+      Bs1(y)       Bs2(y)       Bs3(y)       Bs4(y)       Bs5(y)      scl_x_s 
+0.0000000000 1.7335063059 3.8776664160 4.3292845209 7.1191122913 0.7050529739 
+logLik: -61.6395587816923 
+min_i h(y_i | x_i)          =  1.199379e-02
+min_i h(a | x_i), a= 0.00000 =  0.000000e+00   (#rows < 0: 0 of 150)
+> cat("max |coef(mlt fixed) - alabama mltpy-semantics| =",
++     max(abs(coef(fBf) - alB_low$par)), "\n")
+max |coef(mlt fixed) - alabama mltpy-semantics| = 0.0002891551723 
+> cat("logLik diff (mlt fixed - alabama mltpy-semantics) =",
++     as.numeric(logLik(fBf)) + alB_low$value, "\n")
+logLik diff (mlt fixed - alabama mltpy-semantics) = 2.103561059e-08 
+> v <- try(vcov(fBf)); if (!inherits(v, "try-error")) { cat("SEs:\n"); print(sqrt(diag(v))) }
+SEs:
+      Bs2(y)       Bs3(y)       Bs4(y)       Bs5(y)      scl_x_s 
+0.3031651383 1.0359700456 1.5274054013 1.6714357896 0.1760359104 
+> 
+> cat("\n-- Aareg on fixture B with the same order: compare with raw ctm on Aareg's support\n")
+
+-- Aareg on fixture B with the same order: compare with raw ctm on Aareg's support
+> fAaB <- tram::Aareg(y ~ 0 | x_s, data = dB, order = order_y)
+Warning message:
+In tram::Aareg(y ~ 0 | x_s, data = dB, order = order_y) :
+  no time-varying terms specified for this model
+> supAa <- support(as.vars(as.mlt(fAaB)$model$bases$response))$y
+> cat("Aareg support:", format(supAa, digits = 15), "; convergence:",
++     as.mlt(fAaB)$convergence, "; logLik:",
++     format(as.numeric(logLik(fAaB)), digits = 15), "\n")
+Aareg support: 0.00000000000000 3.84208333787993 ; convergence: 0 ; logLik: -61.6395588472266 
+> print(coef(as.mlt(fAaB)))
+      Bs1(y)       Bs2(y)       Bs3(y)       Bs4(y)       Bs5(y)      scl_x_s 
+0.0000000000 1.7335143221 3.8775682485 4.3294977739 7.1193081790 0.7050461508 
+> bsAa <- Bernstein_basis(numeric_var("y", support = supAa), order = order_y,
++                         ui = "increasing")
+> fRaw <- mlt(ctm(bsAa, scaling = ~ x_s, data = dB, todistr = "Exponential"),
++             data = dB, fixed = c("Bs1(y)" = 0))
+> cat("raw ctm on Aareg support, fixed Bs1 = 0: logLik",
++     format(as.numeric(logLik(fRaw)), digits = 15), "\n")
+raw ctm on Aareg support, fixed Bs1 = 0: logLik -61.6395587816923 
+> cat("max |coef diff| Aareg vs raw:", max(abs(coef(fRaw) - coef(as.mlt(fAaB)))), "\n")
+max |coef diff| Aareg vs raw: 0.0002132529825 
+> 
+> cat("\n-- fixture B values a fixture would store\n")
+
+-- fixture B values a fixture would store
+> cat("y support:", format(supB, digits = 15), "\n")
+y support: 0.00000000000000 3.84208333787993 
+> cat("theta [theta_b | gamma]:\n"); cat(format(coef(fBf), digits = 15), sep = "\n")
+theta [theta_b | gamma]:
+0.00000000000000
+1.73350630590022
+3.87766641601844
+4.32928452093525
+7.11911229131066
+0.70505297394131
+> cat("logLik:", format(as.numeric(logLik(fBf)), digits = 15), "\n")
+logLik: -61.6395587816923 
+> 
+> ## ---------------------------------------------------------------------------
+> hr("11. existing fixture reference/mlt_exponential_*.txt (no covariates)")
+
+==============================================================================
+## 11. existing fixture reference/mlt_exponential_*.txt (no covariates)
+==============================================================================
+> yE <- scan("../../reference/mlt_exponential_y.txt", quiet = TRUE)
+> thE_R <- scan("../../reference/mlt_exponential_theta.txt", quiet = TRUE)
+> llE_R <- scan("../../reference/mlt_exponential_ll.txt", quiet = TRUE)
+> bsE <- Bernstein_basis(numeric_var("y", support = c(0, 1), bounds = c(0, 1)),
++                        order = 4, ui = "increasing")
+> BE  <- model.matrix(bsE, data = data.frame(y = yE))
+> BpE <- model.matrix(bsE, data = data.frame(y = yE), deriv = c(y = 1L))
+> ## no covariates: reuse mk() with a zero scaling column and gamma pinned at 0
+> oE <- mk(BE, BpE, NULL, rep(0, length(yE)))
+> cat("stored theta:", thE_R, "\nstored logLik:", llE_R, "\n")
+stored theta: -0.1117671996 1.165126089 2.404421389 3.649881737 4.931876554 
+stored logLik: -154.9091733 
+> cat("min_i h(y_i) at stored theta:", min(drop(BE %*% thE_R)), "\n")
+min_i h(y_i) at stored theta: 1.428433139e-10 
+> for (w in c("obs", "low")) {
++   r <- fit_al(oE, c(seq(0.1, 5, length.out = 5), 0), w)
++   cat(sprintf("\nexplicit-constraint fit (%s semantics): conv %d, logLik %.10f\n",
++               if (w == "obs") "R" else "mltpy", r$convergence, -r$value))
++   print(r$par[1:5])
++ }
+
+explicit-constraint fit (R semantics): conv 0, logLik -2.3475743452
+[1] -0.03100542609  0.32700750285  0.56075967873  0.56075967865  3.76113424900
+
+explicit-constraint fit (mltpy semantics): conv 0, logLik -7.5084027687
+[1] -9.599972937e-12  2.383205794e-01  6.214139379e-01  6.214139383e-01  3.691738554e+00
+There were 50 or more warnings (use warnings() to see the first 50)
+> 
+> ## ---------------------------------------------------------------------------
+> hr("12. tight-tolerance mlt() on fixture B fixed-Bs1 route; data dump")
+
+==============================================================================
+## 12. tight-tolerance mlt() on fixture B fixed-Bs1 route; data dump
+==============================================================================
+> fBt <- mlt(mB, data = dB, fixed = c("Bs1(y)" = 0),
++            optim = mltoptim(abstol = 1e-12, reltol = 1e-12, hessian = TRUE))
+> cat("convergence:", fBt$convergence, "; logLik:",
++     format(as.numeric(logLik(fBt)), digits = 15), "\n")
+convergence: 0 ; logLik: -61.6395587504151 
+> print(coef(fBt))
+      Bs1(y)       Bs2(y)       Bs3(y)       Bs4(y)       Bs5(y)      scl_x_s 
+0.0000000000 1.7334730070 3.8778133675 4.3289717825 7.1189317472 0.7050476651 
+> alBt <- auglag(par = thB0[-1], fn = function(t) oB$nll(c(0, t)),
++                gr = function(t) oB$grad(c(0, t))[-1],
++                hin = function(t) diff(c(0, t[1:(p - 1)])),
++                hin.jac = function(t) cbind(diff(diag(p))[, -1], 0),
++                control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500,
++                                     kkt2.check = FALSE),
++                control.optim = list(maxit = 5000, reltol = 1e-14))
+Warning message:
+In log(q$hp) : NaNs produced
+> cat("alabama, theta_b[0] pinned at 0, eps 1e-12: logLik",
++     format(-alBt$value, digits = 15), "\n")
+alabama, theta_b[0] pinned at 0, eps 1e-12: logLik -61.6395587503916 
+> print(c(0, alBt$par))
+[1] 0.0000000000 1.7334716825 3.8778174174 4.3289632047 7.1189282657 0.7050475103
+> cat("max |coef(mlt tight) - alabama tight| =",
++     max(abs(coef(fBt) - c(0, alBt$par))), "\n")
+max |coef(mlt tight) - alabama tight| = 8.577744405e-06 
+> cat("max |coef(mlt default) - mlt tight|  =", max(abs(coef(fBf) - coef(fBt))), "\n")
+max |coef(mlt default) - mlt tight|  = 0.0003127384695 
+> 
+> write.csv(rbind(data.frame(fixture = "A", y = dA$y, x_d = dA$x_d, x_s = dA$x_s),
++                 data.frame(fixture = "B", y = dB$y, x_d = 0, x_s = dB$x_s)),
++           "fixtures.csv", row.names = FALSE)
+> write.csv(data.frame(
++   fit = c(rep("A_R_semantics", p + 2), rep("A_mltpy_semantics", p + 2),
++           rep("B_fixed_Bs1", p + 1)),
++   name = c(nmA, nmA, nmB),
++   value = c(alA_obs$par, alA_low$par, coef(fBt)),
++   loglik = c(rep(-alA_obs$value, p + 2), rep(-alA_low$value, p + 2),
++              rep(as.numeric(logLik(fBt)), p + 1)),
++   a = c(rep(supA[1], 2 * (p + 2)), rep(supB[1], p + 1)),
++   b = c(rep(supA[2], 2 * (p + 2)), rep(supB[2], p + 1))),
++   "fixtures_theta.csv", row.names = FALSE)
+> cat("wrote fixtures.csv and fixtures_theta.csv\n")
+wrote fixtures.csv and fixtures_theta.csv
+> 
+> proc.time()
+   user  system elapsed 
+ 10.772   0.139  10.980 

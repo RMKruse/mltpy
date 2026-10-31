@@ -1,0 +1,18 @@
+mltpy imported from: src/mltpy/__init__.py
+
+A_R_semantics: names=['Bs1(y)', 'Bs2(y)', 'Bs3(y)', 'Bs4(y)', 'Bs5(y)', 'sft_x_d', 'scl_x_s']
+  R logLik     = -28.116487890075
+  mltpy logLik = -28.116487890075
+  |diff|       = 2.345e-13
+  with beta negated: -30.465090 (differs unless beta ~ 0, as in A_mltpy_semantics)
+
+A_mltpy_semantics: names=['Bs1(y)', 'Bs2(y)', 'Bs3(y)', 'Bs4(y)', 'Bs5(y)', 'sft_x_d', 'scl_x_s']
+  R logLik     = -93.645448855898
+  mltpy logLik = -93.645448855898
+  |diff|       = 9.948e-14
+  with beta negated: -93.645449 (differs unless beta ~ 0, as in A_mltpy_semantics)
+
+B_fixed_Bs1: names=['Bs1(y)', 'Bs2(y)', 'Bs3(y)', 'Bs4(y)', 'Bs5(y)', 'scl_x_s']
+  R logLik     = -61.639558750415
+  mltpy logLik = -61.639558750415
+  |diff|       = 7.105e-15
