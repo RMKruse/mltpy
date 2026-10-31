@@ -1368,7 +1368,7 @@ class Survreg(_SurvivalMixin):
         from scipy.interpolate import CubicSpline
 
         from mltpy.likelihood import _get_dist
-        from mltpy.model import _QMLT_GRID_POINTS
+        from mltpy.model import _QMLT_GRID_POINTS, _invert_shift_groups
 
         a, b = self.basis.support
         theta_b = np.asarray(theta_b, dtype=float)
@@ -1397,17 +1397,13 @@ class Survreg(_SurvivalMixin):
         h_base_grid: NDArray[np.float64] = self.basis.evaluate(q_grid) @ theta_b
 
         eps = float(np.sqrt(np.finfo(float).eps))
-        out = np.empty(n_probs, dtype=np.float64)
-        saturated = False
 
-        for i, p in enumerate(probs_arr):
-            cdf_grid = dist.cdf(h_base_grid + shift[i])
+        def curve(s: float) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+            cdf_grid = dist.cdf(h_base_grid + s)
 
             finite = np.isfinite(cdf_grid)
             if not np.any(finite):
-                out[i] = q_grid[0]
-                saturated = True
-                continue
+                return None
 
             cmin = float(np.min(cdf_grid[finite]))
             cmax = float(np.max(cdf_grid[finite]))
@@ -1423,9 +1419,7 @@ class Survreg(_SurvivalMixin):
             qk = q_grid[keep]
             ck = cdf_grid[keep]
             if qk.size < 2:
-                out[i] = q_grid[0]
-                saturated = True
-                continue
+                return None
 
             n_spline = max(3 * qk.size, 3)
             q_s = np.linspace(float(qk[0]), float(qk[-1]), n_spline, dtype=np.float64)
@@ -1436,9 +1430,7 @@ class Survreg(_SurvivalMixin):
 
             finite_s = np.isfinite(c_s)
             if not np.any(finite_s):
-                out[i] = q_grid[0]
-                saturated = True
-                continue
+                return None
             q_s = q_s[finite_s]
             c_s = c_s[finite_s]
 
@@ -1449,18 +1441,13 @@ class Survreg(_SurvivalMixin):
             c_s = c_s[uniq]
             q_s = q_s[uniq]
             if c_s.size == 0:
-                out[i] = q_grid[0]
-                saturated = True
-                continue
+                return None
 
-            if p < c_s[0]:
-                out[i] = q_grid[0]
-                saturated = True
-            elif p > c_s[-1]:
-                out[i] = q_grid[-1]
-                saturated = True
-            else:
-                out[i] = float(np.interp(p, c_s, q_s))
+            return c_s, q_s
+
+        out, saturated = _invert_shift_groups(
+            probs_arr, shift, curve, float(q_grid[0]), float(q_grid[-1])
+        )
 
         if saturated:
             warnings.warn(

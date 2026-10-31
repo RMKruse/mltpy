@@ -146,6 +146,39 @@ _SIMULATE_U_EPS = 1e-10
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
 
+def _invert_shift_groups(
+    probs: NDArray[np.float64],
+    shift: NDArray[np.float64],
+    curve: Callable[[float], tuple[NDArray[np.float64], NDArray[np.float64]] | None],
+    lower: float,
+    upper: float,
+) -> tuple[NDArray[np.float64], bool]:
+    """Reuse one inverse curve at a time, scattering quantiles to input order."""
+    out = np.empty(probs.size, dtype=np.float64)
+    saturated = False
+    previous: float | None = None
+    current = None
+    for i in np.argsort(shift, kind="stable"):
+        s = float(shift[i])
+        if previous is None or s != previous:
+            current = None
+            current = curve(s)
+            previous = s
+        p = probs[i]
+        if current is None:
+            out[i] = lower
+            saturated = True
+        elif p < current[0][0]:
+            out[i] = lower
+            saturated = True
+        elif p > current[0][-1]:
+            out[i] = upper
+            saturated = True
+        else:
+            out[i] = float(np.interp(p, current[0], current[1]))
+    return out, saturated
+
+
 def _apply_what(
     what: str,
     h: NDArray[np.float64],
@@ -1071,20 +1104,18 @@ class ConditionalTransformationModel:
             h_base_grid = cast(NDArray[np.float64], T_grid @ binom_theta)
 
             eps = float(np.sqrt(np.finfo(float).eps))
-            out = np.empty(n_probs, dtype=np.float64)
-            saturated = False
 
-            for i, p in enumerate(probs_arr):
-                cdf_grid = dist.cdf(h_base_grid + shift[i])
+            def curve(
+                s: float,
+            ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+                cdf_grid = dist.cdf(h_base_grid + s)
                 # For survival-time responses, R's grid starts at 0 and the
                 # CDF at time zero is treated as zero.
                 cdf_grid[0] = 0.0
 
                 finite = np.isfinite(cdf_grid)
                 if not np.any(finite):
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
                 cmin = float(np.min(cdf_grid[finite]))
                 cmax = float(np.max(cdf_grid[finite]))
@@ -1100,9 +1131,7 @@ class ConditionalTransformationModel:
                 qk = q_grid[keep]
                 ck = cdf_grid[keep]
                 if qk.size < 2:
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
                 n_spline = max(3 * qk.size, 3)
                 q_s = np.linspace(
@@ -1118,9 +1147,7 @@ class ConditionalTransformationModel:
 
                 finite_s = np.isfinite(c_s)
                 if not np.any(finite_s):
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
                 q_s = q_s[finite_s]
                 c_s = c_s[finite_s]
 
@@ -1131,18 +1158,13 @@ class ConditionalTransformationModel:
                 c_s = c_s[uniq]
                 q_s = q_s[uniq]
                 if c_s.size == 0:
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
-                if p < c_s[0]:
-                    out[i] = q_grid[0]
-                    saturated = True
-                elif p > c_s[-1]:
-                    out[i] = q_grid[-1]
-                    saturated = True
-                else:
-                    out[i] = float(np.interp(p, c_s, q_s))
+                return c_s, q_s
+
+            out, saturated = _invert_shift_groups(
+                probs_arr, shift, curve, float(q_grid[0]), float(q_grid[-1])
+            )
 
             if saturated:
                 warnings.warn(

@@ -398,6 +398,69 @@ def _fit_mlt_with_covariate(
     return model, x, y
 
 
+class TestRightCensoredQuantileBatch:
+    @pytest.fixture(scope="class", params=[False, True], ids=["baseline", "with-X"])
+    @classmethod
+    def fitted(cls, request):
+        rng = np.random.default_rng(145)
+        X = rng.uniform(-1, 1, (100, 1)) if request.param else None
+        y = rng.lognormal(0.3 if X is None else 0.3 * X[:, 0], 0.4, 100)
+        cd = CensoredData.right_censored(y, rng.random(100) < 0.3)
+        return MLT(
+            order=4,
+            support=(0.0, 8.0),
+            censoring=CensoringType.RIGHT,
+            optimizer_config=OptimizerConfig(random_state=0),
+        ).fit(cd, X=X), request.param
+
+    @pytest.mark.parametrize("profiles", ["equal", "interleaved", "distinct", "offset"])
+    @pytest.mark.parametrize("saturating", [False, True])
+    def test_batch_equals_individual_calls(self, fitted, profiles, saturating):
+        fitted, has_X = fitted
+        probs = np.array([0.8, 0.2, 0.65, 0.4, 0.5, 0.95])
+        X = None
+        if has_X:
+            x = {
+                "equal": np.full(6, 0.25),
+                "interleaved": np.array([0.5, -0.5, 0.0, 0.5, -0.5, 0.0]),
+                "distinct": np.array([0.9, -0.8, 0.1, -0.3, 0.6, 0.4]),
+                "offset": np.full(6, 0.25),
+            }[profiles]
+            X = x[:, None]
+        offset = np.linspace(-0.3, 0.3, 6) if profiles == "offset" else np.zeros(6)
+        if saturating:
+            offset[[0, -1]] = [-1000.0, 1000.0]
+
+        with warnings.catch_warnings(record=True) as batch_warnings:
+            warnings.simplefilter("always", UserWarning)
+            batch = fitted.predict(probs, X_new=X, offset_new=offset, what="quantile")
+        with warnings.catch_warnings(record=True) as individual_warnings:
+            warnings.simplefilter("always", UserWarning)
+            individual = np.concatenate(
+                [
+                    fitted.predict(
+                        probs[i : i + 1],
+                        X_new=None if X is None else X[i : i + 1],
+                        offset_new=offset[i : i + 1],
+                        what="quantile",
+                    )
+                    for i in range(len(probs))
+                ]
+            )
+        np.testing.assert_array_equal(batch.view(np.uint64), individual.view(np.uint64))
+        expected = (
+            "predict(what='quantile'): probability target lies outside "
+            "the finite R-style inversion grid at one or more points; "
+            "returning boundary-saturated quantiles."
+        )
+        assert [(w.category, str(w.message)) for w in batch_warnings] == (
+            [(UserWarning, expected)] if saturating else []
+        )
+        assert {str(w.message) for w in individual_warnings} == (
+            {expected} if saturating else set()
+        )
+
+
 class TestPredictQuantileConditional:
     def test_requires_X_when_fit_with_covariates(self):
         model, _, _ = _fit_mlt_with_covariate()

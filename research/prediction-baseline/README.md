@@ -6,6 +6,9 @@ smallest worthwhile performance interventions](https://github.com/RMKruse/mltpy/
 No library code was changed. All candidate changes below are harness-local
 prototypes, checked for bitwise equality against current library output.
 
+The implemented shift-curve reuse is compared against its original methods in
+[the #145 results](issue145_shift_reuse.md), including all timing and memory cells.
+
 ## Reproduce
 
 ```sh
