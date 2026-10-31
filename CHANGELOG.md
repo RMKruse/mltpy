@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (quantiles with an absolute
   tolerance scaled by the support width) (fixtures
   `reference/stram_onehot_bs_boxcox_*`). (#107)
+- Worked notebook `docs/examples/07_stratified_heteroskedastic.ipynb` — a
+  non-proportional Cox model (Bernstein-t ⊗ Bernstein-x) with a scaled
+  baseline via `Coxph(interacting=..., scaling=...)`: fit and LR test on `γ`,
+  interpretation of `Theta_` (control-point values of the stratified
+  baseline) and `gamma_` (the `exp(0.5·x_s·γ)` pivot), prediction and
+  quantiles with `X_scale_new`, and an R-parity check against the
+  `stram_bs_bs_mev_*` fixture. Cross-referenced from notebooks 04 / 05, whose
+  stale "scaling + interacting is out of scope" takeaway is corrected. (#111)
 
 ## [0.4.0] — 2026-05-25
 
