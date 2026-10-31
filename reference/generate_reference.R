@@ -2312,3 +2312,149 @@ writeLines(format(q_bx, digits = 15),
 
 cat(sprintf("stram_onehot_bs boxcox ref: n=%d, p=%d, K=%d, ll=%.6f, gamma=%.6f\n",
             n_bx, p_bx, length(lev_bx), ll_bx, gamma_bx))
+
+# ---------------------------------------------------------------------------
+# Lm(interacting=..., scaling=...) — issue #109.
+#
+# The stratified, scaled normal linear model of ADR 0003 Decision 6, fitted
+# through the R ``tram`` formula interface as the no-shift ``stram`` model
+#
+#     Lm(y | s ~ 1 | z)
+#
+# i.e. h(y | s, z) = (c0_s + c1_s · y) · exp(0.5 · z · γ) with a Normal link:
+# within stratum s, Y is normal with its own mean and standard deviation,
+# both modulated by z.  mltpy's analogue is
+# ``Lm(interacting=OneHotBasis(K=3), scaling=z)``.
+#
+# Two reparametrisations separate tram's Θ from mltpy's:
+#   * tram::Lm's response basis is the polynomial (1, y) — coefficients
+#     ``(Intercept):*`` and ``y:*`` — whereas mltpy's Lm uses the order-1
+#     Bernstein basis on the support (a, b).  Both span the affine functions
+#     of y: θ0 = c0 + c1·a, θ1 = c0 + c1·b, and c1 ≥ 0 ⇔ θ1 ≥ θ0.
+#   * tram encodes s with treatment contrasts; one-hot column k is the
+#     intercept column plus contrast column k (zero for the reference level).
+# The function space, logLik and γ are therefore identical at an interior
+# MLE; ``*_theta_onehot.txt`` stores the mapped Bernstein one-hot Θ.
+#
+# Data: within stratum k, h = exp(0.5·γ·z)·sl_k·(y − mu_k) with γ = −0.6 —
+# exactly the model above.  The support is widened by 1 on each side so every
+# grid quantile lies well inside it (the affine model does not depend on it).
+#
+# Precision: as in the BoxCox block, the default auglag fit is polished with
+# plain BFGS at reltol = 1e-15 (``checkconstraints = TRUE`` confirms
+# feasibility).  h is assembled from the coefficients directly and the
+# stopifnot() below checks it reproduces logLik(fit), which also pins tram's
+# response basis to the raw-y polynomial.  F = Φ(h), f = φ(h)·h', and the
+# quantile is closed-form: y = (Φ⁻¹(p)·exp(−0.5·z·γ) − c0_s) / c1_s.
+#
+# Fixtures emitted (prefix ``stram_onehot_lm_``):
+#   *_y_train.txt       — response, length n
+#   *_s_train.txt       — stratum codes 0..K-1 (mltpy OneHotBasis labels)
+#   *_x_s_train.txt     — scaling covariate z, length n
+#   *_y_support.txt     — "a b" on one line
+#   *_theta.txt         — raw coef(fit, with_baseline = TRUE): [Θ (tram
+#                         polynomial-y, treatment-contrast order) | γ]
+#   *_theta_onehot.txt  — Bernstein one-hot Θ, (2, K) flattened row-major
+#                         (mltpy vec_C)
+#   *_gamma.txt         — scale coefficient coef(fit)[fit$scalecoef], length 1
+#   *_loglik.txt        — scalar logLik
+#   *_grid.txt          — prediction grid, one "y s z" row per line
+#   *_distribution.txt  — F(y | s, z) at each grid row
+#   *_density.txt       — f(y | s, z) at each grid row
+#   *_qgrid.txt         — quantile grid, one "p s z" row per line
+#   *_quantile.txt      — F⁻¹(p | s, z) at each quantile-grid row
+# ---------------------------------------------------------------------------
+set.seed(20261109)
+n_lm <- 900L
+lev_lm <- c("a", "b", "c")
+s_lm   <- factor(sample(lev_lm, n_lm, replace = TRUE), levels = lev_lm)
+z_lm   <- rnorm(n_lm)
+sl_lm  <- c(a = 1.2, b = 2.0, c = 3.0)[as.character(s_lm)]
+mu_lm  <- c(a = 1.0, b = 1.5, c = 0.4)[as.character(s_lm)]
+y_lm   <- mu_lm + rnorm(n_lm) / (sl_lm * exp(0.5 * -0.6 * z_lm))
+sup_lm <- c(min(y_lm) - 1, max(y_lm) + 1)
+df_lm  <- data.frame(y = y_lm, s = s_lm, z = z_lm)
+
+fit0_lm <- suppressWarnings(  # "highly experimental" stram warning
+  Lm(y | s ~ 1 | z, data = df_lm))
+fit_lm <- suppressWarnings(
+  Lm(y | s ~ 1 | z, data = df_lm, theta = coef(fit0_lm, with_baseline = TRUE),
+     optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                   method = "BFGS",
+                                   maxit = 100000L,
+                                   reltol = 1e-15))["optim"]))
+stopifnot(inherits(fit_lm, "stram"), fit_lm$convergence == 0)
+
+theta_lm <- coef(fit_lm, with_baseline = TRUE)
+ll_lm    <- as.numeric(logLik(fit_lm))
+gamma_lm <- theta_lm[fit_lm$scalecoef]
+
+# Per-stratum affine coefficients (c0_k, c1_k) from the treatment contrasts.
+th0_lm <- theta_lm[setdiff(names(theta_lm), fit_lm$scalecoef)]
+C_lm <- matrix(th0_lm, nrow = 2L)  # cols: (Intercept), sb, sc
+stopifnot(names(th0_lm) ==
+            paste0(c("(Intercept)", "y"), ":",
+                   rep(c("(Intercept)", "sb", "sc"), each = 2L)))
+Cs_lm <- cbind(C_lm[, 1], C_lm[, 1] + C_lm[, -1, drop = FALSE])  # (2, K)
+stopifnot(min(Cs_lm[2, ]) > 0.5)  # interior: every slope well above 0
+
+.h_lm <- function(d) {
+  k <- as.integer(d$s)
+  f <- exp(0.5 * d$z * gamma_lm)
+  list(h = (Cs_lm[1, k] + Cs_lm[2, k] * d$y) * f, hp = Cs_lm[2, k] * f)
+}
+tr_lm <- .h_lm(df_lm)
+stopifnot(isTRUE(all.equal(sum(dnorm(tr_lm$h, log = TRUE) + log(tr_lm$hp)),
+                           ll_lm, tolerance = 1e-10)))
+
+# Bernstein (order 1) one-hot Θ: rows = (θ0, θ1), columns = strata a, b, c.
+Theta_lm <- rbind(Cs_lm[1, ] + Cs_lm[2, ] * sup_lm[1],
+                  Cs_lm[1, ] + Cs_lm[2, ] * sup_lm[2])
+
+grid_lm <- expand.grid(y = quantile(y_lm, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       s = factor(lev_lm, levels = lev_lm),
+                       z = c(-1, 0, 1.5))
+hg_lm <- .h_lm(grid_lm)
+cdf_lm <- pnorm(hg_lm$h)
+pdf_lm <- dnorm(hg_lm$h) * hg_lm$hp
+
+qgrid_lm <- expand.grid(p = c(0.1, 0.5, 0.9),
+                        s = factor(lev_lm, levels = lev_lm),
+                        z = c(-1, 0, 1.5))
+kq_lm <- as.integer(qgrid_lm$s)
+q_lm <- (qnorm(qgrid_lm$p) * exp(-0.5 * qgrid_lm$z * gamma_lm) - Cs_lm[1, kq_lm]) /
+  Cs_lm[2, kq_lm]
+stopifnot(all(q_lm > sup_lm[1] + 0.1), all(q_lm < sup_lm[2] - 0.1))
+
+.codes_lm <- function(g) cbind(g[[1]], as.integer(g$s) - 1L, g$z)
+writeLines(format(y_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_y_train.txt"))
+writeLines(as.character(as.integer(s_lm) - 1L),
+           con = file.path(out_dir, "stram_onehot_lm_s_train.txt"))
+writeLines(format(z_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_x_s_train.txt"))
+writeLines(paste(format(sup_lm[1], digits = 15), format(sup_lm[2], digits = 15)),
+           con = file.path(out_dir, "stram_onehot_lm_y_support.txt"))
+writeLines(format(theta_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_theta.txt"))
+writeLines(format(flatten_row_major(Theta_lm), digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_theta_onehot.txt"))
+writeLines(format(as.numeric(gamma_lm), digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_gamma.txt"))
+writeLines(format(ll_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_loglik.txt"))
+write.table(format(.codes_lm(grid_lm), digits = 15),
+            file = file.path(out_dir, "stram_onehot_lm_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(cdf_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_distribution.txt"))
+writeLines(format(pdf_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_density.txt"))
+write.table(format(.codes_lm(qgrid_lm), digits = 15),
+            file = file.path(out_dir, "stram_onehot_lm_qgrid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(q_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_quantile.txt"))
+
+cat(sprintf("stram_onehot lm ref: n=%d, K=%d, ll=%.6f, gamma=%.6f\n",
+            n_lm, length(lev_lm), ll_lm, gamma_lm))

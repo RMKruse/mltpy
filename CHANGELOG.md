@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (quantiles with an absolute
   tolerance scaled by the support width) (fixtures
   `reference/stram_onehot_bs_boxcox_*`). (#107)
+- `Lm(..., interacting=...)` — stratified / fully-interacting normal linear
+  models `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` with the order-1 Bernstein `a(y)`,
+  so `Y | x` is normal with an `x`-dependent mean and standard deviation.
+  Accepts a `BernsteinBasis`, `OrdinalBasis`, or `OneHotBasis` x-basis and
+  combines with `scaling=` for the scaled-interaction (`stram`) model
+  `([a(y) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and `gamma_`.
+  `sigma_` / `intercept_` / `coef_` raise `NotImplementedError` on this path
+  (no single lm mapping when Θ varies with `x`). Exact data only: censored
+  rows raise `NotImplementedError`. `γ`, `Θ`, log-likelihood, distribution,
+  density and quantile match R `tram::Lm(y | s ~ 1 | z)` at `rtol=1e-6`
+  (tram's polynomial `(1, y)` basis maps onto the order-1 Bernstein basis
+  exactly) (fixtures `reference/stram_onehot_lm_*`). (#109)
 
 ## [0.4.0] — 2026-05-25
 
