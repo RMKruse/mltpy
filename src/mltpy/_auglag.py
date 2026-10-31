@@ -35,7 +35,7 @@ from typing import Callable
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
-from scipy.optimize import minimize
+from scipy.optimize import minimize, nnls
 
 
 @dataclass
@@ -78,12 +78,15 @@ class AugLagOptions:
         on degenerate active sets (stacked monotonicity boundaries) where the
         augmented-Lagrangian stationarity floors at ~1e-5 even though θ has
         stopped moving and matches the reference fit to many decimals.  The
-        stall exit is taken only when some constraint is active (an equality
-        row or a positive inequality multiplier) or when the stationarity
-        meets the companion Gill–Murray–Wright test ``‖∇L_A‖∞ ≤
-        theta_tol^(2/3) · (1 + |f|)``; a stall that meets neither means the
-        inner solve failed, and the loop stops with ``converged=False``.
-        Default ``1e-8``.
+        stall exit is taken only when the *projected* stationarity — the part
+        of ∇f left after the best fit of equality normals (any sign) and
+        working-set inequality normals (rows with ``g_i ≤ feas_tol`` or
+        ``max(0, μ_i − ρ g_i) > 0``; non-negative multipliers) — and the
+        duality gap ``μ*ᵀ max(g, 0)`` of that fit both meet the companion
+        Gill–Murray–Wright test ``≤ theta_tol^(2/3) · (1 + |f|)``.  A stall
+        that fails it still has a feasible descent direction, i.e. the inner
+        solve failed, and the loop stops with ``converged=False``.  Default
+        ``1e-8``.
     inner_method:
         ``scipy.optimize.minimize`` method used for each unconstrained inner
         solve.  Default ``"L-BFGS-B"`` matches alabama's inner solver.
@@ -191,6 +194,90 @@ def _make_auglag_obj(
         return L_A, grad
 
     return obj
+
+
+def _projected_stationarity(
+    grad_f: NDArray[np.float64],
+    C_eq: NDArray[np.float64],
+    A_work: NDArray[np.float64],
+    g_work: NDArray[np.float64],
+) -> tuple[float, float]:
+    """Part of ∇f that no admissible combination of constraint normals explains.
+
+    Parameters
+    ----------
+    grad_f:
+        Objective gradient ∇f(θ), shape (n,).
+    C_eq:
+        Equality constraint matrix, shape (m_eq, n); zero rows when absent.
+    A_work:
+        Working-set rows 𝒜 of the inequality matrix, shape (m_w, n); zero rows
+        when the working set is empty.
+    g_work:
+        Inequality residuals ``g_i = a_iᵀθ − b_i`` of those rows, shape (m_w,).
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(‖r‖∞, gap)`` with ``r = ∇f − Cᵀλ* − A_𝒜ᵀμ*``,
+
+            (λ*, μ*) = argmin_{λ free, μ ≥ 0} ‖∇f − Cᵀλ − A_𝒜ᵀμ‖₂,
+
+        and ``gap = Σᵢ μ*ᵢ · max(gᵢ, 0)``, the complementarity (duality-gap)
+        term of the fitted multipliers on rows that still have slack.
+
+    Raises
+    ------
+    RuntimeError
+        Propagated from ``scipy.optimize.nnls`` if Lawson–Hanson exhausts
+        its iteration budget.
+
+    Notes
+    -----
+    First-order optimality for ``min f`` s.t. ``Cθ = d``, ``Aθ ≥ b`` asks
+    for ``∇f = Cᵀλ + Aᵀμ`` with ``μ ≥ 0`` supported on the active rows 𝒜.
+    ``r`` is the residual of the best such representation, so ``r = 0``
+    exactly at a KKT point.  If ``r ≠ 0`` then ``d = −r`` is a first-order
+    feasible descent direction: the NNLS optimality conditions give
+    ``A_𝒜 r ≤ 0`` and ``μ*ᵀ A_𝒜 r = 0``, and the projection gives
+    ``C r = 0``, hence ``C d = 0``, ``A_𝒜 d ≥ 0`` and ``∇fᵀd = −‖r‖₂²``.
+    A constraint on one parameter therefore never absorbs gradient in a
+    direction its normal does not span, and an inequality never absorbs
+    gradient of the wrong sign (one whose descent direction −∇f points
+    into its feasible side).  The
+    multipliers are re-fitted here instead of taken from the solver's
+    running estimates, which can lag on degenerate (stacked) active sets.
+
+    A working-set row may still carry a little slack (PHR leaves
+    ``gᵢ ≈ (μᵢ − φᵢ)/ρ > 0`` on a binding row while the multiplier estimate
+    is off).  Using such a row is legitimate only if its slack is
+    negligible, which ``gap`` measures in objective units: for a convex
+    problem at a stationary point, ``f(θ)`` exceeds the Lagrangian dual bound
+    by exactly ``μ*ᵀg``.
+
+    The free equality multipliers are eliminated by projecting onto
+    ``null(C)``: with ``P = I − C⁺C`` the problem becomes the plain NNLS
+    ``min_{μ ≥ 0} ‖P∇f − (P A_𝒜ᵀ) μ‖₂`` (Lawson–Hanson, ``scipy.optimize.nnls``),
+    whose residual equals ``r``.
+    """
+    r = np.asarray(grad_f, dtype=np.float64)
+    a_t = np.asarray(A_work, dtype=np.float64).T
+    if C_eq.shape[0] > 0:
+        # Orthogonal projection onto null(C); lstsq tolerates rank-deficient C.
+        c_t = C_eq.T
+
+        def project(v: NDArray[np.float64]) -> NDArray[np.float64]:
+            coef = np.linalg.lstsq(c_t, v, rcond=None)[0]
+            return np.asarray(v - c_t @ coef, dtype=np.float64)
+
+        r = project(r)
+        a_t = project(a_t) if a_t.shape[1] > 0 else a_t
+    gap = 0.0
+    if a_t.shape[1] > 0:
+        mu, _rnorm = nnls(a_t, r)
+        r = r - a_t @ mu
+        gap = float(mu @ np.maximum(np.asarray(g_work, dtype=np.float64), 0.0))
+    return (float(np.max(np.abs(r))) if r.size else 0.0), gap
 
 
 def auglag_minimize(
@@ -367,50 +454,55 @@ def auglag_minimize(
         # ``outer_iter >= 1`` so the very first (often large) inner step never
         # short-circuits the loop.
         #
-        # The active-set floor argument only holds when some constraint is
-        # active in the sense of exerting force on the inner problem — an
-        # equality row or a positive inequality multiplier.  An inequality
-        # sitting at its boundary with μ = 0 does not count: for g ≥ 0 its
-        # term max(0, μ − ρg) in ∇L_A is zero, so it cannot explain a floored
-        # stationarity.  Without such a constraint the problem is locally
-        # unconstrained (∇L_A = ∇f, up to O(feas_tol·ρ)), and the stall is
-        # accepted only when the stationarity also meets the companion
-        # gradient test of Gill, Murray & Wright (1981, §8.2.3): with the step
-        # test read as U2 (θ_tol = √τ_F, τ_F the relative precision of f),
-        # U3 is ‖∇f‖∞ ≤ τ_F^(1/3)·(1 + |f|) = θ_tol^(2/3)·(1 + |f|).  That
-        # accepts the gradient floor of a large-|f| likelihood fit (~1e-6 at
-        # |f| ~ 1e3) yet rejects a stall far from stationarity — issue #134,
-        # where an infeasible trial step stalls L-BFGS-B's line search at
-        # ‖∇f‖∞ ≈ 366.  Nothing changes between outer iterations in that
-        # regime (μ, λ and ρ are left as they are at a feasible iterate), so
-        # repeating the inner solve is futile: stop and report
-        # non-convergence instead.  Rationale and evidence:
-        # docs/adr/0004-auglag-stall-acceptance.md.
+        # A stall is only evidence of a floored KKT residual if the gradient
+        # that remains is explained by the constraints that are actually
+        # active, *direction by direction*: an equality on θ₁ says nothing
+        # about ∇f in θ₂.  ``_projected_stationarity`` re-fits the best
+        # multipliers for ∇f — λ free, μ ≥ 0 on the working set 𝒜 of rows that
+        # exert force in the inner problem (φᵢ = max(0, μᵢ − ρgᵢ) > 0) or sit
+        # on their boundary (gᵢ ≤ feas_tol) — and returns the unexplained
+        # residual r and the duality gap μ*ᵀmax(g, 0) of the slack rows it
+        # used.  r ≠ 0 means −r is a feasible descent direction the inner
+        # solve failed to take.  Both are held to the companion gradient test
+        # of Gill, Murray & Wright (1981, §8.2.3), applied — as they do for
+        # linear constraints — to the projected gradient: with the step test
+        # read as U2 (θ_tol = √τ_F, τ_F the relative precision of f), U3 is
+        # ‖r‖∞ ≤ τ_F^(1/3)·(1 + |f|) = θ_tol^(2/3)·(1 + |f|).  That accepts the
+        # gradient floor of a large-|f| likelihood fit (~1e-6 at |f| ~ 1e3)
+        # yet rejects a stall far from stationarity — issue #134, where an
+        # infeasible trial step stalls L-BFGS-B's line search at ‖∇f‖∞ ≈ 366.
+        # Nothing changes between outer iterations at a feasible stalled
+        # iterate that fails this test, so repeating the inner solve is
+        # futile: stop and report non-convergence instead.  Rationale and
+        # evidence: docs/adr/0004-auglag-stall-acceptance.md.
         stalled = outer_iter >= 1 and (
             theta_step <= options.theta_tol * (1.0 + float(np.max(np.abs(theta))))
         )
         if stalled and feasibility < options.feas_tol:
-            constraint_active = m_eq > 0 or bool(np.any(mu_ineq > 0.0))
+            working = (np.maximum(0.0, mu_ineq - rho * g) > 0.0) | (
+                g <= options.feas_tol
+            )
+            projected, gap = _projected_stationarity(
+                grad_f, C_, A_[working], g[working]
+            )
             stationarity_floor = options.theta_tol ** (2.0 / 3.0) * (
                 1.0 + abs(float(f_val))
             )
-            if not constraint_active and stationarity > stationarity_floor:
+            if max(projected, gap) > stationarity_floor:
                 message = (
                     "Inner solver stalled: parameters stopped moving at a "
-                    "feasible point with no active constraint "
-                    f"(KKT residual {kkt_residual:.2e} above the stationarity "
-                    f"floor {stationarity_floor:.2e})."
+                    "feasible point whose gradient the active constraints do "
+                    f"not explain (projected stationarity {projected:.2e}, "
+                    f"duality gap {gap:.2e}, floor {stationarity_floor:.2e}; "
+                    f"KKT residual {kkt_residual:.2e})."
                 )
                 break
             converged = True
-            floor_reason = (
-                "floored on an active set"
-                if constraint_active
-                else f"within the stationarity floor {stationarity_floor:.2e}"
-            )
             message = (
                 "Converged: feasible and parameter change below tolerance "
-                f"(KKT residual {kkt_residual:.2e} {floor_reason})."
+                f"(KKT residual {kkt_residual:.2e}; projected stationarity "
+                f"{projected:.2e} and duality gap {gap:.2e} within the floor "
+                f"{stationarity_floor:.2e})."
             )
             # The current θ is the converged point; record it as best.
             best_kkt = kkt_residual

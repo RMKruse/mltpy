@@ -60,37 +60,72 @@ change than matching an existing contract.
 
 ---
 
-## Decision 2 — What Counts as "Active" for the Stall Exit
+## Decision 2 — The Stall Exit Checks Projected Stationarity
 
-**Chosen:** the stall exit's active-set rationale applies only when some
-constraint exerts force on the inner problem:
+**Chosen:** a feasible stall is accepted only if the gradient that remains
+is explained, **direction by direction**, by the constraints active at θ.
+At the stalled iterate the multipliers are re-fitted for the true gradient,
 
-    constraint_active = (m_eq > 0) or any(μ > 0)
+    (λ*, μ*) = argmin_{λ free, μ ≥ 0} ‖∇f − Cᵀλ − A_𝒜ᵀμ‖₂,
 
-An inequality sitting at its boundary with μ = 0 does **not** count. For
-g ≥ 0 its term `max(0, μ − ρ g)` in ∇L_A is zero, so it cannot explain a
-floored stationarity. (Before this decision, a probe with a boundary
-inequality, μ = 0 and `‖∇f‖∞ = 5` was reported converged "on an active
-set".)
+over the working set 𝒜 of inequality rows that either exert force in the
+current inner problem (`φᵢ = max(0, μᵢ − ρ gᵢ) > 0`) or sit on their
+boundary (`gᵢ ≤ feas_tol`). The free λ is eliminated by projecting onto
+null(C), leaving a Lawson–Hanson NNLS (`_projected_stationarity` in
+`_auglag.py`). Two quantities come back:
+
+- the **projected stationarity** `‖r‖∞`, `r = ∇f − Cᵀλ* − A_𝒜ᵀμ*`. If
+  `r ≠ 0` then `d = −r` is a first-order feasible descent direction
+  (`C d = 0`, `A_𝒜 d ≥ 0`, `∇fᵀd = −‖r‖₂²`) that the inner solve failed to
+  take;
+- the **duality gap** `Σᵢ μ*ᵢ · max(gᵢ, 0)` of the working-set rows the fit
+  used. PHR leaves a binding row with a small slack `gᵢ ≈ (μᵢ − φᵢ)/ρ`
+  while its multiplier estimate is off. Using such a row is legitimate only
+  while that slack is negligible in objective units: for a convex problem at
+  a stationary point, f exceeds the Lagrangian dual bound by exactly `μ*ᵀg`.
+
+Both must meet the floor of Decision 3.
+
+**Superseded first version.** The first cut of this decision used a
+blanket activity flag, `constraint_active = (m_eq > 0) or any(μ > 0)`, that
+skipped the gradient check altogether. Review showed that a constraint on
+one parameter then excused an arbitrarily large gradient in another,
+unconstrained parameter. A smooth quadratic `½‖θ − (0, 1)‖²` with θ₁ = 1
+fixed by an equality, started at (1, 2) with `inner_options={"maxls": 1}`,
+came back `converged=True` with KKT residual 1.0 and θ₂ one unit from its
+optimum. The equality-on-θ₁ / gradient-in-θ₂ probe, the positive-multiplier
+probe with the same off-axis gradient, and descent along an equality were
+all accepted the same way. All of them are now `converged=False`
+(`tests/test_auglag.py::TestStallConvergenceProjectedStationarity`,
+`TestStallOnSmoothQuadratic`).
+
+**Rejected:** a narrower working set `gᵢ ≤ feas_tol` without the `φᵢ > 0`
+rows. In the full suite it rejected 9 healthy fits (n = 5 and n = 8
+parameters, KKT ≈ 1e-5) whose binding rows carried φ ≈ 0.5–6 at slack
+6e-7 – 4e-5.
 
 ---
 
-## Decision 3 — Stationarity Floor for Stalls Without an Active Constraint
+## Decision 3 — Stationarity Floor for the Stall Exit
 
-**Chosen:** when no constraint is active, the stall exit is accepted only
-if the stationarity also meets the companion gradient test of Gill, Murray
-& Wright (*Practical Optimization*, 1981, §8.2.3). Read the step test as
-their U2 with `theta_tol = √τ_F`, where τ_F is the relative precision of f.
-Their U3 is then
+**Chosen:** the projected stationarity and the duality gap must both meet
+the companion gradient test of Gill, Murray & Wright (*Practical
+Optimization*, 1981, §8.2.3), which they apply to the projected gradient
+under linear constraints. Read the step test as their U2 with
+`theta_tol = √τ_F`, where τ_F is the relative precision of f. Their U3 is
+then
 
-    ‖∇L_A‖∞ ≤ τ_F^(1/3) · (1 + |f|) = theta_tol^(2/3) · (1 + |f|)
-            ≈ 4.6e-6 · (1 + |f|)   at the default theta_tol = 1e-8.
+    ‖r‖∞ ≤ τ_F^(1/3) · (1 + |f|) = theta_tol^(2/3) · (1 + |f|)
+         ≈ 4.6e-6 · (1 + |f|)   at the default theta_tol = 1e-8.
 
-A stall that meets neither condition means the inner solve failed. Nothing
-changes between outer iterations in that regime (μ, λ and ρ stay as they
-are at a feasible iterate), so the loop stops at once with
-`converged=False` and the message "Inner solver stalled: …". The restart
-loop then tries a perturbed start as usual.
+With no constraint in the working set, `r = ∇f`. That is the original form
+of this decision.
+
+A stall that fails it means the inner solve failed. Nothing changes between
+outer iterations in that regime (μ, λ and ρ stay as they are at a feasible
+iterate), so the loop stops at once with `converged=False` and the message
+"Inner solver stalled: …". The restart loop then tries a perturbed start as
+usual.
 
 **Evidence.** Every auglag solve in the full test suite plus the 24-cell
 benchmark grid was logged (1786 solves). Healthy fits that end in a stall
@@ -100,6 +135,19 @@ attainable gradient therefore scales linearly with |f|; it is a property of
 floating-point f, not a solver defect. The #134 failure sits at
 366 / (1 + 2248) ≈ 0.16 relative, more than seven orders of magnitude
 above that floor.
+
+**Evidence for the projected form (Decision 2).** The same census was
+repeated with the projected stationarity and gap logged at every stall
+exit: 1400 accepted stalls in the suite and all 24 benchmark cells. The
+only rejected stalls are the synthetic failure probes. On the benchmark
+grid the worst accepted stall sits at 0.0074× the floor. The tightest
+healthy case in the suite is `TestExponentialWithCovariates`: 101 stacked
+per-row support constraints on 6 parameters at a degenerate MLE, with
+`‖∇f‖∞ = 100` almost entirely absorbed by the multipliers. Its projected
+stationarity of 7.4e-6 sits at 0.88× the floor of 8.3e-6 (|f| = 0.80).
+NNLS and BVLS agree on that residual, and SLSQP from the same data reaches
+an f only 5.5e-10 lower. The point is genuinely within the floating-point
+floor, and the old activity flag accepted it unconditionally.
 
 **Alternatives considered:**
 
@@ -129,9 +177,17 @@ hazard parity tightened from `rtol=1e-4` to `1e-6`.
 
 - `Coxph(interacting=...)`, with or without `scaling=`, reaches the MLE on
   its first auglag attempt without the Newton-CG polish.
-- `converged=True` from the stall exit now means either a genuinely active
-  constraint set or a gradient at the floating-point floor. A stuck inner
-  solve reports `converged=False`.
+- `converged=True` from the stall exit now means that, up to the
+  floating-point floor, ∇f is a valid KKT combination of the constraints
+  active at θ (free-sign equality multipliers, non-negative inequality
+  multipliers, negligible slack). A stuck inner solve that leaves any
+  feasible descent direction reports `converged=False`, even when some
+  other constraint is active.
+- The returned `kkt_residual` is unchanged: it still uses the solver's
+  running multipliers, so a stall accepted on refitted multipliers can
+  report a residual well above `outer_tol` (up to ~1e-2 on stacked active
+  sets). The exit message also reports the projected stationarity and the
+  gap.
 - The gate also applies to shift-path auglag fits. Across the suite and the
   benchmark grid, no healthy fit changed its exit.
 - No new public option: the floor is derived from the existing

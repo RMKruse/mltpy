@@ -75,9 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   unmoved point. Only the Newton-CG polish rescued the fit, leaving Θ about
   1e-5 off the optimum. The objective now matches the shift path: it returns a
   finite penalty (1e10) and the subgradient of the monotonicity violation. The
-  stall exit now requires either an active constraint or a stationarity of at
-  most `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3); otherwise auglag
-  stops with `converged=False`. `Coxph(interacting=...)` with or without
+  stall exit now refits the multipliers at the stalled point (equality rows
+  with any sign, active inequality rows with μ ≥ 0) and requires both the
+  unexplained gradient and the duality gap to be at most
+  `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3, applied to the projected
+  gradient); otherwise auglag stops with `converged=False`. An active
+  constraint therefore no longer excuses gradient in parameters it does not
+  constrain. `Coxph(interacting=...)` with or without
   `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
   / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). Decision
   record: `docs/adr/0004-auglag-stall-acceptance.md`. (#134)
