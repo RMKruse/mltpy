@@ -30,6 +30,7 @@ from mltpy import (
     InteractionBasis,
     OptimizerConfig,
     log_likelihood,
+    negative_log_likelihood,
 )
 from mltpy.basis import BernsteinBasis
 from mltpy.tram import Coxph
@@ -93,13 +94,10 @@ def _theta_r_mltpy_layout(mev_ref: dict[str, np.ndarray]) -> np.ndarray:
 
 # Solvers fitted against the R reference, with the relative tolerance each
 # reaches on the weakly-determined Θ block (and the S / hazard predictions
-# built from it).  γ and ℓ meet rtol=1e-6 under the default auglag solver;
-# Θ under auglag sits ~1e-5 off the optimum because its inner L-BFGS-B stalls
-# on an infeasible trial step and the result is finished by the Newton-CG
-# polish.  trust-constr converges tightly, showing the residual is solver
-# precision rather than a model mismatch (see also
-# test_loglik_at_r_theta_matches_r).
-_SOLVER_THETA_RTOL = {"auglag": 1e-4, "trust-constr": 1e-6}
+# built from it).  Both meet the CLAUDE.md R-parity tolerance; auglag used to
+# need 1e-4 because its inner L-BFGS-B stalled on an infeasible trial step and
+# only the Newton-CG polish rescued the fit (issue #134).
+_SOLVER_THETA_RTOL = {"auglag": 1e-6, "trust-constr": 1e-6}
 
 
 @pytest.fixture(scope="module")
@@ -181,6 +179,185 @@ class TestRParity:
         got = getattr(mev_fits[solver], method)(t, X=x, X_scale=x_s)
         expected = mev_ref["survivor" if method == "survival" else "hazard"]
         assert_allclose(got, expected, rtol=_SOLVER_THETA_RTOL[solver], atol=1e-10)
+
+
+_FIT_KINDS = ["scaled", "unscaled"]
+
+
+@pytest.fixture(scope="module")
+def auglag_nopolish_fits(mev_ref: dict[str, np.ndarray]) -> dict[str, Coxph]:
+    """The issue-#134 reproduction: auglag, ``polish=False``, with and without
+    ``scaling=``, keyed by ``_FIT_KINDS``."""
+    a, b = mev_ref["y_support"]
+    fits: dict[str, Coxph] = {}
+    for kind in _FIT_KINDS:
+        scaled = kind == "scaled"
+        model = Coxph(
+            support=(float(a), float(b)),
+            order=_ORDER_Y,
+            interacting=_x_basis(),
+            scaling=mev_ref["x_s_train"].reshape(-1, 1) if scaled else None,
+            optimizer_config=OptimizerConfig(
+                solver="auglag", random_state=0, polish=False
+            ),
+        )
+        if scaled:
+            with pytest.warns(UserWarning, match="experimental"):
+                model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
+        else:
+            model.fit(mev_ref["y_train"], X=mev_ref["x_train"])
+        fits[kind] = model
+    return fits
+
+
+class TestAuglagFirstAttempt:
+    """Issue #134: the default auglag solver must reach the MLE on its own —
+    without the Newton-CG polish and without a perturbed restart.
+
+    The interaction objective used to return ``(inf, 0)`` on infeasible trial
+    steps, which stalled L-BFGS-B's line search at NLL ≈ 2248 (‖∇‖∞ ≈ 366) and
+    was then reported as ``converged=True``.  The unscaled fit shares the
+    defect (it predates scaling=) so both are exercised.
+    """
+
+    @pytest.mark.parametrize("kind", _FIT_KINDS)
+    def test_converges_without_restart(
+        self, auglag_nopolish_fits: dict[str, Coxph], kind: str
+    ) -> None:
+        result = auglag_nopolish_fits[kind].result_
+        assert result is not None
+        assert result.converged
+        assert result.n_restarts == 0
+
+    @pytest.mark.parametrize("kind", _FIT_KINDS)
+    def test_reaches_stationary_point(
+        self,
+        auglag_nopolish_fits: dict[str, Coxph],
+        mev_ref: dict[str, np.ndarray],
+        kind: str,
+    ) -> None:
+        """‖∇NLL‖∞ at the returned θ is at the floating-point floor of a
+        n = 1000 likelihood, not the ~366 of the stalled line search."""
+        model = auglag_nopolish_fits[kind]
+        _, grad = negative_log_likelihood(
+            model.theta_,
+            model.basis,
+            mev_ref["y_train"],
+            mev_ref["x_train"].reshape(-1, 1),
+            CensoringType.NONE,
+            gradient=True,
+            base_distribution="min_extreme_value",
+            scaling=mev_ref["x_s_train"].reshape(-1, 1) if kind == "scaled" else None,
+        )
+        assert np.max(np.abs(grad)) < 1e-6
+
+    def test_scaled_matches_r_without_polish(
+        self, auglag_nopolish_fits: dict[str, Coxph], mev_ref: dict[str, np.ndarray]
+    ) -> None:
+        """R reference exists for the scaled fit only."""
+        model = auglag_nopolish_fits["scaled"]
+        result = model.result_
+        assert result is not None
+        assert_allclose(
+            result.log_likelihood, float(mev_ref["loglik"]), rtol=1e-6, atol=1e-10
+        )
+        assert_allclose(
+            model.theta_, _theta_r_mltpy_layout(mev_ref), rtol=1e-6, atol=1e-10
+        )
+
+
+# Uniform weight large enough that the feasible NLL (≈ 923 · 1e8 ≈ 9.2e10 on
+# this fixture) exceeds the 1e10 infeasibility-penalty floor.
+_HEAVY_WEIGHT = 1e8
+
+
+@pytest.fixture(scope="module")
+def heavy_weight_fits(
+    mev_ref: dict[str, np.ndarray], auglag_nopolish_fits: dict[str, Coxph]
+) -> dict[str, tuple[Coxph, Coxph]]:
+    """``(unit-weight fit, every-weight-1e8 fit)`` per path, auglag with
+    ``polish=False`` and default restarts, keyed ``"interaction"`` /
+    ``"shift"``.  The heavy fit must not raise in ``fit()``."""
+    a, b = mev_ref["y_support"]
+    y = mev_ref["y_train"]
+    heavy = np.full(y.shape[0], _HEAVY_WEIGHT)
+
+    def coxph(interacting: BernsteinBasis | None) -> Coxph:
+        return Coxph(
+            support=(float(a), float(b)),
+            order=_ORDER_Y,
+            interacting=interacting,
+            optimizer_config=OptimizerConfig(
+                solver="auglag", random_state=0, polish=False
+            ),
+        )
+
+    fits: dict[str, tuple[Coxph, Coxph]] = {}
+    ia = coxph(_x_basis())
+    ia.fit(y, X=mev_ref["x_train"], weights=heavy)
+    fits["interaction"] = (auglag_nopolish_fits["unscaled"], ia)
+
+    x_shift = mev_ref["x_train"].reshape(-1, 1)
+    unit, shift = coxph(None), coxph(None)
+    unit.fit(y, X=x_shift)
+    shift.fit(y, X=x_shift, weights=heavy)
+    fits["shift"] = (unit, shift)
+    return fits
+
+
+class TestHeavyWeightsNeverReturnPenalty:
+    """Review of #136: the finite infeasibility penalty (``_INFEASIBLE_NLL``,
+    1e10) must never be mistaken for a likelihood.
+
+    With every weight at 1e8 the feasible NLL exceeds 1e10, so the fixed
+    penalty used to be the lowest value the solver could find: every auglag
+    attempt descended into the infeasible region, restart selection kept the
+    penalty as "NLL 1e10", and ``fit()`` then raised
+    ``InfeasibleParameterError`` from the Hessian (interaction path) or
+    reported log-likelihood −1e10 (shift path).  A uniform weight rescales
+    the objective without moving the MLE, so the heavy fit must reproduce
+    the unit-weight fit.
+    """
+
+    _PATHS = ["interaction", "shift"]
+
+    @pytest.mark.parametrize("path", _PATHS)
+    def test_reaches_unit_weight_mle(
+        self, heavy_weight_fits: dict[str, tuple[Coxph, Coxph]], path: str
+    ) -> None:
+        unit, heavy = heavy_weight_fits[path]
+        assert heavy.result_ is not None and unit.result_ is not None
+        assert heavy.result_.converged
+        assert heavy.result_.n_restarts == 0
+        assert_allclose(heavy.theta_, unit.theta_, rtol=1e-6, atol=1e-10)
+        assert_allclose(
+            heavy.result_.log_likelihood,
+            _HEAVY_WEIGHT * unit.result_.log_likelihood,
+            rtol=1e-8,
+        )
+
+    def test_reported_loglik_is_the_likelihood_at_theta(
+        self,
+        heavy_weight_fits: dict[str, tuple[Coxph, Coxph]],
+        mev_ref: dict[str, np.ndarray],
+    ) -> None:
+        """The returned value is the real weighted likelihood, which here is
+        far below −1e10 — not the penalty."""
+        _, heavy = heavy_weight_fits["interaction"]
+        assert heavy.result_ is not None
+        y = mev_ref["y_train"]
+        ll = log_likelihood(
+            heavy.theta_,
+            heavy.basis,
+            y,
+            mev_ref["x_train"].reshape(-1, 1),
+            CensoringType.NONE,
+            base_distribution="min_extreme_value",
+            weights=np.full(y.shape[0], _HEAVY_WEIGHT),
+        )
+        assert_allclose(heavy.result_.log_likelihood, ll, rtol=1e-12)
+        assert ll < -1e10
+        assert np.all(np.isfinite(heavy.hessian_))
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sibling `stram_*` blocks use (the default alabama fit stopped ~5e-5 short
   on `γ` and ~1e-8 infeasible). (#125)
 
+### Fixed
+
+- Auglag stalled early on `InteractionBasis` fits and reported
+  `converged=True`. On a trial step that left the column-wise monotone cone, the
+  interaction objective returned `(inf, 0)`. That stalled the inner L-BFGS-B
+  line search: on the `stram_bs_bs_mev` fixture the fit stopped at NLL ≈ 2248
+  (optimum ≈ 893, ‖∇‖∞ ≈ 366), and the feasible-and-stalled exit accepted the
+  unmoved point. Only the Newton-CG polish rescued the fit, leaving Θ about
+  1e-5 off the optimum. The objective now matches the shift path: it returns a
+  finite penalty (1e10) and the subgradient of the monotonicity violation. The
+  stall exit now refits the multipliers at the stalled point (equality rows
+  with any sign, active inequality rows with μ ≥ 0) and requires both the
+  unexplained gradient and the duality gap to be at most
+  `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3, applied to the projected
+  gradient); otherwise auglag stops with `converged=False`. An active
+  constraint therefore no longer excuses gradient in parameters it does not
+  constrain. `Coxph(interacting=...)` with or without
+  `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
+  / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). Decision
+  record: `docs/adr/0004-auglag-stall-acceptance.md`. (#134)
+- The finite infeasibility penalty could be returned as a fitted result when a
+  valid weighted likelihood exceeded it. With every weight 1e8, the
+  interaction fit settled on the 1e10 penalty as "NLL 1e10" and `fit()` raised
+  `InfeasibleParameterError` from the Hessian, and a weighted shift-path
+  `Coxph` reported log-likelihood −1e10. The penalty is now
+  `max(1e10, 1e6·(1 + |NLL(θ_init)|))`, so it stays above the fit's own
+  feasible values. Restart selection, the fallback and the polish now score
+  every candidate by the unpenalised likelihood and discard any whose θ is
+  infeasible. Unweighted fits are unchanged. (#134)
+
 ## [0.4.0] — 2026-05-25
 
 ### Performance
