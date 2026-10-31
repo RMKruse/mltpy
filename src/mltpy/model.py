@@ -1415,13 +1415,17 @@ class ConditionalTransformationModel:
 
         # Vectorised bisection: at each midpoint evaluate the y-basis once and
         # take the row-wise inner product with the per-row baseline-θ.
+        # Midpoints are used once; avoid derivatives and shared-cache retention.
+        evaluate_mid = getattr(
+            self.basis.y_basis, "_evaluate_uncached", self.basis.y_basis.evaluate
+        )
         lo = np.full(m, a, dtype=float)
         hi = np.full(m, b, dtype=float)
         mid = 0.5 * (lo + hi)
         for _ in range(60):
             if np.max(hi - lo) < _BRENTQ_EPS:
                 break
-            A_mid = self.basis.y_basis.evaluate(mid)  # (m, p)
+            A_mid = evaluate_mid(mid)  # (m, p)
             h_mid = np.einsum("ij,ij->i", A_mid, theta_rows)
             below = h_mid < z
             lo = np.where(below, mid, lo)

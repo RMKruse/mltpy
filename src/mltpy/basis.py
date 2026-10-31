@@ -162,6 +162,15 @@ def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
         except KeyError:
             pass
         return cached
+    out = _bernstein_matrix_uncached(t, k)
+    _bernstein_cache[key] = out
+    if len(_bernstein_cache) > _BERNSTEIN_CACHE_MAXSIZE:
+        _bernstein_cache.popitem(last=False)
+    return out
+
+
+def _bernstein_matrix_uncached(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
+    """Build read-only Bernstein values without retaining one-use points."""
     i = np.arange(k + 1, dtype=float)  # shape (k+1,)
     binom = comb(k, i, exact=False)  # shape (k+1,)
     # Broadcasting: t[:, None] × i[None, :] → (n, k+1)
@@ -169,9 +178,6 @@ def _bernstein_matrix(t: NDArray[np.float64], k: int) -> NDArray[np.float64]:
         NDArray[np.float64], binom * t[:, None] ** i * (1.0 - t[:, None]) ** (k - i)
     )
     out.flags.writeable = False
-    _bernstein_cache[key] = out
-    if len(_bernstein_cache) > _BERNSTEIN_CACHE_MAXSIZE:
-        _bernstein_cache.popitem(last=False)
     return out
 
 
@@ -261,6 +267,11 @@ class BernsteinBasis:
         """
         B, _ = self.evaluate_with_derivative(y)
         return B
+
+    def _evaluate_uncached(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Value-only evaluation for one-use quantile bisection midpoints."""
+        t = _normalize_and_validate_support(y, self.support)
+        return _bernstein_matrix_uncached(t, self.order)
 
     def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
         """Analytical derivative of the Bernstein design matrix.
@@ -505,6 +516,19 @@ class LogBernsteinBasis:
                 f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
             )
         return self._log_basis.evaluate(np.log(y_arr))
+
+    def _evaluate_uncached(self, y: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Value-only log-time evaluation without either Bernstein cache."""
+        y_arr = np.atleast_1d(np.asarray(y, dtype=float))
+        if y_arr.ndim != 1:
+            raise ValueError(f"y must be 1-D, got shape {y_arr.shape}")
+        a, b = self.support
+        if y_arr.size > 0 and (float(y_arr.min()) < a or float(y_arr.max()) > b):
+            raise ValueError(
+                f"y contains values outside support [{a}, {b}]. "
+                f"(min={float(y_arr.min()):.4g}, max={float(y_arr.max()):.4g})"
+            )
+        return self._log_basis._evaluate_uncached(np.log(y_arr))
 
     def derivative(self, y: NDArray[np.float64], order: int = 1) -> NDArray[np.float64]:
         """Analytical derivative d/dy [B_k(log y)] = (1/y) · dB_k/d(log y).

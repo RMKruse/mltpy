@@ -25,9 +25,53 @@ from mltpy import (
     InteractionBasis,
     OptimizerConfig,
 )
-from mltpy.basis import BernsteinBasis
+from mltpy.basis import (
+    BernsteinBasis,
+    LogBernsteinBasis,
+    PolynomialBasis,
+    _bernstein_assembled_cache,
+    _bernstein_cache,
+)
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
+
+
+@pytest.mark.filterwarnings(r"ignore:predict\(what='quantile'\)")
+@pytest.mark.parametrize(
+    "basis_type", [BernsteinBasis, LogBernsteinBasis, PolynomialBasis]
+)
+@pytest.mark.parametrize("operation", ["quantile", "simulate"])
+def test_interaction_quantiles_do_not_cache_midpoints(
+    basis_type: type[BernsteinBasis | LogBernsteinBasis | PolynomialBasis],
+    operation: str,
+) -> None:
+    """Only the reusable x-design and support endpoints enter the caches."""
+    y_basis = basis_type(order=1, support=(0.1, 5.0))
+    x_basis = BernsteinBasis(order=1, support=(0.0, 1.0))
+    rng = np.random.default_rng(146)
+    model = ConditionalTransformationModel(
+        basis=InteractionBasis(y_basis, x_basis),
+        optimizer_config=OptimizerConfig(random_state=0),
+    ).fit(rng.uniform(0.2, 4.9, 100), rng.uniform(size=(100, 1)))
+    X = rng.uniform(size=(1000, 1))
+    caches = (_bernstein_cache, _bernstein_assembled_cache)
+    for cache in caches:
+        cache.clear()
+    x_basis.evaluate(X[:, 0])
+    for endpoint in y_basis.support:
+        y_basis.evaluate(np.array([endpoint]))
+    expected_keys = [set(cache) for cache in caches]
+    for cache in caches:
+        cache.clear()
+    try:
+        if operation == "quantile":
+            model.predict(np.linspace(0.05, 0.95, len(X)), X_new=X, what="quantile")
+        else:
+            model.simulate(len(X), X=X, random_state=146)
+        assert [set(cache) for cache in caches] == expected_keys
+    finally:
+        for cache in caches:
+            cache.clear()
 
 
 def _load_extras_reference(label: str) -> dict[str, np.ndarray]:

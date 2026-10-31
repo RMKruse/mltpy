@@ -9,6 +9,10 @@ prototypes, checked for bitwise equality against current library output.
 The implemented shift-curve reuse is compared against its original methods in
 [the #145 results](issue145_shift_reuse.md), including all timing and memory cells.
 
+Value-only interaction quantile evaluation is compared against its original
+method in [the #146 results](issue146_interaction_values.md), including all
+16 original cells for both quantiles and simulation, plus Survreg.
+
 ## Reproduce
 
 ```sh
