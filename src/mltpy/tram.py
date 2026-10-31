@@ -38,6 +38,7 @@ from mltpy.basis import (
     BernsteinBasis,
     InteractionBasis,
     LogBernsteinBasis,
+    OneHotBasis,
     OrdinalBasis,
 )
 from mltpy.likelihood import _H_CLIP, BaseDistribution, _get_dist
@@ -457,6 +458,13 @@ class BoxCox(_TramModel):
     generalisation of the classical Box-Cox power transform when the
     normality assumption for linear regression is violated.
 
+    Pass ``interacting`` to fit a *stratified* (or fully-interacting)
+    Box-Cox model where the transformation itself depends on the covariate
+    via the tensor product ``h(y | x) = (a(y) ⊗ b(x))ᵀ vec(Θ)`` — the
+    analogue of R ``tram::BoxCox(y | s ~ 1)``.  See ADR 0001 and
+    :class:`~mltpy.basis.InteractionBasis` for the parameter-vector layout
+    and the column-wise monotonicity strategy.
+
     Parameters
     ----------
     support:
@@ -481,7 +489,34 @@ class BoxCox(_TramModel):
         gains a γ block (length ``q_s``) exposed as :attr:`gamma_`, and
         :meth:`predict` requires ``X_scale_new``.  Sign-aligned with the
         R ``scale=`` block (ADR 0002, Decision 5); see
-        ``docs/adr/0002-scaling-terms.md``.
+        ``docs/adr/0002-scaling-terms.md``.  May be combined with
+        ``interacting=`` (ADR 0003, issue #107) to fit
+        ``Φ⁻¹ F(y | x, x_s) = ([a(y) ⊗ b(x)]ᵀ vec(Θ)) · exp(0.5 · x_s · γ)``,
+        the analogue of R ``tram::BoxCox(y | s ~ 1 | z)`` (class
+        ``stram``): ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as
+        :attr:`Theta_` and γ as :attr:`gamma_`, and :meth:`fit` emits a
+        ``UserWarning`` flagging the path as experimental.
+    interacting:
+        Optional x-basis (:class:`~mltpy.basis.BernsteinBasis`,
+        :class:`~mltpy.basis.OrdinalBasis`, or
+        :class:`~mltpy.basis.OneHotBasis` for a categorical stratum).  When
+        provided, the model is fit as
+        ``ConditionalTransformationModel(InteractionBasis(BernsteinBasis(...),
+        interacting))`` instead of the standard shift model, and :meth:`fit`
+        / :meth:`predict` take the interacting covariate as ``X`` /
+        ``X_new``.  Only exact (uncensored) responses are supported on this
+        path: pass an array, or a :class:`~mltpy.variables.CensoredData`
+        without censored rows; censored rows raise ``NotImplementedError``.
+        :meth:`fitted_transformation` is unavailable (there is no single
+        baseline transformation); use :attr:`Theta_` or
+        ``predict(what="trafo")``.
+
+    Raises
+    ------
+    NotImplementedError
+        From :meth:`fit`, when ``interacting=`` is set and ``y`` is a
+        :class:`~mltpy.variables.CensoredData` with censored rows — the
+        interaction likelihood covers exact responses only.
 
     Examples
     --------
@@ -493,6 +528,18 @@ class BoxCox(_TramModel):
     >>> model.fit(y)
     >>> cdf   = model.predict(y, what="distribution")
     >>> trafo = model.fitted_transformation(y)
+
+    Stratified Box-Cox with a scaled baseline (three strata coded 0, 1, 2):
+
+    >>> from mltpy.basis import OneHotBasis
+    >>> s = rng.integers(0, 3, size=200)
+    >>> z = rng.normal(size=(200, 1))
+    >>> strat = BoxCox(support=(y.min(), y.max()), order=4,
+    ...                interacting=OneHotBasis(K=3), scaling=z)
+    >>> strat.fit(y, X=s)
+    >>> strat.Theta_.shape, strat.gamma_.shape
+    ((5, 3), (1,))
+    >>> cdf = strat.predict(y[:5], X_new=s[:5], X_scale_new=z[:5])
     """
 
     def __init__(
@@ -502,15 +549,34 @@ class BoxCox(_TramModel):
         optimizer_config: OptimizerConfig | None = None,
         censoring: CensoringType = CensoringType.NONE,
         scaling: NDArray[np.float64] | None = None,
+        interacting: BernsteinBasis | OrdinalBasis | OneHotBasis | None = None,
     ) -> None:
-        super().__init__(
-            order=order,
-            support=support,
+        if interacting is None:
+            super().__init__(
+                order=order,
+                support=support,
+                censoring=censoring,
+                optimizer_config=optimizer_config,
+                base_distribution="normal",
+                scaling=scaling,
+            )
+            return
+
+        # Stratified Box-Cox: θ = vec_C(Θ), or [vec_C(Θ) | γ] when scaled
+        # (ADR 0003).  The interaction likelihood is exact-data only, so
+        # optimize() rejects genuinely censored rows.
+        y_basis = BernsteinBasis(order=order, support=support)
+        ib = InteractionBasis(y_basis=y_basis, x_basis=interacting)
+        ConditionalTransformationModel.__init__(
+            self,
+            basis=ib,
             censoring=censoring,
             optimizer_config=optimizer_config,
             base_distribution="normal",
             scaling=scaling,
         )
+        self._order = order
+        self._support = support
 
 
 # ---------------------------------------------------------------------------

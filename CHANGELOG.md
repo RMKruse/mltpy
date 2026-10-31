@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `BoxCox(..., interacting=...)` — stratified / fully-interacting Box-Cox
+  models `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` through the convenience surface,
+  mirroring `Coxph(..., interacting=...)`. Accepts a `BernsteinBasis`,
+  `OrdinalBasis`, or `OneHotBasis` (categorical strata) x-basis and combines
+  with `scaling=` for the scaled-interaction (`stram`) model
+  `([a(y) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and `gamma_`.
+  Exact data only: censored rows raise `NotImplementedError`. `γ`, `Θ`,
+  log-likelihood, distribution, density and quantile match R
+  `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (fixtures
+  `reference/stram_onehot_bs_boxcox_*`). (#107)
+
 ## [0.4.0] — 2026-05-25
 
 ### Performance

@@ -2016,3 +2016,148 @@ writeLines(format(as.numeric(haz_mv), digits = 15),
 
 cat(sprintf("stram_bs_bs mev ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
             n_mv, p_mv, q_mv, length(gamma_mv), ll_mv))
+
+# ---------------------------------------------------------------------------
+# BoxCox(interacting=..., scaling=...) — issue #107.
+#
+# The stratified, scaled Box-Cox model of ADR 0003 Decision 6, fitted through
+# the R ``tram`` formula interface as the no-shift ``stram`` model
+#
+#     BoxCox(y | s ~ 1 | z)
+#
+# i.e. h(y | s, z) = (a(y)ᵀ Θ e_s) · exp(0.5 · z · γ) with a Normal link.  The
+# stratum s is a 3-level factor; mltpy's analogue is
+# ``BoxCox(interacting=OneHotBasis(K=3), scaling=z)``.  tram encodes s with
+# treatment contrasts — columns ``Bs_i(y):(Intercept)``, ``Bs_i(y):sb``,
+# ``Bs_i(y):sc`` — so its Θ is a linear reparametrisation of mltpy's one-hot
+# Θ: column k of the one-hot Θ is the intercept column plus contrast column k
+# (zero for the reference level).  The function space, logLik and γ are
+# identical at an interior MLE; ``*_theta_onehot.txt`` stores the mapped Θ.
+#
+# Data: within stratum k, h = exp(0.5·γ·z)·sl_k·(y − mu_k) with γ = 0.4 —
+# linear in y, hence exactly in the Bernstein (order 2) span, with different
+# slopes and locations per stratum (crossing conditional CDFs).  n = 900 keeps
+# the MLE strictly interior (every Θ column increment > 1).
+#
+# Precision: as in the stram_bs_bs_mev block, tram's default auglag stops
+# ~5e-3 short of the optimum on Θ, so the fit is polished with plain BFGS at
+# reltol = 1e-15 from that solution (``checkconstraints = TRUE`` confirms
+# feasibility); a second polish moves θ by ~1e-16.
+#
+# ``predict()`` on a stram fit errors inside mlt (observed with mlt 1.8.4), so
+# h is assembled from the tensor basis directly and the stopifnot() below
+# checks it reproduces logLik(fit).  Normal link: F = Φ(h), f = φ(h)·h'; the
+# quantile solves h(y) = Φ⁻¹(p) by uniroot on the support.
+#
+# Fixtures emitted (prefix ``stram_onehot_bs_boxcox_``):
+#   *_y_train.txt       — response, length n
+#   *_s_train.txt       — stratum codes 0..K-1 (mltpy OneHotBasis labels)
+#   *_x_s_train.txt     — scaling covariate z, length n
+#   *_y_support.txt     — "a b" on one line
+#   *_theta.txt         — raw coef(fit, with_baseline = TRUE): [Θ (tram
+#                         treatment-contrast order) | γ]
+#   *_theta_onehot.txt  — one-hot Θ, (p, K) flattened row-major (mltpy vec_C)
+#   *_gamma.txt         — scale coefficient coef(fit)[fit$scalecoef], length 1
+#   *_loglik.txt        — scalar logLik
+#   *_grid.txt          — prediction grid, one "y s z" row per line
+#   *_distribution.txt  — F(y | s, z) at each grid row
+#   *_density.txt       — f(y | s, z) at each grid row
+#   *_qgrid.txt         — quantile grid, one "p s z" row per line
+#   *_quantile.txt      — F⁻¹(p | s, z) at each quantile-grid row
+# ---------------------------------------------------------------------------
+set.seed(20261101)
+n_bx <- 900L
+p_bx <- 3L  # number of Bernstein-y functions
+lev_bx <- c("a", "b", "c")
+s_bx   <- factor(sample(lev_bx, n_bx, replace = TRUE), levels = lev_bx)
+z_bx   <- rnorm(n_bx)
+sl_bx  <- c(a = 1.5, b = 2.5, c = 2.0)[as.character(s_bx)]
+mu_bx  <- c(a = 0.0, b = 0.5, c = -0.3)[as.character(s_bx)]
+y_bx   <- mu_bx + rnorm(n_bx) / (sl_bx * exp(0.5 * 0.4 * z_bx))
+sup_bx <- c(min(y_bx) - 0.2, max(y_bx) + 0.2)
+df_bx  <- data.frame(y = y_bx, s = s_bx, z = z_bx)
+
+fit0_bx <- suppressWarnings(  # "highly experimental" stram warning
+  BoxCox(y | s ~ 1 | z, data = df_bx, order = p_bx - 1L, support = sup_bx,
+         bounds = c(-Inf, Inf)))
+fit_bx <- suppressWarnings(
+  BoxCox(y | s ~ 1 | z, data = df_bx, order = p_bx - 1L, support = sup_bx,
+         bounds = c(-Inf, Inf), theta = coef(fit0_bx, with_baseline = TRUE),
+         optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                       method = "BFGS",
+                                       maxit = 100000L,
+                                       reltol = 1e-15))["optim"]))
+stopifnot(inherits(fit_bx, "stram"), fit_bx$convergence == 0)
+
+theta_bx <- coef(fit_bx, with_baseline = TRUE)
+ll_bx    <- as.numeric(logLik(fit_bx))
+gamma_bx <- theta_bx[fit_bx$scalecoef]
+
+# Tensor basis with the same response basis and treatment contrasts as tram;
+# its column names match the baseline entries of coef(fit).
+bb_bx <- b(bresponse = Bernstein_basis(numeric_var("y", support = sup_bx),
+                                       order = p_bx - 1L, ui = "increasing"),
+           binteracting = as.basis(~ s, data = df_bx))
+th0_bx <- theta_bx[colnames(model.matrix(bb_bx, data = df_bx))]
+.h_bx <- function(d) {
+  f <- exp(0.5 * d$z * gamma_bx)
+  list(h  = drop(model.matrix(bb_bx, data = d) %*% th0_bx) * f,
+       hp = drop(model.matrix(bb_bx, data = d, deriv = c(y = 1)) %*% th0_bx) * f)
+}
+tr_bx <- .h_bx(df_bx)
+stopifnot(isTRUE(all.equal(sum(dnorm(tr_bx$h, log = TRUE) + log(tr_bx$hp)),
+                           ll_bx, tolerance = 1e-10)))
+
+# One-hot Θ: rows = Bernstein-y functions, columns = strata a, b, c.
+C_bx <- matrix(th0_bx, nrow = p_bx)  # columns: (Intercept), sb, sc
+Theta_bx <- cbind(C_bx[, 1], C_bx[, 1] + C_bx[, -1, drop = FALSE])
+stopifnot(min(diff(Theta_bx)) > 1)
+
+grid_bx <- expand.grid(y = quantile(y_bx, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       s = factor(lev_bx, levels = lev_bx),
+                       z = c(-1, 0, 1.5))
+hg_bx <- .h_bx(grid_bx)
+cdf_bx <- pnorm(hg_bx$h)
+pdf_bx <- dnorm(hg_bx$h) * hg_bx$hp
+
+qgrid_bx <- expand.grid(p = c(0.1, 0.5, 0.9),
+                        s = factor(lev_bx, levels = lev_bx),
+                        z = c(-1, 0, 1.5))
+q_bx <- vapply(seq_len(nrow(qgrid_bx)), function(i) {
+  r <- qgrid_bx[i, ]
+  uniroot(function(yy) .h_bx(data.frame(y = yy, s = r$s, z = r$z))$h -
+            qnorm(r$p), interval = sup_bx, tol = 1e-14)$root
+}, numeric(1))
+
+.codes_bx <- function(g) cbind(g[[1]], as.integer(g$s) - 1L, g$z)
+writeLines(format(y_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_y_train.txt"))
+writeLines(as.character(as.integer(s_bx) - 1L),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_s_train.txt"))
+writeLines(format(z_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_x_s_train.txt"))
+writeLines(paste(format(sup_bx[1], digits = 15), format(sup_bx[2], digits = 15)),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_y_support.txt"))
+writeLines(format(theta_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_theta.txt"))
+writeLines(format(flatten_row_major(Theta_bx), digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_theta_onehot.txt"))
+writeLines(format(as.numeric(gamma_bx), digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_gamma.txt"))
+writeLines(format(ll_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_loglik.txt"))
+write.table(format(.codes_bx(grid_bx), digits = 15),
+            file = file.path(out_dir, "stram_onehot_bs_boxcox_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(cdf_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_distribution.txt"))
+writeLines(format(pdf_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_density.txt"))
+write.table(format(.codes_bx(qgrid_bx), digits = 15),
+            file = file.path(out_dir, "stram_onehot_bs_boxcox_qgrid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(q_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_quantile.txt"))
+
+cat(sprintf("stram_onehot_bs boxcox ref: n=%d, p=%d, K=%d, ll=%.6f, gamma=%.6f\n",
+            n_bx, p_bx, length(lev_bx), ll_bx, gamma_bx))
