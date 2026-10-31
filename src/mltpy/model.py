@@ -794,8 +794,10 @@ class ConditionalTransformationModel:
             New-data scaling-design matrix of shape ``(m, q_s)``, required
             when the model was fitted with ``scaling=``.  Enters via
             ``h(y|x_d, x_s) = h_0(y) · exp(0.5 · x_s · γ) + x_d · β`` —
-            same parameterisation as :meth:`fit`.  Pass ``None`` for
-            non-scaling fits.
+            same parameterisation as :meth:`fit`.  On ``InteractionBasis``
+            models (ADR 0003) there is no ``β`` block and the factor scales
+            the interacting baseline: ``h = (a(y) ⊗ b(x))ᵀ vec(Θ) ·
+            exp(0.5 · x_s · γ)``.  Pass ``None`` for non-scaling fits.
         what:
             Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
             ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
@@ -919,7 +921,7 @@ class ConditionalTransformationModel:
                         "(issue #104)."
                     )
                 return self._predict_quantile_interaction(
-                    y_arr, X_arr, offset=offset_arr
+                    y_arr, X_arr, offset=offset_arr, X_scale=X_scale_arr
                 )
             x_1d = self.basis._coerce_x(X_arr)
             design = self.basis.evaluate(y_arr, x_1d)  # (m, p*q)
@@ -1312,12 +1314,17 @@ class ConditionalTransformationModel:
         probs: NDArray[np.float64],
         X: NDArray[np.float64],
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Row-wise quantile inversion for ``InteractionBasis`` models.
 
         For each row ``i``, solve ``h(q_i | x_i) = F⁻¹(probs_i) − offset_i``
         where ``h(y|x) = a(y)ᵀ Θ b(x)`` and ``F⁻¹`` is the base-distribution
         quantile.  Per-row bracket: ``[h(a, x_i) + ε, h(b, x_i) − ε]``.
+
+        For scaled models (ADR 0003) ``h(y|x, x_s) = a(y)ᵀ Θ b(x) · f_i`` with
+        ``f_i = exp(0.5 · x_s,i · γ) > 0``; the target is divided by ``f_i``
+        so inversion runs against the unscaled baseline and its bracket.
 
         Parameters
         ----------
@@ -1329,6 +1336,9 @@ class ConditionalTransformationModel:
         offset:
             Optional per-row offset added to ``h`` before inversion,
             shape ``(m,)`` or ``None``.
+        X_scale:
+            Scaling-design matrix of shape ``(m, q_s)`` for models fitted
+            with ``scaling=``; ``None`` otherwise.
 
         Returns
         -------
@@ -1351,7 +1361,8 @@ class ConditionalTransformationModel:
 
         p = self.basis.n_y_params
         q = self.basis.n_x_params
-        Theta = self.theta_.reshape(p, q)  # (p, q)
+        # θ = [vec_C(Θ) | γ]: only the leading p·q block reshapes to Θ.
+        Theta = self.theta_[: p * q].reshape(p, q)  # (p, q)
 
         x_1d = self.basis._coerce_x(X)
         B_x = self.basis.x_basis.evaluate(x_1d)  # (m, q)
@@ -1373,9 +1384,12 @@ class ConditionalTransformationModel:
             else np.asarray(offset, dtype=np.float64)
         )
         z_raw = dist.ppf(probs_arr) - shift
+        if X_scale is not None:
+            z_raw = z_raw / np.exp(0.5 * (X_scale @ self.theta_[p * q :]))
         if np.any((z_raw < z_min) | (z_raw > z_max)):
             warnings.warn(
-                "predict(what='quantile'): F⁻¹(p) − offset exceeds the per-row "
+                "predict(what='quantile'): F⁻¹(p) − offset (divided by "
+                "exp(0.5·x_s·γ) on scaled models) exceeds the per-row "
                 "bracket [h(a, x_i)+ε, h(b, x_i)−ε] at one or more points; "
                 "clipping for numerical stability.  Quantiles at these points "
                 "are saturated at the basis endpoints, not the true asymptotic "
