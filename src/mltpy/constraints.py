@@ -317,15 +317,68 @@ def _assemble_constraint_arrays(
     return D, support_rows
 
 
+def _interaction_support_rows(
+    basis: "InteractionBasis",
+    q_s: int,
+    X: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Exponential support rows ``(a(a) ⊗ b(x_i))ᵀ vec(Θ) ≥ −offset_i``.
+
+    See :func:`build_constraint_matrices_interaction` (Notes) for the math.
+
+    Returns
+    -------
+    rows : NDArray of shape ``(n, p*q)``
+        One row per training observation.
+    rhs : NDArray of shape ``(n,)``
+        ``−offset`` or zeros.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` is missing, ``q_s > 0``, or ``offset`` has the wrong length.
+    """
+    if X is None:
+        raise ValueError(
+            "X must be provided when nonneg_lower=True on an InteractionBasis: "
+            "the exponential support rows h(a|x_i) >= 0 need one b(x_i) per "
+            "training observation."
+        )
+    if q_s > 0:
+        raise ValueError(
+            "nonneg_lower=True requires q_s=0 on an InteractionBasis; got "
+            f"q_s={q_s}. The exponential support row is non-linear in γ "
+            "(see docs/adr/0003-scaling-with-interaction.md, Decision 5)."
+        )
+    x = basis._coerce_x(np.asarray(X, dtype=np.float64))
+    n = x.shape[0]
+    a = basis.support[0]
+    rows = basis.evaluate(np.full(n, a, dtype=np.float64), x)  # (n, p*q)
+    if offset is None:
+        return rows, np.zeros(n, dtype=np.float64)
+    off = np.asarray(offset, dtype=np.float64).ravel()
+    if off.shape[0] != n:
+        raise ValueError(
+            f"offset must have one entry per row of X ({n}); got {off.shape[0]}."
+        )
+    return rows, -off
+
+
 def build_constraint_matrices_interaction(
     basis: "InteractionBasis",
     q_s: int = 0,
+    *,
+    nonneg_lower: bool = False,
+    X: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> ConstraintMatrices:
     """Build constraint matrices for an :class:`~mltpy.basis.InteractionBasis`.
 
     Constructs the Kronecker inequality ``(D ⊗ I_q) @ vec(Θ) ≥ 0`` that
     enforces column-wise monotonicity: ``D @ Θ[:, j] ≥ 0`` for every
-    column ``j = 0, …, q-1``.
+    column ``j = 0, …, q-1``.  With ``nonneg_lower=True`` it appends the
+    exponential-link support rows ``h(a|x_i) ≥ 0`` (ADR 0005, Decision 1).
 
     Parameters
     ----------
@@ -336,20 +389,68 @@ def build_constraint_matrices_interaction(
         parameter vector is ``[vec_C(Θ) | γ]`` and ``q_s`` zero columns are
         appended to every constraint matrix so their width matches; ``γ`` is
         unconstrained (ADR 0003 Decision 3).
+    nonneg_lower:
+        If ``True``, append one support row per training observation so the
+        transformation stays in the exponential support ``[0, ∞)`` at the
+        lower support end ``a`` of the y-basis.  Required for
+        ``base_distribution="exponential"``.
+    X:
+        Training covariates for the x-basis, shape ``(n,)`` or ``(n, 1)``.
+        Required when ``nonneg_lower=True``, ignored otherwise.
+    offset:
+        Optional per-observation offset, shape ``(n,)``.  Only consulted when
+        ``nonneg_lower=True``; it moves the support-row right-hand side to
+        ``−offset_i``.
 
     Returns
     -------
     ConstraintMatrices
-        ``A_ineq`` has shape ``((p-1)*q, p*q + q_s)``.  ``b_ineq`` is
-        all-zeros.  ``C_eq`` is a zero-row matrix (no equality constraints).
+        ``A_ineq`` has shape ``((p-1)*q + n_s, p*q + q_s)``, where ``n_s`` is
+        ``n`` with ``nonneg_lower=True`` and 0 otherwise.  ``b_ineq`` is zero
+        on the monotonicity rows and ``−offset`` (or zero) on the support
+        rows.  ``C_eq`` is a zero-row matrix (no equality constraints).
         ``d_eq`` is a zero-length array.
 
     Raises
     ------
     ValueError
-        If the x-basis type is not supported for closed-form constraints.
-        (This is already checked at :class:`~mltpy.basis.InteractionBasis`
-        construction time, so this branch is a safety net.)
+        If the x-basis type is not supported for closed-form constraints
+        (already checked at :class:`~mltpy.basis.InteractionBasis`
+        construction time, so this branch is a safety net); if
+        ``nonneg_lower=True`` without ``X``, with ``q_s > 0``, or with an
+        ``offset`` whose length differs from the number of rows of ``X``.
+
+    Notes
+    -----
+    **Support rows (ADR 0005).**  Every column of ``Θ`` is non-decreasing
+    and ``b(x)`` is non-negative, so ``h(·|x)`` is non-decreasing in ``y``
+    and ``min_y h(y|x_i) = h(a|x_i)``.  The rule ``h(a|x_i) ≥ 0`` is the
+    linear row
+
+        (a(a) ⊗ b(x_i))ᵀ vec(Θ) ≥ −offset_i,
+
+    which for a Bernstein y-basis (``a(a) = e_0``) reads
+    ``Θ[0, :] · b(x_i) ≥ −offset_i``.  Because ``b(x)`` is non-linear in
+    ``x``, these rows do not imply ``h(a|x) ≥ 0`` between training points;
+    ``predict`` checks new rows instead.
+
+    The rule is not available with ``q_s > 0``: under scaling the row is
+    non-linear in ``γ`` (ADR 0003 Decision 5).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from mltpy.basis import BernsteinBasis, InteractionBasis
+    >>> ib = InteractionBasis(
+    ...     BernsteinBasis(order=2, support=(0.0, 1.0)),
+    ...     BernsteinBasis(order=1, support=(0.0, 1.0)),
+    ... )
+    >>> cm = build_constraint_matrices_interaction(
+    ...     ib, nonneg_lower=True, X=np.array([0.25, 0.75])
+    ... )
+    >>> cm.A_ineq[-2:]
+    array([[0.75, 0.25, 0.  , 0.  , 0.  , 0.  ],
+           [0.25, 0.75, 0.  , 0.  , 0.  , 0.  ]])
     """
     from mltpy.basis import _SUPPORTED_X_BASIS_TYPES
 
@@ -378,11 +479,16 @@ def build_constraint_matrices_interaction(
             A_ineq = A_kron
     else:
         A_ineq = np.zeros((0, total), dtype=np.float64)
+    b_ineq = np.zeros(A_ineq.shape[0], dtype=np.float64)
 
-    m_ineq = A_ineq.shape[0]
+    if nonneg_lower:
+        support_rows, support_rhs = _interaction_support_rows(basis, q_s, X, offset)
+        A_ineq = np.vstack([A_ineq, support_rows])
+        b_ineq = np.concatenate([b_ineq, support_rhs])
+
     return ConstraintMatrices(
         A_ineq=A_ineq,
-        b_ineq=np.zeros(m_ineq, dtype=np.float64),
+        b_ineq=b_ineq,
         C_eq=np.zeros((0, total), dtype=np.float64),
         d_eq=np.zeros(0, dtype=np.float64),
     )

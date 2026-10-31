@@ -19,7 +19,8 @@ if `h(y | x)` never goes negative on the response support. This is the one
 base distribution that needs a **support constraint** on top of the Bernstein
 monotonicity rows `D θ_b ≥ 0`.
 
-Notation (shift basis, `InteractionBasis` excluded):
+Notation (shift basis; the unscaled `InteractionBasis` path is covered by the
+[#158 amendment](#amendment-2026-11-01-158--unscaled-interactionbasis-path)):
 
 - `[a, b]`: the Bernstein support of the response basis. Only the first
   Bernstein polynomial is non-zero at `a`, and it equals 1 there, so
@@ -250,6 +251,70 @@ answer and replaced by an explicit-constraint reference where it does not.
 
 ---
 
+## Amendment (2026-11-01, [#158](https://github.com/RMKruse/mltpy/issues/158)) — Unscaled `InteractionBasis` Path
+
+**Problem.** `InteractionBasis` with `base_distribution="exponential"` and no
+`scaling=` was accepted, but the interaction fit enforced only the Kronecker
+monotonicity rows `(D ⊗ I_q) vec(Θ) ≥ 0`. The exact-data log-likelihood
+`Σ −h(y_i|x_i) + log h'(y_i|x_i)` is then unbounded above, and the fit ran off
+to `h → −∞` (logLik ≈ +8·10³, `Θ` ≈ −3·10⁴ on the issue's reproduction).
+
+**Decision.** Decision 1's lower-support-end rule applies unchanged on the
+unscaled interaction path. With `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` and
+column-wise non-decreasing `Θ`, `b(x) ≥ 0` makes `h(·|x)` non-decreasing in
+`y`, so `min_y h(y|x_i) = h(a|x_i)` and the rule is one **linear** row per
+training observation:
+
+    (a(a) ⊗ b(x_i))ᵀ vec(Θ) ≥ −offset_i,    i = 1, …, n.
+
+For a Bernstein y-basis `a(a) = e_0`, so the row reads `Θ[0, :] · b(x_i) ≥
+−offset_i`. `build_constraint_matrices_interaction(nonneg_lower=True, X=…,
+offset=…)` appends these rows below the Kronecker block, and all three solvers
+(auglag, SLSQP, trust-constr) consume `A_ineq θ ≥ b_ineq` with the non-zero
+right-hand side. The start point and every perturb-and-project restart are
+lifted column-wise so `a(a)ᵀ Θ[:, j] ≥ max(0, max_i(−offset_i))`, which (the
+x-basis being a non-negative partition of unity) makes every support row
+feasible.
+
+**Offset.** These rows include the offset in their right-hand side, so they
+enforce exactly `h(a|x_i) ≥ 0` with `h` as the likelihood evaluates it. The
+shift path's `nonneg_lower` rows `θ_b[0] + x_d,i · β ≥ 0` currently do not
+include the offset; that difference only matters for fits with a non-zero
+`offset` and is left to a follow-up; it is out of scope for #158.
+
+**Rejected — the per-column variant `Θ[0, j] ≥ 0` (`q` rows).** Because
+`h(a|x) = Σ_j Θ[0, j] b_j(x)` is a convex combination of `Θ[0, :]`, these rows
+guarantee `h(a|x) ≥ 0` on the whole x-support and would make a predict-side
+check unnecessary. They are, however, sufficient and not necessary for a
+Bernstein x-basis, so the fit would be stricter than the rule Decision 1
+fixes for the rest of the link. The training-row rule was kept so that the
+exponential link has one support rule on every path. In practice the two
+often coincide: with exact data and no offset the likelihood presses every
+`h(a|x_i)` to 0, which pins `Θ[0, :] = 0` once the `b(x_i)` span `ℝ^q`. They
+differ under offsets or under-determined designs.
+
+**Prediction.** `b(x)` is non-linear in `x`, so the training rows do **not**
+guarantee `h(a|x) ≥ 0` between training points, unlike the unscaled shift
+path, where `h(a|x)` is affine in `x`. `predict` on the interaction path
+therefore runs the [#157](https://github.com/RMKruse/mltpy/issues/157) check
+for every `what`, computing `h(a|x_new)` from the design at `y = a` (offset
+included). It emits the same `UserWarning` (rows with `h(a|x) < −1e-7`) and
+returns the values unclamped. `_predict_quantile_interaction` reports
+`p < F(a|x)` through the shared `_warn_quantile_saturation` helper with the
+support-atom wording.
+
+**Validation.** R `mlt` has no support rule (Decision 1), so there is no R
+parity fixture. Tests (`tests/test_interaction_exponential_support.py`) check
+the constraint rows, training-row feasibility for every solver, agreement
+between solvers, the offset, in-hull and extrapolated predict warnings, and
+the quantile wording.
+
+**Scope.** Exact data only, as for every interaction fit. `scaling=` +
+`InteractionBasis` + exponential stays rejected (ADR 0003 Decision 5): under
+scaling the row is non-linear in `γ`.
+
+---
+
 ## Consequences
 
 - **ADR 0002 Decision 3 is superseded** for its exponential corner case. Its
@@ -260,7 +325,9 @@ answer and replaced by an explicit-constraint reference where it does not.
   via the nonlinear block. The `InteractionBasis` rejection in `optimize()`
   stays, and `MLT.__init__` keeps rejecting that combination.
 - **Unscaled exponential path:** no code change. Decision 1 ratifies the
-  existing `nonneg_lower` rows.
+  existing `nonneg_lower` rows. The unscaled `InteractionBasis` path gained
+  the equivalent rows in [#158](https://github.com/RMKruse/mltpy/issues/158)
+  (see the amendment above).
 - **Prediction at new `x`.** The training rows guarantee `h(a | x) ≥ 0` only
   at training `x`. Unscaled, that extends to the convex hull of training `X`.
   Scaled, `θ_b[0] · e^{0.5 · x_s · γ} + x_d · β` is convex in `x_s` whenever

@@ -135,6 +135,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `θ_b[0] ≥ 0` row mltpy's auglag resolves to ~1e-8. The auglag
   `exponential_n50_seed43` fixture already enforced the lower-support-end
   rows explicitly and is unaffected. mltpy's fitting code is unchanged. (#156)
+- `InteractionBasis` with `base_distribution="exponential"` enforced no support
+  rule: only the Kronecker monotonicity rows were built, so the exact-data
+  log-likelihood was unbounded and the fit ran off to `h → −∞` (issue
+  reproduction: `converged=False`, logLik +7986, `Θ[0] ≈ −3·10⁴`, CDF at `y = a`
+  ≈ −1e13). ADR 0005's lower-support-end rule now applies on the unscaled
+  interaction path as one linear row per training observation,
+  `(a(a) ⊗ b(x_i))ᵀ vec(Θ) ≥ −offset_i`, via
+  `build_constraint_matrices_interaction(nonneg_lower=True, X=..., offset=...)`.
+  Auglag, SLSQP and trust-constr all honour the non-zero right-hand side, and
+  the reproduction now converges at logLik −3.756 with `h(a|x_i) ≥ 0`. Because
+  `b(x)` is non-linear in `x`, the training rows do not cover new `x` even
+  inside the hull, so `predict` on this path emits the #157 `h(a|x) < 0`
+  `UserWarning` (values unclamped), and quantiles for `p < F(a|x)` use the
+  support-atom wording, which `simulate()` drops as on the shift path (#159).
+  The interaction quantile clip message now comes from the shared helper.
+  `scaling=` + `InteractionBasis` + exponential stays rejected. Recorded as an
+  amendment to ADR 0005. (#158)
 
 ## [0.4.0] — 2026-05-25
 

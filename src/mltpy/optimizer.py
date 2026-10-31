@@ -938,6 +938,7 @@ def optimize(
             weights=weights,
             offset=offset,
             scaling=scaling,
+            nonneg_lower=base_distribution == "exponential",
         )
 
     q_s = scaling.shape[1] if scaling is not None else 0
@@ -1227,6 +1228,7 @@ def _optimize_interaction(
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
     scaling: NDArray[np.float64] | None = None,
+    nonneg_lower: bool = False,
 ) -> OptimizationResult:
     """Optimisation path for InteractionBasis (stratified / fully-interacting CTM).
 
@@ -1240,6 +1242,13 @@ def _optimize_interaction(
     ``[vec_C(Θ) | γ]`` (ADR 0003): the γ block is initialised to zeros, the
     Kronecker constraint is padded with ``q_s`` zero columns, and perturb-
     and-project restarts touch only the ``vec(Θ)`` block.
+
+    When ``nonneg_lower`` is ``True`` (``base_distribution="exponential"``)
+    the constraint set also carries one support row per training observation,
+    ``h(a|x_i) = (a(a) ⊗ b(x_i))ᵀ vec(Θ) + offset_i ≥ 0`` (ADR 0005,
+    Decision 1).  The start point and every restart are lifted so that each
+    column's ``h(a)`` value is at least ``c = max(0, max_i(−offset_i))``; with
+    a partition-of-unity x-basis that makes every support row feasible.
     """
     if X is None:
         raise ValueError(
@@ -1249,13 +1258,40 @@ def _optimize_interaction(
     x_arr = basis._coerce_x(X)
 
     q_s = scaling.shape[1] if scaling is not None else 0
-    cm = build_constraint_matrices_interaction(basis, q_s=q_s)
+    cm = build_constraint_matrices_interaction(
+        basis,
+        q_s=q_s,
+        nonneg_lower=nonneg_lower,
+        X=x_arr if nonneg_lower else None,
+        offset=offset if nonneg_lower else None,
+    )
 
     p = basis.n_y_params
     q = basis.n_x_params
     pq = p * q
 
-    Theta_init = np.outer(np.linspace(0.0, 1.0, p), np.ones(q))
+    # Exponential support (ADR 0005): every column's lower-end value
+    # a(a)ᵀ Θ[:, j] must reach c = max(0, max_i(−offset_i)).  The x-basis is
+    # a non-negative partition of unity, so h(a|x_i) + offset_i ≥ c +
+    # offset_i ≥ 0 for every row.  ``basis_at_lower`` = a(a), which is e_0
+    # for a Bernstein y-basis.
+    basis_at_lower = basis.y_basis.evaluate(
+        np.full(1, basis.support[0], dtype=np.float64)
+    )[0]
+    support_floor = 0.0
+    if nonneg_lower and offset is not None:
+        support_floor = max(0.0, float(np.max(-np.asarray(offset, dtype=np.float64))))
+
+    def lift_to_support(Theta: NDArray[np.float64]) -> NDArray[np.float64]:
+        if not nonneg_lower:
+            return Theta
+        # Adding δ to a whole column raises h(a) for that column by
+        # δ·Σ_k a_k(a) = δ for a partition-of-unity y-basis, and keeps the
+        # column non-decreasing.
+        deficit = np.maximum(support_floor - basis_at_lower @ Theta, 0.0)  # (q,)
+        return cast(NDArray[np.float64], Theta + deficit[None, :])
+
+    Theta_init = lift_to_support(np.outer(np.linspace(0.0, 1.0, p), np.ones(q)))
     theta_init = np.concatenate([Theta_init.ravel(), np.zeros(q_s, dtype=np.float64)])
 
     if isinstance(config.random_state, np.random.Generator):
@@ -1317,6 +1353,7 @@ def _optimize_interaction(
         Theta_try = theta_seed[:pq].reshape(p, q) + rng.normal(0.0, 0.1, size=(p, q))
         for j in range(q):
             Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
+        Theta_try = lift_to_support(Theta_try)
         return np.concatenate([Theta_try.ravel(), theta_seed[pq:]])
 
     def hess(theta: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -1397,7 +1434,9 @@ def _interaction_auglag(
     ia_final_theta = best_result.theta
     ia_final_nll = best_nll
     if config.polish and np.all(best_result.mu_ineq < 1e-6):
-        theta_polished = _ncg_polish(best_result.theta, obj, hess, 0, A_ineq=cm.A_ineq)
+        theta_polished = _ncg_polish(
+            best_result.theta, obj, hess, 0, A_ineq=cm.A_ineq, b_ineq=cm.b_ineq
+        )
         if theta_polished is not None:
             ia_final_theta = theta_polished
             ia_final_nll = true_nll(theta_polished)
@@ -1432,25 +1471,27 @@ def _interaction_scipy(
 ) -> OptimizationResult:
     """SLSQP / trust-constr path for the interaction basis.
 
-    Both methods consume the same ``A_ineq`` block-diagonal matrix that
-    :func:`~mltpy.constraints.build_constraint_matrices_interaction` builds —
-    SLSQP via a ``type='ineq'`` dict and trust-constr via a
-    :class:`scipy.optimize.LinearConstraint` — without code changes anywhere
-    else.  ``obj_scale`` is the factor ``obj`` was divided by
+    Both methods consume the same ``A_ineq θ ≥ b_ineq`` rows that
+    :func:`~mltpy.constraints.build_constraint_matrices_interaction` builds
+    (Kronecker monotonicity, plus the exponential support rows whose
+    right-hand side is ``−offset``) — SLSQP via a ``type='ineq'`` dict and
+    trust-constr via a :class:`scipy.optimize.LinearConstraint`.
+    ``obj_scale`` is the factor ``obj`` was divided by
     (:func:`_solver_weights`); it restores the solver's ``.fun`` / ``.jac``.
     """
     A_ineq = cm.A_ineq
+    b_ineq = cm.b_ineq
 
     if config.solver == "slsqp":
         constraints: Any = [
             {
                 "type": "ineq",
-                "fun": lambda theta, _A=A_ineq: _A @ theta,
+                "fun": lambda theta, _A=A_ineq, _b=b_ineq: _A @ theta - _b,
                 "jac": lambda theta, _A=A_ineq: _A,
             }
         ]
     else:  # trust-constr
-        constraints = [LinearConstraint(A_ineq, lb=0.0, ub=np.inf)]
+        constraints = [LinearConstraint(A_ineq, lb=b_ineq, ub=np.inf)]
 
     options = _scipy_options(config)
 
@@ -1500,6 +1541,7 @@ def _ncg_polish(
     n_params: int,
     *,
     A_ineq: NDArray[np.float64] | None = None,
+    b_ineq: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64] | None:
     """Newton-CG polish: trust-ncg from auglag's θ-hat using the analytical Hessian.
 
@@ -1519,8 +1561,10 @@ def _ncg_polish(
         when ``A_ineq`` is provided; the interaction path passes ``0``.
     A_ineq:
         Optional inequality constraint matrix.  When provided, feasibility is
-        checked via ``A_ineq @ theta_polished >= 0`` instead of the shift-model
-        ``D @ theta_b >= 0`` check.
+        checked via ``A_ineq @ theta_polished >= b_ineq`` instead of the
+        shift-model ``D @ theta_b >= 0`` check.
+    b_ineq:
+        Right-hand side paired with ``A_ineq``; zeros when ``None``.
 
     Returns
     -------
@@ -1547,7 +1591,8 @@ def _ncg_polish(
         return None
 
     if A_ineq is not None:
-        if np.any(A_ineq @ theta_new < -1e-8):
+        rhs = b_ineq if b_ineq is not None else 0.0
+        if np.any(A_ineq @ theta_new - rhs < -1e-8):
             return None
     elif n_params >= 2 and np.any(np.diff(theta_new[:n_params]) < -1e-8):
         return None
