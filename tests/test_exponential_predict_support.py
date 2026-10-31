@@ -292,3 +292,104 @@ class TestQuantileSupportAtom:
         (msg,) = _saturation_warnings(rec)
         assert "support atom" not in msg
         assert "asymptotic limit" in msg
+
+
+def _atom_hits(rec: list[warnings.WarningMessage]) -> list[warnings.WarningMessage]:
+    """Recorded support-atom quantile warnings (issue #157 wording)."""
+    return [w for w in rec if "support atom" in str(w.message)]
+
+
+class TestSimulateSupportAtom:
+    """``simulate()`` hits the atom at ``a`` by design (issue #159).
+
+    Draws ``u ~ Uniform(0, 1)`` with ``u < F(a|x)`` invert to the support atom
+    ``a``; that is correct sampling, so ``simulate()`` must not report it.  The
+    genuine warnings (``h(a|x) < 0`` and the upper-end bracket clip) still pass
+    through, attributed to the caller of ``simulate()``.
+    """
+
+    _N = 20_000
+
+    @pytest.mark.parametrize("x0", [0.0, 0.5, 1.0])
+    def test_atom_draws_do_not_warn(self, expo_fit: ExpoFit, x0: float) -> None:
+        model, _ = expo_fit
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.simulate(200, X=np.full((200, 1), x0), random_state=0)
+        assert _atom_hits(rec) == []
+
+    @pytest.mark.parametrize("x0", [0.0, 0.5, 1.0])
+    def test_atom_frequency_matches_cdf_at_lower_end(
+        self, expo_fit: ExpoFit, x0: float
+    ) -> None:
+        """Draws equal ``a`` with probability ``F(a|x) = 1 − exp(−h(a|x))``."""
+        model, _ = expo_fit
+        a = _SUPPORT[0]
+        X = np.full((self._N, 1), x0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            f_a = model.predict(np.array([a]), X_new=X[:1], what="distribution")[0]
+            draws = model.simulate(self._N, X=X, random_state=7)
+        assert f_a > 0.1  # fixture sanity: a non-trivial atom
+        freq = np.mean(np.abs(draws - a) < 1e-8)
+        se = np.sqrt(f_a * (1.0 - f_a) / self._N)
+        assert abs(freq - f_a) < 5.0 * se
+
+    @pytest.mark.parametrize("x_bad", [2.0, 3.0])
+    def test_off_support_warning_passes_through(
+        self, expo_fit: ExpoFit, x_bad: float
+    ) -> None:
+        model, _ = expo_fit
+        X = np.array([[0.5], [x_bad], [0.5]])
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.simulate(3, X=X, random_state=0)
+        hits = [w for w in rec if "h(a|x) < 0" in str(w.message)]
+        assert len(hits) == 1
+        assert "[1]" in str(hits[0].message)
+        assert issubclass(hits[0].category, UserWarning)
+        assert hits[0].filename == __file__
+
+    @pytest.mark.parametrize("x0", [0.0, 0.5])
+    def test_upper_saturation_warning_passes_through(
+        self, expo_fit: ExpoFit, x0: float
+    ) -> None:
+        """``1 − F(b|x) ≈ 5e-4``: a large seeded sample clips at ``θ_b[-1]``."""
+        model, _ = expo_fit
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.simulate(self._N, X=np.full((self._N, 1), x0), random_state=3)
+        hits = [w for w in rec if "asymptotic limit" in str(w.message)]
+        assert len(hits) == 1
+        assert hits[0].filename == __file__
+        assert _atom_hits(rec) == []
+
+    def test_empty_draw_is_silent(self, expo_fit: ExpoFit) -> None:
+        model, _ = expo_fit
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            draws = model.simulate(0, X=np.empty((0, 1)), random_state=0)
+        assert draws.shape == (0,)
+
+    def test_atom_draws_pass_error_filter(self, expo_fit: ExpoFit) -> None:
+        """A user ``error`` filter must not turn routine atom draws into errors."""
+        model, _ = expo_fit
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            draws = model.simulate(50, X=np.full((50, 1), 0.5), random_state=0)
+        assert np.any(np.abs(draws - _SUPPORT[0]) < 1e-8)
+
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_predict_on_same_draws_still_warns(
+        self, expo_fit: ExpoFit, seed: int
+    ) -> None:
+        """An explicit quantile ``predict`` keeps the #157 atom warning."""
+        model, _ = expo_fit
+        X = np.full((50, 1), 0.5)
+        u = np.random.default_rng(seed).uniform(size=50)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.predict(u, X_new=X, what="quantile")
+        (hit,) = _atom_hits(rec)
+        assert hit.filename == __file__
+        assert "point(s)" in str(hit.message)

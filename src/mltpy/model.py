@@ -68,6 +68,18 @@ class ConvergenceWarning(UserWarning):
     """Raised when the optimiser fails to converge within the allowed restarts."""
 
 
+class _SupportAtomWarning(UserWarning):
+    """Internal — the quantile at ``p < F(a|x)`` is the exponential support atom.
+
+    Emitted by ``_warn_quantile_saturation`` under
+    ``base_distribution="exponential"`` (ADR 0005, consequence 3).  A
+    dedicated subclass lets :meth:`ConditionalTransformationModel.simulate`
+    drop exactly this warning, since its uniform draws hit the atom by design,
+    while every other warning from ``predict`` passes through.  Users filtering
+    on :class:`UserWarning` still match it.
+    """
+
+
 class _ProfileInnerFailure(Exception):
     """Internal — signals that one inner refit inside profile-CI failed.
 
@@ -251,7 +263,8 @@ def _warn_quantile_saturation(
     ``p < F(a|x) = 1 − exp(−h(a|x))``: the distribution has a support atom of
     mass ``F(a|x)`` at ``y = a`` (ADR 0005, consequence 3), so the returned
     value ``a`` is the exact quantile, not a numerical saturation.  Those
-    rows get their own wording; every other clip (the upper end, or any clip
+    rows get their own wording and the :class:`_SupportAtomWarning` category
+    (which ``simulate()`` drops); every other clip (the upper end, or any clip
     under another link) keeps the basis-endpoint wording.  Emitted with
     ``stacklevel=4`` (this helper → ``_predict_quantile*`` → ``predict``) so
     that, for a direct call to :meth:`ConditionalTransformationModel.predict`,
@@ -268,7 +281,7 @@ def _warn_quantile_saturation(
             "atom of mass F(a|x) at the lower support end y = a (ADR 0005), "
             f"so the quantile at these points is a = {lower_end:.4g}; this is "
             "the exact value, not a numerical saturation.",
-            UserWarning,
+            _SupportAtomWarning,
             stacklevel=4,
         )
         clipped = z_raw > z_max
@@ -3093,6 +3106,44 @@ class ConditionalTransformationModel:
         ValueError
             If ``X`` is provided but its number of rows does not equal ``n``,
             or if ``X_scale`` shape is inconsistent with the fit.
+
+        Warns
+        -----
+        UserWarning
+            Every warning of the internal ``predict`` call (the ``h(a|x) < 0``
+            exponential support warning, the upper-end bracket saturation,
+            the ``|h| > 30`` clip, ...), re-emitted so that it points at the
+            caller of ``simulate()``.  The support-atom quantile warning is
+            the one exception; see Notes.
+
+        Notes
+        -----
+        Under ``base_distribution="exponential"`` the fitted distribution has
+        a support atom of mass ``F(a|x) = 1 − exp(−h(a|x))`` at the lower
+        support end ``y = a`` (ADR 0005, consequence 3).  On the bisection
+        quantile path a draw therefore equals ``a`` exactly with probability
+        ``F(a|x)``: every ``u < F(a|x)`` inverts to ``a``.  That is correct
+        sampling, not a saturation, so the support-atom warning that an
+        explicit ``predict(what="quantile")`` emits for ``p < F(a|x)`` is not
+        raised here.  Right-censored fits are the exception: their quantiles
+        come from the R ``qmlt``-style grid inversion on ``[0, b]``, which
+        interpolates instead of returning the atom ``a`` exactly.
+
+        The warnings are captured with :func:`warnings.catch_warnings`, which
+        swaps process-global filter state; as with any use of it, concurrent
+        calls from several threads may interleave their filters.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from mltpy.basis import BernsteinBasis
+        >>> from mltpy.model import ConditionalTransformationModel
+        >>> y = np.random.default_rng(0).normal(size=100)
+        >>> m = ConditionalTransformationModel(
+        ...     BernsteinBasis(order=4, support=(-4.0, 4.0))
+        ... ).fit(y)
+        >>> m.simulate(5, random_state=0).shape
+        (5,)
         """
         self._check_is_fitted()
 
@@ -3128,7 +3179,18 @@ class ConditionalTransformationModel:
 
         # Clip away from 0/1 to avoid Φ⁻¹(0) = -inf and Φ⁻¹(1) = +inf.
         u = np.clip(rng.uniform(size=n), _SIMULATE_U_EPS, 1.0 - _SIMULATE_U_EPS)
-        return self.predict(u, X_new=X_arr, X_scale_new=X_scale_arr, what="quantile")
+        # Record predict()'s warnings unfiltered, drop the support atom (hit by
+        # design, issue #159), and re-emit the rest through the caller's
+        # filters, attributed to the caller of simulate().
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            draws = self.predict(
+                u, X_new=X_arr, X_scale_new=X_scale_arr, what="quantile"
+            )
+        for w in caught:
+            if not issubclass(w.category, _SupportAtomWarning):
+                warnings.warn(w.message, w.category, stacklevel=2)
+        return draws
 
     def plot(
         self,
