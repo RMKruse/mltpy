@@ -1584,25 +1584,29 @@ class TestExponentialWithCovariates:
 
 
 @pytest.mark.parametrize(
-    ("name", "theta_file", "y_file", "ll_file"),
+    ("name", "stem", "theta_rtol", "theta_atol"),
     [
-        (
-            "max_extreme_value",
-            "mlt_maxextrval_theta.txt",
-            "mlt_maxextrval_y.txt",
-            "mlt_maxextrval_ll.txt",
-        ),
-        (
-            "exponential",
-            "mlt_exponential_theta.txt",
-            "mlt_exponential_y.txt",
-            "mlt_exponential_ll.txt",
-        ),
+        # Two monotonicity rows are active at the optimum
+        # (theta_b[1] = theta_b[2] = theta_b[3]), so the logLik is flat to ~1e-8
+        # over ~1e-6 moves of theta_b[0]: mltpy stops ~2e-6 from R's θ at a
+        # logLik within 3e-9 of it.  θ is compared at rtol=1e-5 for that reason.
+        ("max_extreme_value", "maxextrval", 1e-5, 1e-7),
+        # The support row theta_b[0] >= 0 is active (ADR 0005 lower-support-end
+        # rule).  mltpy's auglag leaves theta_b[0] ~1e-8 on the feasible side,
+        # so CLAUDE.md's atol=1e-10 cannot hold on that coordinate; the slack
+        # costs λ·theta_b[0] ≈ 200·1e-8 nats, well inside the logLik rtol.
+        ("exponential", "exponential", 1e-6, 1e-7),
     ],
 )
-def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_file):
-    """LL at R's theta matches R; mltpy fit reaches ≥ R's LL minus 0.5 nats."""
-    required = [REF_DIR / f for f in (theta_file, y_file, ll_file)]
+def test_integration_r_reference_new_distributions(name, stem, theta_rtol, theta_atol):
+    """mltpy's fit reaches the R reference optimum in logLik and θ.
+
+    The exponential fixture is an explicit-constraint ``alabama::auglag`` fit
+    on mlt's likelihood under the lower-support-end rule, not a plain
+    ``mlt()`` fit (which stalls against the ``dexp`` -Inf barrier); see the
+    exponential section of ``reference/generate_reference.R`` (issue #156).
+    """
+    required = [REF_DIR / f"mlt_{stem}_{kind}.txt" for kind in ("theta", "y", "ll")]
     if not all(p.exists() for p in required):
         pytest.skip(
             f"{name} reference files not yet generated — "
@@ -1620,17 +1624,18 @@ def test_integration_r_reference_new_distributions(name, theta_file, y_file, ll_
     basis = BernsteinBasis(order=order, support=(0.0, 1.0))
     ll_py_at_theta_r = log_likelihood(theta_r, basis, y_ref, base_distribution=name)
     # Same formula, same data, same theta → exact agreement with R mlt
-    np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(ll_py_at_theta_r, ll_r, rtol=1e-6, atol=1e-10)
 
-    # mltpy's own fit should reach at least R's LL (minus optimiser slack)
     model = MLT(order=order, support=(0.0, 1.0), base_distribution=name).fit(y_ref)
-    ll_py = model.score(y_ref)
-    assert ll_py >= ll_r - 0.5, (
-        f"{name}: Python LL={ll_py:.4f} worse than R LL={ll_r:.4f}"
-    )
+    np.testing.assert_allclose(model.score(y_ref), ll_r, rtol=1e-6, atol=1e-10)
+    np.testing.assert_allclose(model.theta_, theta_r, rtol=theta_rtol, atol=theta_atol)
+
     if name == "exponential":
-        # Feasibility: theta_b[0] >= 0 ensures h(y) >= 0 across support
-        assert model.theta_[0] >= -1e-6
+        # Guard against a stalled fixture: under the lower-support-end rule the
+        # support row is active at the no-covariate MLE, so R's θ_b[0] is 0.
+        assert abs(theta_r[0]) < 1e-8
+        # Feasibility: theta_b[0] >= 0 ensures h(y) >= 0 across the support.
+        assert model.theta_[0] >= 0.0
 
 
 # ---------------------------------------------------------------------------

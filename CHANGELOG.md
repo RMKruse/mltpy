@@ -114,6 +114,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `TestAuglagFirstAttempt` is now relative to |f| (`1e-8·(1 + |f|)`) instead
   of an absolute 1e-6, which the scaled fit met with 6% headroom and failed
   on another platform. (#142)
+- The exponential-link R reference `reference/mlt_exponential_*.txt` came from
+  a plain `mlt()` fit that stalled against the `dexp` −Inf barrier while
+  reporting `convergence = 0` (stored logLik −154.91), and its test only
+  checked `ll_py ≥ ll_R − 0.5`, so it passed trivially. The fixture is now an
+  explicit-constraint `alabama::auglag` fit on mlt's own likelihood under the
+  lower-support-end rule `θ_b[0] ≥ 0` (ADR 0005), multi-started, with the KKT
+  active set and multipliers checked in R and `mlt(fixed = c("Bs1(y)" = 0))` as
+  a cross-check (logLik −7.5084028). `test_integration_r_reference_new_distributions`
+  now compares mltpy's fitted logLik at `rtol=1e-6` and θ at a stated
+  active-boundary tolerance, for both the exponential and max-extreme-value
+  cases. The max-extreme-value fixture was confirmed to be a true optimum (a
+  1e-12-tolerance refit moves θ by ≤ 1e-8), as was the auglag
+  `exponential_n50_seed43` fixture, which already used explicit rows. mltpy's
+  fitting code is unchanged. (#156)
 
 ## [0.4.0] — 2026-05-25
 

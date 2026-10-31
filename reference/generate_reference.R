@@ -242,26 +242,120 @@ writeLines(format(ll_mev, digits = 15),
 cat(sprintf("MaxExtrVal: n=%d, ll=%.6f\n", length(y_mev), ll_mev))
 
 # ---------------------------------------------------------------------------
-# exponential reference
+# exponential reference (issue #156)
 #
-# Fit mlt with todistr = "Exponential" on uncensored data, then write:
+# Model: todistr = "Exponential", order-4 Bernstein on (0, 1), exact data, no
+# covariates.  Writes:
 #   mlt_exponential_theta.txt — Bernstein coefficients (order=4, 5 values)
 #   mlt_exponential_y.txt     — 200 observations on (0, 1)
-#   mlt_exponential_ll.txt    — scalar log-likelihood
+#   mlt_exponential_ll.txt    — scalar log-likelihood (mlt's own loglik at theta)
+#
+# Why plain mlt() is NOT used:
+#   R's .Exponential() carries no support constraint.  What keeps h >= 0 is
+#   only dexp(h, log = TRUE) = -Inf for h < 0, a barrier at the observations
+#   h(y_i) >= 0, while mlt's score uses the smooth extension d log f / dh = -1
+#   everywhere.  The gradient keeps pointing into the -Inf region, the line
+#   search backtracks to a zero step, and mlt() returns convergence = 0 next to
+#   its start.  The previous fixture, from
+#   mlt(theta = seq(0.1, 5, length.out = 5)), stalled at logLik -154.91 against
+#   an optimum of -7.51 (research/exp-scaling-r-route/README.md §11).  mltpy
+#   also enforces a different support rule: the lower-support-end rule
+#   h(a | x_i) >= 0 (ADR 0005 Decision 1), which with no covariates is the
+#   linear row theta_b[0] >= 0, a row R's mlt() never adds.
+#
+# Route:
+#   1. Reference: alabama::auglag on mlt's exact log-likelihood with the rows
+#      theta_b[0] >= 0 and D theta_b >= 0 written out explicitly, started from
+#      10 feasible points.  The objective is the smooth extension
+#      -sum(-h_i + log h'_i), which equals mlt's logLik wherever h_i >= 0
+#      (true for every feasible theta, since then h(y) >= h(0) = theta_b[0]);
+#      it and its gradient are checked against mlt's loglik / scorei below.
+#   2. Cross-check: mlt(fixed = c("Bs1(y)" = 0)).  With no covariates the
+#      support row is active at the MLE: shifting theta_b down in parallel
+#      leaves every monotonicity row and every h'_i unchanged and lowers every
+#      h_i, which strictly raises the likelihood until theta_b[0] = 0.  Pinning
+#      Bs1 therefore poses mltpy's problem to R's own optimiser.  mlt() stops
+#      slightly early on this flat surface (theta off by ~5e-6 along Bs5, logLik
+#      ~3e-10 below the auglag optimum), so it is the cross-check, not the
+#      reference.
+#   Convergence record, enforced with stopifnot: every start converges and
+#   all starts agree; KKT at the reference with active set
+#   {theta_b[0] = 0, theta_b[2] = theta_b[3]}, strictly positive multipliers
+#   and a small stationarity residual; mlt(fixed) agrees on logLik.
 # ---------------------------------------------------------------------------
 
 set.seed(13)
 y_exp  <- runif(200, 0.02, 0.98)
 b_exp  <- Bernstein_basis(m, order = 4, ui = "increasing")
 ctm_exp <- ctm(b_exp, todistr = "Exponential")
-# mlt's default starting theta can be infeasible for Exponential (support
-# [0, ∞)), producing h < 0 and -Inf log-likelihood. Supply a non-negative
-# monotone starting vector so the initial evaluation is finite.
-theta_init_exp <- seq(0.1, 5.0, length.out = 5)
-fit_exp <- mlt(ctm_exp, data = data.frame(y = y_exp), theta = theta_init_exp)
+d_exp  <- data.frame(y = y_exp)
+w_exp  <- rep(1, nrow(d_exp))
+p_exp  <- 5L
 
-theta_exp <- coef(fit_exp)
-ll_exp    <- as.numeric(logLik(fit_exp))
+# mlt's own likelihood machinery (unfitted), used to validate the objective
+# and to compute the stored logLik.
+mlt_exp <- mlt(ctm_exp, data = d_exp, dofit = FALSE)
+
+B_exp  <- model.matrix(b_exp, data = d_exp)
+Bp_exp <- model.matrix(b_exp, data = d_exp, deriv = c(y = 1L))
+nll_exp  <- function(th) sum(B_exp %*% th) - sum(log(Bp_exp %*% th))
+grad_exp <- function(th) colSums(B_exp) - colSums(Bp_exp / drop(Bp_exp %*% th))
+
+# Constraint rows: support theta_b[0] >= 0, then monotonicity D theta_b >= 0.
+A_exp <- rbind(c(1, rep(0, p_exp - 1L)), diff(diag(p_exp)))
+
+th_chk <- c(0.1, 0.5, 1, 2, 4)
+stopifnot(
+  abs(nll_exp(th_chk) + mlt_exp$loglik(th_chk, weights = w_exp)) < 1e-10,
+  max(abs(grad_exp(th_chk) +
+          colSums(mlt_exp$scorei(th_chk, weights = w_exp)))) < 1e-10
+)
+
+set.seed(2024)
+starts_exp <- c(
+  list(seq(0.1, 5.0, length.out = p_exp)),
+  replicate(9, cumsum(c(runif(1, 0, 2), rexp(p_exp - 1L))), simplify = FALSE)
+)
+fits_exp <- lapply(starts_exp, function(s) suppressWarnings(alabama::auglag(
+  par = s, fn = nll_exp, gr = grad_exp,
+  hin = function(th) drop(A_exp %*% th), hin.jac = function(th) A_exp,
+  control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500L,
+                       method = "BFGS", kkt2.check = FALSE),
+  control.optim = list(maxit = 5000L, reltol = 1e-15)
+)))
+conv_exp  <- vapply(fits_exp, `[[`, integer(1), "convergence")
+value_exp <- vapply(fits_exp, `[[`, numeric(1), "value")
+TH_exp    <- t(vapply(fits_exp, `[[`, numeric(p_exp), "par"))
+spread_exp <- max(apply(TH_exp, 2, function(z) diff(range(z))))
+stopifnot(all(conv_exp == 0L), spread_exp < 1e-6,
+          diff(range(value_exp)) < 1e-9)
+
+theta_exp <- setNames(TH_exp[which.min(value_exp), ], names(coef(mlt_exp)))
+ll_exp    <- mlt_exp$loglik(theta_exp, weights = w_exp)
+
+# KKT: g = A_act' lambda with lambda > 0 on the active rows.
+g_exp     <- grad_exp(theta_exp)
+slack_exp <- drop(A_exp %*% theta_exp)
+act_exp   <- which(slack_exp < 1e-8)
+A_act     <- A_exp[act_exp, , drop = FALSE]
+lam_exp   <- qr.solve(t(A_act), g_exp)
+stat_exp  <- max(abs(g_exp - drop(t(A_act) %*% lam_exp)))
+stopifnot(identical(act_exp, c(1L, 4L)), all(lam_exp > 1e-3), stat_exp < 1e-5,
+          all(slack_exp > -1e-10))
+
+fit_exp_fixed <- mlt(ctm_exp, data = d_exp, fixed = c("Bs1(y)" = 0),
+                     optim = mltoptim(abstol = 1e-12, reltol = 1e-12))
+dll_fixed <- abs(as.numeric(logLik(fit_exp_fixed)) - ll_exp)
+dth_fixed <- max(abs(coef(fit_exp_fixed) - theta_exp))
+stopifnot(fit_exp_fixed$convergence == 0, dll_fixed < 1e-8, dth_fixed < 1e-4)
+
+cat(sprintf(paste0(
+  "Exponential: %d/%d auglag starts converged, theta spread %.1e; ",
+  "active rows {%s}, multipliers {%s}, stationarity %.1e; ",
+  "mlt(fixed Bs1 = 0): |dll| %.1e, |dtheta| %.1e\n"),
+  sum(conv_exp == 0L), length(conv_exp), spread_exp,
+  paste(act_exp, collapse = ", "), paste(sprintf("%.4g", lam_exp), collapse = ", "),
+  stat_exp, dll_fixed, dth_fixed))
 
 writeLines(format(theta_exp, digits = 15),
            con = file.path(out_dir, "mlt_exponential_theta.txt"))

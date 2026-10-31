@@ -260,12 +260,15 @@ cat(sprintf("Written: %s\n", outfile2))
 # ===========================================================================
 #
 # Exercises the per-observation support-inequality path added in slice 3.
-# Exponential base distribution requires h(y_i|x_i) >= 0 for every training
-# observation; under monotone theta_b the minimum of h over y is attained
-# at y_min where B_k(y_min) = [1, 0, ..., 0], so the per-row constraints
-# reduce to
+# The rows enforce mltpy's lower-support-end rule h(a | x_i) >= 0 for every
+# training row (ADR 0005 Decision 1), not R mlt()'s implicit observed-point
+# barrier h(y_i | x_i) >= 0.  Under monotone theta_b the minimum of h over y
+# is attained at the lower support end a = y_min, where
+# B_k(a) = [1, 0, ..., 0], so the per-row constraints are
 #   theta_b[1] + X_i * beta >= 0    for i = 1..n
-# (R 1-indexed; this is mltpy's theta_b[0] + X_i.beta).
+# (R 1-indexed; this is mltpy's theta_b[0] + X_i.beta).  Because the
+# constraints are explicit hin rows, this fixture does not suffer the
+# dexp -Inf stall that affected mlt_exponential_*.txt (issue #156).
 #
 # Design notes:
 #   * Order = 1 keeps the analytical NLL in a closed form (h'(y) constant
