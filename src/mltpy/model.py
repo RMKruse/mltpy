@@ -916,8 +916,18 @@ class ConditionalTransformationModel:
             x_1d = self.basis._coerce_x(X_arr)
             design = self.basis.evaluate(y_arr, x_1d)  # (m, p*q)
             d_design = self.basis.derivative(y_arr, x_1d)  # (m, p*q)
-            h = design @ self.theta_
-            hp = d_design @ self.theta_
+            # θ = [vec_C(Θ) | γ] (ADR 0003): the design only spans vec_C(Θ).
+            pq = self.basis.n_params
+            theta_vec = self.theta_[:pq]
+            h = design @ theta_vec
+            hp = d_design @ theta_vec
+            # Scaling factor f_i = exp(0.5 · x_s,i · γ) multiplies the
+            # interacting baseline and its y-derivative alike; the offset
+            # enters after scaling, as in the likelihood.
+            if X_scale_arr is not None:
+                f_scale = np.exp(0.5 * (X_scale_arr @ self.theta_[pq:]))
+                h = h * f_scale
+                hp = hp * f_scale
             if offset_arr is not None:
                 h = h + offset_arr
 

@@ -700,6 +700,15 @@ def optimize(
         config = OptimizerConfig()
 
     if isinstance(basis, InteractionBasis):
+        if isinstance(y, CensoredData) and y.n_censored > 0:
+            # The interaction likelihood evaluates y.exact only; censored rows
+            # there are NaN and would surface as an opaque NaN log-likelihood.
+            raise NotImplementedError(
+                "InteractionBasis supports exact (uncensored) data only; got "
+                f"CensoredData with {y.n_censored} censored row(s) out of {y.n}. "
+                "Censored likelihoods are not implemented on the interaction "
+                "path."
+            )
         if scaling is not None and base_distribution == "exponential":
             # ADR 0003, Decision 5 — the exponential link's support row
             # becomes non-linear in γ per interacting column; carried over

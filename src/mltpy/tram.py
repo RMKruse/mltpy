@@ -543,8 +543,9 @@ class Coxph(_SurvivalMixin):
         :class:`~mltpy.basis.InterceptBasis`).  When provided, the model
         is fit as ``MLT(InteractionBasis(BernsteinBasis(...), interacting))``
         instead of the standard shift model.  Only exact (non-censored)
-        time data is currently supported on this path; censoring with an
-        interacting basis is not yet implemented in the likelihood path.
+        time data is currently supported on this path: pass event times as
+        an array, or a :class:`~mltpy.variables.CensoredData` without
+        censored rows; censored rows raise ``NotImplementedError``.
     scaling:
         Optional scaling-design matrix of shape ``(n, q_s)`` mirroring
         R ``tram::Coxph(Surv(y, event) ~ x_d | x_s)``.  Routes through to
@@ -557,12 +558,20 @@ class Coxph(_SurvivalMixin):
         vector gains a γ block exposed as :attr:`gamma_`, and the
         :meth:`survival`, :meth:`hazard`, and :meth:`predict` methods
         require ``X_scale`` / ``X_scale_new``.  Sign-aligned with R
-        (ADR 0002, Decision 5).  Not supported together with
-        ``interacting=`` on this class: the combined scaled-interaction
-        path (ADR 0003, issue #103) covers exact data only, while
-        ``Coxph`` implies right-censored survival data.  Use
-        ``ConditionalTransformationModel(basis=InteractionBasis(...),
-        scaling=...)`` for the exact-data combination.
+        (ADR 0002, Decision 5).  May be combined with ``interacting=``
+        (ADR 0003, issue #106) to fit
+        ``log[-log S(t | x, x_s)] = ([a(t) ⊗ b(x)]ᵀ vec(Θ)) ·
+        exp(0.5 · x_s · γ)``, the analogue of R ``tram``'s experimental
+        ``stram`` route: ``theta_ = [vec_C(Θ) | γ]`` with Θ exposed as
+        :attr:`Theta_` and γ as :attr:`gamma_`, and :meth:`fit` emits a
+        ``UserWarning`` flagging the path as experimental.
+
+    Raises
+    ------
+    NotImplementedError
+        From :meth:`fit`, when ``interacting=`` is set and ``y`` is a
+        :class:`~mltpy.variables.CensoredData` with censored rows — the
+        interaction likelihood covers exact event times only.
 
     Examples
     --------
@@ -586,19 +595,6 @@ class Coxph(_SurvivalMixin):
         interacting: BernsteinBasis | OrdinalBasis | None = None,
         scaling: NDArray[np.float64] | None = None,
     ) -> None:
-        if scaling is not None and interacting is not None:
-            # ADR 0003 lifts the blanket rejection for *exact* data on the
-            # base-class path, but Coxph implies right-censored survival
-            # data, which the scaled-interaction likelihood does not cover.
-            raise ValueError(
-                "scaling= and interacting= cannot be combined on Coxph: the "
-                "scaled-interaction path supports exact data only (see "
-                "docs/adr/0003-scaling-with-interaction.md), while Coxph "
-                "fits right-censored data. Use "
-                "ConditionalTransformationModel(basis=InteractionBasis(...), "
-                "scaling=...) for exact data."
-            )
-
         if interacting is None:
             super().__init__(
                 order=order,
@@ -610,6 +606,9 @@ class Coxph(_SurvivalMixin):
             )
             return
 
+        # Non-proportional Cox: θ = vec_C(Θ), or [vec_C(Θ) | γ] when scaled
+        # (ADR 0003).  The interaction likelihood is exact-data only, so
+        # optimize() rejects genuinely censored rows.
         y_basis = BernsteinBasis(order=order, support=support)
         ib = InteractionBasis(y_basis=y_basis, x_basis=interacting)
         ConditionalTransformationModel.__init__(
@@ -618,6 +617,7 @@ class Coxph(_SurvivalMixin):
             censoring=CensoringType.RIGHT,
             optimizer_config=optimizer_config,
             base_distribution="min_extreme_value",
+            scaling=scaling,
         )
         self._order = order
         self._support = support

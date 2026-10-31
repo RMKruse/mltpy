@@ -1881,3 +1881,130 @@ writeLines(format(ll_st, digits = 15),
 
 cat(sprintf("stram_bs_bs normal ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
             n_st, p_st, q_st, length(gamma_st), ll_st))
+
+# ---------------------------------------------------------------------------
+# Coxph(interacting=..., scaling=...) — issue #106.
+#
+# The survival analogue of the stram block above: same Bernstein-y ×
+# Bernstein-x interacting baseline scaled by exp(0.5 · x_s · γ), but with the
+# minimum extreme value link (``todistr = "MinExtrVal"``) that mltpy's Coxph
+# forces, so log[-log S(t | x, x_s)] = h(t | x) · exp(0.5 · x_s · γ).  Exact
+# (uncensored) event times only — the interaction likelihood path is
+# exact-data only.  Fitted through ``mlt::ctm`` for term-for-term basis
+# agreement with mltpy's ``InteractionBasis``; γ is sign- and magnitude-aligned
+# with mltpy (no flip).
+#
+# Data: log[-log S(t)] = exp(0.5·γ·x_s)·(2·(t − 4.5) + 0.8·(x − 0.5)) with
+# γ = 0.4 — a non-proportional-hazards model whose baseline is linear in t and
+# in x, so it lies exactly in the Bernstein-y (order 2) ⊗ Bernstein-x (order 1)
+# span.  With n = 1000 the MLE is strictly interior (every Θ column has
+# increments ≈ 3 or more): no active monotonicity constraint leaves a flat
+# ridge, so γ is determined well below the 1e-6 parity tolerance.
+#
+# Precision: mlt's default auglag stops on alabama's inner BFGS tolerance
+# (reltol ≈ 1.5e-8 on |ℓ| ≈ 10³), which leaves γ about 1e-6 (relative) short
+# of the optimum.  Because the MLE is interior, the fit is polished from that
+# solution with plain BFGS at reltol = 1e-15; ``checkconstraints = TRUE``
+# confirms the polished point is still feasible.  A second polish moves θ by
+# ~1e-15.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_mev_``):
+#   *_y_train.txt    — event times, length n
+#   *_x_train.txt    — interacting covariate, length n
+#   *_x_s_train.txt  — scaling covariate, length n
+#   *_y_support.txt  — "a b" on one line
+#   *_theta.txt      — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt      — scale coefficients only, length q_s
+#   *_loglik.txt     — scalar logLik
+#   *_grid.txt       — prediction grid, one "t x x_s" row per line
+#   *_survivor.txt   — S(t | x, x_s) at each grid row
+#   *_hazard.txt     — hazard f/S at each grid row
+# ---------------------------------------------------------------------------
+set.seed(20261031)
+n_mv <- 1000L
+p_mv <- 3L  # number of Bernstein-y functions
+q_mv <- 2L  # number of Bernstein-x functions
+x_mv   <- runif(n_mv, 0, 1)
+x_s_mv <- rnorm(n_mv)
+# Invert S(t) = exp(-exp(k · h0(t | x))) at S = U for t.
+k_mv <- exp(0.5 * 0.4 * x_s_mv)
+y_mv <- 4.5 - 0.4 * (x_mv - 0.5) + log(-log(runif(n_mv))) / (2 * k_mv)
+a_mv <- min(y_mv) - 0.1
+b_mv <- max(y_mv) + 0.1
+
+df_mv <- data.frame(y = y_mv, x = x_mv, x_s = x_s_mv)
+m_y_mv <- numeric_var("y", support = c(a_mv, b_mv))
+m_x_mv <- numeric_var("x", support = c(0, 1))
+b_y_mv <- Bernstein_basis(m_y_mv, order = p_mv - 1L, ui = "increasing")
+b_x_mv <- Bernstein_basis(m_x_mv, order = q_mv - 1L)
+b_s_mv <- as.basis(~ x_s, data = df_mv, remove_intercept = TRUE)
+
+ctm_mv <- ctm(response = b_y_mv,
+              interacting = b_x_mv,
+              scaling = b_s_mv,
+              scale_shift = FALSE,
+              todistr = "MinExtrVal")
+fit0_mv <- mlt(ctm_mv, data = df_mv)
+fit_mv  <- mlt(ctm_mv, data = df_mv, theta = coef(fit0_mv),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+stopifnot(fit_mv$convergence == 0,
+          min(diff(matrix(coef(fit_mv)[1:(p_mv * q_mv)], p_mv, q_mv))) > 1)
+
+theta_mv <- coef(fit_mv)
+ll_mv    <- as.numeric(logLik(fit_mv))
+scl_names_mv <- colnames(model.matrix(b_s_mv, data = df_mv))
+gamma_mv <- theta_mv[scl_names_mv]
+
+# Per-row predictions at (t, x, x_s).  ``predict()`` on a ctm with a
+# ``scaling`` term errors inside mlt (predict.cbind_bases, observed with
+# mlt 1.8.4), so h is assembled from the tensor basis directly:
+# h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ), with the
+# first p·q coefficients being vec(Θ) in the box-basis column order.  The
+# stopifnot() below checks this reconstruction reproduces logLik(fit).
+# Minimum extreme value: S = exp(−exp(h)), hazard = f/S = exp(h)·h'.
+bb_mv <- b(bresponse = b_y_mv, binteracting = b_x_mv)
+pq_mv <- p_mv * q_mv
+.h_mv <- function(d) {
+  f <- exp(0.5 * d$x_s * gamma_mv)
+  list(h  = drop(model.matrix(bb_mv, data = d) %*% theta_mv[1:pq_mv]) * f,
+       hp = drop(model.matrix(bb_mv, data = d, deriv = c(y = 1)) %*%
+                   theta_mv[1:pq_mv]) * f)
+}
+tr_mv <- .h_mv(df_mv)
+stopifnot(isTRUE(all.equal(sum(tr_mv$h - exp(tr_mv$h) + log(tr_mv$hp)), ll_mv,
+                           tolerance = 1e-10)))
+
+grid_mv <- expand.grid(y = quantile(y_mv, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       x = c(0.2, 0.8),
+                       x_s = c(-1, 0, 1.5))
+hg_mv   <- .h_mv(grid_mv)
+surv_mv <- exp(-exp(hg_mv$h))
+haz_mv  <- exp(hg_mv$h) * hg_mv$hp
+
+writeLines(format(y_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_y_train.txt"))
+writeLines(format(x_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_x_train.txt"))
+writeLines(format(x_s_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_x_s_train.txt"))
+writeLines(paste(format(a_mv, digits = 15), format(b_mv, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_mev_y_support.txt"))
+writeLines(format(theta_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_theta.txt"))
+writeLines(format(as.numeric(gamma_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_gamma.txt"))
+writeLines(format(ll_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_loglik.txt"))
+write.table(format(as.matrix(grid_mv), digits = 15),
+            file = file.path(out_dir, "stram_bs_bs_mev_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(as.numeric(surv_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_survivor.txt"))
+writeLines(format(as.numeric(haz_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_hazard.txt"))
+
+cat(sprintf("stram_bs_bs mev ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_mv, p_mv, q_mv, length(gamma_mv), ll_mv))
