@@ -31,6 +31,10 @@ from mltpy.likelihood import (
     DistOps,
     InfeasibleParameterError,
     _get_dist,
+    _hessian_interaction_fd,
+    _interaction_nll,
+    _interaction_nll_and_grad,
+    _InteractionDesign,
     _negative_log_likelihood_from_dist,
 )
 from mltpy.likelihood import (
@@ -931,7 +935,6 @@ def optimize(
             X=X,
             config=config,
             dist=dist,
-            base_distribution=base_distribution,
             weights=weights,
             offset=offset,
             scaling=scaling,
@@ -1221,7 +1224,6 @@ def _optimize_interaction(
     X: NDArray[np.float64] | None,
     config: OptimizerConfig,
     dist: DistOps,
-    base_distribution: BaseDistribution,
     weights: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None,
     scaling: NDArray[np.float64] | None = None,
@@ -1261,33 +1263,30 @@ def _optimize_interaction(
     else:
         rng = np.random.default_rng(config.random_state)
 
-    true_nll = _make_true_nll(
-        basis, y, x_arr, CensoringType.NONE, dist, weights, offset, scaling
-    )
+    # The dense Kronecker designs a(y)⊗b(x) and a'(y)⊗b(x) do not depend on θ:
+    # build them once and share them across every objective, gradient,
+    # penalty-anchor and polish-Hessian evaluation of this fit (issue #147).
+    # Only the closures below hold ``dm``, so it is released when this
+    # function returns; it is never stored on the result or the model.
+    dm = _InteractionDesign.build(basis, y, x_arr)
+
+    def true_nll(theta: NDArray[np.float64]) -> float:
+        # Unpenalised, like ``_make_true_nll``: an infeasible θ raises.
+        return _interaction_nll(dm, theta, dist, weights, offset, scaling)
 
     # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
     # keeps the caller's weights via ``true_nll``.
     obj_weights, obj_scale = _solver_weights(weights, config.solver)
-    obj_true_nll = _make_true_nll(
-        basis, y, x_arr, CensoringType.NONE, dist, obj_weights, offset, scaling
+    penalty = _infeasible_penalty(
+        theta_init,
+        lambda t: _interaction_nll(dm, t, dist, obj_weights, offset, scaling),
     )
-    penalty = _infeasible_penalty(theta_init, obj_true_nll)
 
     def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         try:
-            result = _negative_log_likelihood_from_dist(
-                theta,
-                basis,
-                y,
-                x_arr,
-                CensoringType.NONE,
-                gradient=True,
-                dist=dist,
-                weights=obj_weights,
-                offset=offset,
-                scaling=scaling,
+            return _interaction_nll_and_grad(
+                dm, theta, dist, obj_weights, offset, scaling
             )
-            return cast(tuple[float, NDArray[np.float64]], result)
         except InfeasibleParameterError:
             # Same contract as the shift path's ``_make_objective``: a finite
             # penalty plus the subgradient of the column-wise monotonicity
@@ -1311,21 +1310,20 @@ def _optimize_interaction(
             Theta_try[:, j] = np.maximum.accumulate(Theta_try[:, j])
         return np.concatenate([Theta_try.ravel(), theta_seed[pq:]])
 
+    def hess(theta: NDArray[np.float64]) -> NDArray[np.float64]:
+        return _hessian_interaction_fd(
+            theta, dm, dist, weights=weights, offset=offset, scaling=scaling
+        )
+
     if config.solver == "auglag":
         return _interaction_auglag(
             obj=obj,
             true_nll=true_nll,
+            hess=hess,
             theta_init=theta_init,
             cm=cm,
             config=config,
-            basis=basis,
-            y=y,
-            x_arr=x_arr,
-            base_distribution=base_distribution,
-            weights=weights,
-            offset=offset,
             perturb=perturb,
-            scaling=scaling,
         )
 
     return _interaction_scipy(
@@ -1343,19 +1341,18 @@ def _interaction_auglag(
     *,
     obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
     true_nll: Callable[[NDArray[np.float64]], float],
+    hess: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     theta_init: NDArray[np.float64],
     cm: Any,
     config: OptimizerConfig,
-    basis: InteractionBasis,
-    y: NDArray[np.float64] | CensoredData,
-    x_arr: NDArray[np.float64],
-    base_distribution: BaseDistribution,
-    weights: NDArray[np.float64] | None,
-    offset: NDArray[np.float64] | None,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
-    scaling: NDArray[np.float64] | None = None,
 ) -> OptimizationResult:
-    """PHR augmented-Lagrangian path for the interaction basis."""
+    """PHR augmented-Lagrangian path for the interaction basis.
+
+    ``hess`` is the observed-information Hessian used by the Newton-CG polish;
+    ``obj``, ``true_nll`` and ``hess`` all evaluate on the same fit-scoped
+    designs built in :func:`_optimize_interaction`.
+    """
     auglag_opts = (
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
@@ -1391,20 +1388,7 @@ def _interaction_auglag(
     ia_final_theta = best_result.theta
     ia_final_nll = best_nll
     if config.polish and np.all(best_result.mu_ineq < 1e-6):
-        theta_polished = _ncg_polish(
-            best_result.theta,
-            obj,
-            0,
-            basis,
-            y,
-            x_arr,
-            CensoringType.NONE,
-            base_distribution,
-            weights,
-            offset,
-            scaling,
-            A_ineq=cm.A_ineq,
-        )
+        theta_polished = _ncg_polish(best_result.theta, obj, hess, 0, A_ineq=cm.A_ineq)
         if theta_polished is not None:
             ia_final_theta = theta_polished
             ia_final_nll = true_nll(theta_polished)
@@ -1503,15 +1487,8 @@ def _interaction_scipy(
 def _ncg_polish(
     theta: NDArray[np.float64],
     obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
+    hess: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     n_params: int,
-    basis: BernsteinBasis | InteractionBasis,
-    y: NDArray[np.float64] | CensoredData,
-    X: NDArray[np.float64] | None,
-    censoring: CensoringType,
-    base_distribution: BaseDistribution,
-    weights: NDArray[np.float64] | None,
-    offset: NDArray[np.float64] | None,
-    scaling: NDArray[np.float64] | None,
     *,
     A_ineq: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64] | None:
@@ -1523,6 +1500,11 @@ def _ncg_polish(
         Starting point (auglag's best θ).
     obj:
         NLL objective returning ``(nll, grad)``.
+    hess:
+        Hessian of the NLL, ``θ ↦ ∂²(-ℓ)/∂θ∂θ'``.  Any exception it raises
+        (e.g. :class:`~mltpy.likelihood.InfeasibleParameterError` at a trial
+        point outside the monotone cone) is absorbed into a stiff ``1e6·I``
+        so that trust-ncg shrinks its step.
     n_params:
         Number of Bernstein basis coefficients (shift path) or ``None``-equivalent
         when ``A_ineq`` is provided (interaction path uses A_ineq for feasibility).
@@ -1540,17 +1522,7 @@ def _ncg_polish(
 
     def hess_fn(t: NDArray[np.float64]) -> NDArray[np.float64]:
         try:
-            return _hessian(
-                t,
-                basis,
-                y,
-                X,
-                censoring,
-                base_distribution,
-                weights=weights,
-                offset=offset,
-                scaling=scaling,
-            )
+            return hess(t)
         except (InfeasibleParameterError, Exception):
             return np.eye(len(t), dtype=np.float64) * 1e6
 
@@ -1689,18 +1661,22 @@ def _optimize_auglag(
         and cm.C_eq.shape[0] == 0
         and np.all(best_auglag_result.mu_ineq < 1e-6)
     ):
+
+        def shift_hess(t: NDArray[np.float64]) -> NDArray[np.float64]:
+            return _hessian(
+                t,
+                basis,
+                y,
+                X,
+                censoring,
+                base_distribution,
+                weights=weights,
+                offset=offset,
+                scaling=scaling,
+            )
+
         theta_polished = _ncg_polish(
-            best_auglag_result.theta,
-            obj,
-            n_params,
-            basis,
-            y,
-            X,
-            censoring,
-            base_distribution,
-            weights,
-            offset,
-            scaling,
+            best_auglag_result.theta, obj, shift_hess, n_params
         )
         if theta_polished is not None:
             final_theta = theta_polished
