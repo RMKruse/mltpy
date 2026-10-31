@@ -112,7 +112,9 @@ class OptimizerConfig:
         Maximum number of iterations passed to scipy.
     tol:
         Convergence tolerance.  Mapped to ``ftol`` (SLSQP) or ``gtol``
-        (trust-constr).
+        (trust-constr).  SLSQP minimises the likelihood under weights
+        normalised to mean 1, so ``ftol`` means the same whatever the scale of
+        ``weights`` (issue #137).
     max_restarts:
         Number of *additional* attempts after the first one.  Analogous to
         ``maxtry`` in R's ``mlt()``.  On each restart the starting point is
@@ -442,6 +444,56 @@ def _make_true_nll(
         )
 
     return true_nll
+
+
+def _solver_weights(
+    weights: NDArray[np.float64] | None,
+    solver: str,
+) -> tuple[NDArray[np.float64] | None, float]:
+    """Weights a scipy solver's objective is built with, and the factor removed.
+
+    SLSQP's stopping test (``ftol``) is absolute in the objective, and its QP
+    subproblem sets the objective gradient against unit-scale monotonicity
+    rows.  A uniform weight ``w`` multiplies the NLL and its gradient by ``w``
+    without moving the MLE, yet from ``w ≈ 1e4`` the stopping test cannot be
+    met in floating point and from ``w ≈ 1e6`` the QP is reported
+    incompatible after one step (issue #137).  Normalising the weights to
+    mean 1 gives SLSQP an objective on the scale of an unweighted fit with
+    the same argmin; uniform weights normalise to exactly 1, so such a fit
+    takes the unweighted fit's path.
+
+    Only the objective the solver sees changes.  Candidates are still scored,
+    and the log-likelihood reported, under the caller's weights.
+
+    Parameters
+    ----------
+    weights : NDArray[np.float64] | None
+        Validated per-observation weights (finite, non-negative, at least one
+        positive entry), or ``None``.
+    solver : str
+        ``config.solver``.  Only ``"slsqp"`` is normalised: trust-constr and
+        auglag reach the MLE at every weight scale and keep their objective.
+
+    Returns
+    -------
+    tuple[NDArray[np.float64] | None, float]
+        ``(weights / s, s)`` with ``s = mean(weights)`` for a weighted SLSQP
+        fit, otherwise ``(weights, 1.0)``.  The solver's objective times ``s``
+        is the NLL under the caller's weights.
+    """
+    if weights is None or solver != "slsqp":
+        return weights, 1.0
+    scale = float(np.mean(weights))
+    return weights / scale, scale
+
+
+def _unscale_scipy_result(result: Any, scale: float) -> Any:
+    """Restore ``.fun`` / ``.jac`` of a scipy result to the caller's weights."""
+    if scale != 1.0:
+        result.fun = result.fun * scale
+        if getattr(result, "jac", None) is not None:
+            result.jac = result.jac * scale
+    return result
 
 
 def _scipy_options(config: OptimizerConfig) -> dict[str, Any]:
@@ -999,6 +1051,15 @@ def _optimize_scipy(
         )
         theta_init[fixed_idx] = fixed_vals
 
+    # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
+    # below keeps the caller's weights via ``true_nll``.
+    obj_weights, obj_scale = _solver_weights(weights, config.solver)
+    obj_true_nll = (
+        true_nll
+        if obj_weights is weights
+        else _make_true_nll(basis, y, X, censoring, dist, obj_weights, offset, scaling)
+    )
+
     obj = _make_objective(
         basis,
         y,
@@ -1007,10 +1068,10 @@ def _optimize_scipy(
         config.use_gradient,
         base_distribution=base_distribution,
         dist=dist,
-        weights=weights,
+        weights=obj_weights,
         offset=offset,
         scaling=scaling,
-        penalty=_infeasible_penalty(theta_init, true_nll),
+        penalty=_infeasible_penalty(theta_init, obj_true_nll),
     )
     jac = True if config.use_gradient else None
     options = _scipy_options(config)
@@ -1091,13 +1152,16 @@ def _optimize_scipy(
 
     def _run(theta_try_full: NDArray[np.float64]) -> Any:
         theta_try = theta_try_full[free_idx] if free_idx is not None else theta_try_full
-        return minimize(
-            obj_used,
-            theta_try,
-            method=config.solver,
-            jac=jac,
-            constraints=constraints_used,
-            options=options,
+        return _unscale_scipy_result(
+            minimize(
+                obj_used,
+                theta_try,
+                method=config.solver,
+                jac=jac,
+                constraints=constraints_used,
+                options=options,
+            ),
+            obj_scale,
         )
 
     def _full_theta(x: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -1195,7 +1259,17 @@ def _optimize_interaction(
         basis, y, x_arr, CensoringType.NONE, dist, weights, offset, scaling
     )
 
-    penalty = _infeasible_penalty(theta_init, true_nll)
+    # SLSQP sees the likelihood under mean-1 weights (issue #137); scoring
+    # keeps the caller's weights via ``true_nll``.
+    obj_weights, obj_scale = _solver_weights(weights, config.solver)
+    obj_true_nll = (
+        true_nll
+        if obj_weights is weights
+        else _make_true_nll(
+            basis, y, x_arr, CensoringType.NONE, dist, obj_weights, offset, scaling
+        )
+    )
+    penalty = _infeasible_penalty(theta_init, obj_true_nll)
 
     def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         try:
@@ -1207,7 +1281,7 @@ def _optimize_interaction(
                 CensoringType.NONE,
                 gradient=True,
                 dist=dist,
-                weights=weights,
+                weights=obj_weights,
                 offset=offset,
                 scaling=scaling,
             )
@@ -1259,6 +1333,7 @@ def _optimize_interaction(
         cm=cm,
         config=config,
         perturb=perturb,
+        obj_scale=obj_scale,
     )
 
 
@@ -1358,6 +1433,7 @@ def _interaction_scipy(
     cm: Any,
     config: OptimizerConfig,
     perturb: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    obj_scale: float = 1.0,
 ) -> OptimizationResult:
     """SLSQP / trust-constr path for the interaction basis.
 
@@ -1365,7 +1441,8 @@ def _interaction_scipy(
     :func:`~mltpy.constraints.build_constraint_matrices_interaction` builds —
     SLSQP via a ``type='ineq'`` dict and trust-constr via a
     :class:`scipy.optimize.LinearConstraint` — without code changes anywhere
-    else.
+    else.  ``obj_scale`` is the factor ``obj`` was divided by
+    (:func:`_solver_weights`); it restores the solver's ``.fun`` / ``.jac``.
     """
     A_ineq = cm.A_ineq
 
@@ -1386,13 +1463,16 @@ def _interaction_scipy(
         theta_init,
         config,
         perturb,
-        lambda t: minimize(
-            obj,
-            t,
-            method=config.solver,
-            jac=True,
-            constraints=constraints,
-            options=options,
+        lambda t: _unscale_scipy_result(
+            minimize(
+                obj,
+                t,
+                method=config.solver,
+                jac=True,
+                constraints=constraints,
+                options=options,
+            ),
+            obj_scale,
         ),
         lambda r: bool(r.success),
         lambda r: true_nll(r.x),
