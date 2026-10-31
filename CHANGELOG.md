@@ -6,6 +6,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `BoxCox(..., interacting=...)` — stratified / fully-interacting Box-Cox
+  models `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` through the convenience surface,
+  mirroring `Coxph(..., interacting=...)`. Accepts a `BernsteinBasis`,
+  `OrdinalBasis`, or `OneHotBasis` (categorical strata) x-basis and combines
+  with `scaling=` for the scaled-interaction (`stram`) model
+  `([a(y) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and `gamma_`.
+  Exact data only: censored rows raise `NotImplementedError`. `γ`, `Θ`,
+  log-likelihood, distribution, density and quantile match R
+  `tram::BoxCox(y | s ~ 1 | z)` at `rtol=1e-6` (quantiles with an absolute
+  tolerance scaled by the support width) (fixtures
+  `reference/stram_onehot_bs_boxcox_*`). (#107)
+- `Lm(..., interacting=...)` — stratified / fully-interacting normal linear
+  models `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` with the order-1 Bernstein `a(y)`,
+  so `Y | x` is normal with an `x`-dependent mean and standard deviation.
+  Accepts a `BernsteinBasis`, `OrdinalBasis`, or `OneHotBasis` x-basis and
+  combines with `scaling=` for the scaled-interaction (`stram`) model
+  `([a(y) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and `gamma_`.
+  `sigma_` / `intercept_` / `coef_` raise `NotImplementedError` on this path
+  (no single lm mapping when Θ varies with `x`). Exact data only: censored
+  rows raise `NotImplementedError`. `γ`, `Θ`, log-likelihood, distribution,
+  density and quantile match R `tram::Lm(y | s ~ 1 | z)` at `rtol=1e-6`
+  (tram's polynomial `(1, y)` basis maps onto the order-1 Bernstein basis
+  exactly) (fixtures `reference/stram_onehot_lm_*`). (#109)
+- `Survreg(..., interacting=...)` — non-proportional / stratified parametric
+  survival models `h(t|x) = (a(log t) ⊗ b(x))ᵀ vec(Θ)` through the
+  convenience surface, with the log-time `LogBernsteinBasis` as the y-axis
+  of the tensor product and the family's link (weibull, lognormal,
+  loglogistic). Accepts a `BernsteinBasis`, `OrdinalBasis`, or `OneHotBasis`
+  x-basis and combines with `scaling=` for the scaled-interaction (`stram`)
+  model `([a(log t) ⊗ b(x)]ᵀ vec(Θ))·exp(0.5·x_s·γ)`, exposing `Theta_` and
+  `gamma_`; `survival()` / `hazard()` take the parallel `X_scale=`. Exact
+  event times only: censored rows raise `NotImplementedError`. For all three
+  families `γ`, `Θ`, log-likelihood, survivor, density, hazard and quantile
+  match R `mlt::ctm(log_first = TRUE)` at `rtol=1e-6`, and `γ` matches
+  `tram::Survreg(y | x ~ 1 | x_s)` (class `stram`) (fixtures
+  `reference/stram_logbs_bs_<dist>_*`). (#110) `interacting=` is inserted
+  before `scaling=` (matching `BoxCox` / `Coxph` / `Colr`), so a call that
+  passed `scaling` positionally as the fifth argument must now pass it by
+  keyword.
+- Worked notebook `docs/examples/07_stratified_heteroskedastic.ipynb` — a
+  non-proportional Cox model (Bernstein-t ⊗ Bernstein-x) with a scaled
+  baseline via `Coxph(interacting=..., scaling=...)`: fit and LR test on `γ`,
+  interpretation of `Theta_` (control-point values of the stratified
+  baseline) and `gamma_` (the `exp(0.5·x_s·γ)` pivot), prediction and
+  quantiles with `X_scale_new`, and an R-parity check against the
+  `stram_bs_bs_mev_*` fixture. Cross-referenced from notebooks 04 / 05, whose
+  stale "scaling + interacting is out of scope" takeaway is corrected. (#111)
+- R-parity fixtures `reference/stram_bs_bs_normal_*` for the base
+  `ConditionalTransformationModel(basis=InteractionBasis(...), scaling=...)`
+  path (`mlt::ctm`, Bernstein-y ⊗ Bernstein-x, Normal base), materialised with
+  R 4.6.1 / mlt 1.8.4. The previously skipping ratchets now run: `γ`, `Θ` and
+  log-likelihood match R at `rtol=1e-6` and `γ`'s variance at `rtol=1e-4`.
+  This MLE has an active monotonicity row, so the R fit is polished with
+  mlt's projected `spg` optimiser instead of the unconstrained BFGS step the
+  sibling `stram_*` blocks use (the default alabama fit stopped ~5e-5 short
+  on `γ` and ~1e-8 infeasible). (#125)
+
+### Fixed
+
+- `score(..., X_scale=...)` now includes scaling for both shift and interaction
+  models. Scaled fits require an explicit scaling design, including when scoring
+  training data; unscaled fits reject it. Missing or invalid designs raise
+  `ValueError` instead of returning an incorrect likelihood or a matrix error.
+  (#144)
+- Auglag stalled early on `InteractionBasis` fits and reported
+  `converged=True`. On a trial step that left the column-wise monotone cone, the
+  interaction objective returned `(inf, 0)`. That stalled the inner L-BFGS-B
+  line search: on the `stram_bs_bs_mev` fixture the fit stopped at NLL ≈ 2248
+  (optimum ≈ 893, ‖∇‖∞ ≈ 366), and the feasible-and-stalled exit accepted the
+  unmoved point. Only the Newton-CG polish rescued the fit, leaving Θ about
+  1e-5 off the optimum. The objective now matches the shift path: it returns a
+  finite penalty (1e10) and the subgradient of the monotonicity violation. The
+  stall exit now refits the multipliers at the stalled point (equality rows
+  with any sign, active inequality rows with μ ≥ 0) and requires both the
+  unexplained gradient and the duality gap to be at most
+  `theta_tol^(2/3)·(1 + |f|)` (Gill–Murray–Wright U3, applied to the projected
+  gradient); otherwise auglag stops with `converged=False`. An active
+  constraint therefore no longer excuses gradient in parameters it does not
+  constrain. `Coxph(interacting=...)` with or without
+  `scaling=` now reaches the MLE on its first attempt without the polish, and Θ
+  / survival / hazard match R at `rtol=1e-6` (previously `1e-4`). Decision
+  record: `docs/adr/0004-auglag-stall-acceptance.md`. (#134)
+- The finite infeasibility penalty could be returned as a fitted result when a
+  valid weighted likelihood exceeded it. With every weight 1e8, the
+  interaction fit settled on the 1e10 penalty as "NLL 1e10" and `fit()` raised
+  `InfeasibleParameterError` from the Hessian, and a weighted shift-path
+  `Coxph` reported log-likelihood −1e10. The penalty is now
+  `max(1e10, 1e6·(1 + |NLL(θ_init)|))`, so it stays above the fit's own
+  feasible values. Restart selection, the fallback and the polish now score
+  every candidate by the unpenalised likelihood and discard any whose θ is
+  infeasible. Unweighted fits are unchanged. (#134)
+- Regression coverage for the false auglag stall reported in #142
+  (Bernstein-y order 6 ⊗ Bernstein-x order 3, n = 1000: `converged=True`, no
+  warning, log-likelihood −2604.7 against −1403.9 at the optimum, KKT residual
+  114). The #134 fixes above (merged in #136) resolve it;
+  `tests/test_interaction_stall.py` now pins the issue's data and configuration
+  at n = 1000 and n = 2000: first-attempt convergence with no
+  `ConvergenceWarning`, a KKT residual at the
+  floating-point floor, and log-likelihood (`rtol=1e-6`) and Θ (`rtol=1e-3`;
+  stacked active monotonicity rows leave Θ weakly determined) parity with an
+  R `mlt` fit polished with the projected `spg` optimiser (fixtures
+  `reference/interaction_stall_*`, data written by
+  `reference/write_interaction_stall_data.py`). The stationarity check in
+  `TestAuglagFirstAttempt` is now relative to |f| (`1e-8·(1 + |f|)`) instead
+  of an absolute 1e-6, which the scaled fit met with 6% headroom and failed
+  on another platform. (#142)
+
 ## [0.4.0] — 2026-05-25
 
 ### Performance

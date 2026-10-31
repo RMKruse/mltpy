@@ -128,18 +128,23 @@ def test_scaling_log_likelihood_matches_R(scaling_ref: dict) -> None:
         rtol=1e-6,
         atol=1e-8,
     )
+    np.testing.assert_allclose(
+        model.score(scaling_ref["y"], X=scaling_ref["x_d"], X_scale=scaling_ref["x_s"]),
+        scaling_ref["log_likelihood"],
+        rtol=1e-6,
+        atol=1e-8,
+    )
 
 
-def test_scaling_gamma_coef_exposed(scaling_ref: dict) -> None:
-    """``gamma_coef_`` returns the γ block (sign-aligned with R)."""
+def test_scaling_gamma_exposed(scaling_ref: dict) -> None:
+    """``gamma_`` returns the γ block (sign-aligned with R)."""
     model = MLT(
         order=scaling_ref["p"] - 1,
         support=scaling_ref["support"],
         scaling=scaling_ref["x_s"],
     )
     model.fit(scaling_ref["y"], X=scaling_ref["x_d"])
-    gamma = model.gamma_coef_
-    assert gamma is not None
+    gamma = model.gamma_
     np.testing.assert_allclose(gamma, scaling_ref["gamma_r"], rtol=1e-5, atol=1e-7)
 
 

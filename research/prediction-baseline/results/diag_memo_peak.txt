@@ -1,0 +1,8 @@
+quantile_varying   none         peak   0.22 MiB curves 10000
+quantile_varying   consecutive  peak   0.09 MiB curves 10000
+quantile_varying   unique       peak  26.11 MiB curves 10000
+quantile_varying   sorted       peak   0.32 MiB curves 10000 4664.5 ms bitwise_equal=True sat_same=True
+quantile_10prof    none         peak   0.09 MiB curves 10000
+quantile_10prof    consecutive  peak   0.09 MiB curves 8977
+quantile_10prof    unique       peak   0.11 MiB curves 10
+quantile_10prof    sorted       peak   0.32 MiB curves 10 53.9 ms bitwise_equal=True sat_same=True

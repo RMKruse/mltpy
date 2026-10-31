@@ -188,6 +188,7 @@ python validation/convert_references.py
 python validation/run_validation.py           # summary table
 python validation/run_validation.py --verbose  # detailed per-component output for failures
 python validation/run_validation.py --case case_01  # filter by case prefix
+python validation/run_validation.py --case case_01 --out-dir /tmp/val  # keep partial runs out of validation/results
 
 # Run unit tests for the validation logic itself
 pytest tests/test_validation_script.py -x --tb=short
@@ -195,7 +196,7 @@ pytest tests/test_validation_script.py -x --tb=short
 
 Exit codes: `0` = all pass, `1` = one or more failures, `2` = no reference data found.
 
-Reports are saved to `validation/results/validation_report.md` and `validation/results/validation_report.json`.
+Reports are saved to `validation/results/validation_report.md` and `validation/results/validation_report.json` (override with `--out-dir`). The committed copies are the full 29-case run: regenerate them with a plain `python validation/run_validation.py` and write filtered (`--case`) runs elsewhere via `--out-dir`, as the integration test in `tests/test_validation_script.py` does.
 
 ## R Package Versions
 

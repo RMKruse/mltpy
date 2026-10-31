@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
-from mltpy._auglag import AugLagOptions, auglag_minimize
+from mltpy._auglag import AugLagOptions, _projected_stationarity, auglag_minimize
 from mltpy.constraints import ConstraintMatrices, build_constraint_matrices
 
 # ---------------------------------------------------------------------------
@@ -200,6 +203,348 @@ class TestInequalityQP:
         )
         np.testing.assert_allclose(result.theta, center, atol=1e-5)
         assert result.mu_ineq[0] < 1e-5
+
+
+# ---------------------------------------------------------------------------
+# Stall-based convergence: projected stationarity (issue #134)
+# ---------------------------------------------------------------------------
+
+
+def _pinned_obj(
+    x0: NDArray[np.float64],
+    f0: float = 0.0,
+    grad: NDArray[np.float64] | float = 1.0,
+) -> Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]]:
+    """Objective the inner solver cannot leave: f = ``f0`` with ∇f = ``grad``
+    (a vector, or a scalar broadcast to every component) at ``x0`` and
+    ``(inf, 0)`` everywhere else.
+
+    Mimics the issue-#134 failure mode — every L-BFGS-B trial step lands on a
+    non-finite value, so θ never moves.  Whether the resulting stall is a
+    constrained optimum or a failed solve is then decided purely by ∇f and the
+    constraint geometry at ``x0``.
+    """
+    g0 = np.broadcast_to(np.asarray(grad, dtype=np.float64), x0.shape).copy()
+
+    def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
+        if np.array_equal(theta, x0):
+            return f0, g0.copy()
+        return float("inf"), np.zeros_like(theta)
+
+    return obj
+
+
+_X0 = np.array([0.5, 0.5])
+_E1 = np.array([[1.0, 0.0]])
+_E2 = np.array([[0.0, 1.0]])
+_ONES = np.array([[1.0, 1.0]])
+
+
+class TestStallConvergenceProjectedStationarity:
+    """A feasible iterate whose θ stopped moving is accepted as converged only
+    when ∇f is explained, direction by direction, by the constraints that are
+    active there: equality normals with any multiplier sign, active inequality
+    normals with non-negative multipliers.  Whatever is left over is a
+    feasible descent direction, so a stall that leaves a residual above the
+    stationarity floor is a failed inner solve, never an active-set floor."""
+
+    @pytest.mark.parametrize(
+        "grad,A,b,C,d",
+        [
+            # λ = 1 on the equality 1ᵀθ = 1 explains ∇f = (1, 1).
+            ((1.0, 1.0), None, None, _ONES, np.array([1.0])),
+            # μ = 1 on θ₁ ≥ 0.5 (at its boundary) explains ∇f = (1, 0).
+            ((1.0, 0.0), _E1, np.array([0.5]), None, None),
+            # Degenerate stack: three rows active in two dimensions; ∇f lies
+            # in the cone of their normals.
+            (
+                (1.0, 1.0),
+                np.vstack([_E1, _E2, _ONES]),
+                np.array([0.5, 0.5, 1.0]),
+                None,
+                None,
+            ),
+            # Equality multiplier of either sign (λ = −3) plus μ = 2 on θ₂.
+            ((-3.0, 2.0), _E2, np.array([0.5]), _E1, np.array([0.5])),
+            # Inequality violated by 5e-8 < feas_tol, so μ > 0 after the first
+            # multiplier update; μ = 1 explains ∇f = (1, 0).
+            ((1.0, 0.0), _E1, np.array([0.5 + 5e-8]), None, None),
+        ],
+        ids=[
+            "equality-normal",
+            "inequality-at-boundary",
+            "stacked-inequalities",
+            "equality-and-inequality",
+            "inequality-positive-multiplier",
+        ],
+    )
+    def test_stall_at_constrained_optimum_converges(
+        self,
+        grad: tuple[float, float],
+        A: NDArray[np.float64] | None,
+        b: NDArray[np.float64] | None,
+        C: NDArray[np.float64] | None,
+        d: NDArray[np.float64] | None,
+    ) -> None:
+        """The alabama-parity stall exit is kept at genuine KKT points, even
+        though the solver's running multipliers (still zero or tiny) leave the
+        augmented-Lagrangian stationarity far above ``outer_tol``."""
+        result = auglag_minimize(
+            _pinned_obj(_X0, grad=np.array(grad)),
+            _X0,
+            A_ineq=A,
+            b_ineq=b,
+            C_eq=C,
+            d_eq=d,
+        )
+        assert result.converged
+        assert "projected stationarity" in result.message
+        np.testing.assert_array_equal(result.theta, _X0)
+
+    @pytest.mark.parametrize(
+        "grad,A,b,C,d",
+        [
+            # No constraints at all.
+            ((1.0, 1.0), None, None, None, None),
+            # Slack inequality: g = 0.5 > 0 at x0, μ stays 0.
+            ((1.0, 1.0), _E1, np.array([0.0]), None, None),
+            # An equality on θ₁ cannot explain ∇f in θ₂ (review of #134).
+            ((1.0, 1.0), None, None, _E1, np.array([0.5])),
+            # Positive multiplier on θ₁ ≥ 0.5, but ∇f also has a θ₂ component.
+            ((1.0, 1.0), _E1, np.array([0.5 + 5e-8]), None, None),
+            # Inequality at its boundary with ∇f pointing out of the feasible
+            # side: +e₁ is a feasible descent direction (would need μ = −1).
+            ((-1.0, 0.0), _E1, np.array([0.5]), None, None),
+            # ∇f orthogonal to the equality normal: descent along 1ᵀθ = 1.
+            ((1.0, -1.0), None, None, _ONES, np.array([1.0])),
+            # ∇f outside the cone spanned by two active inequality normals.
+            (
+                (1.0, -1.0),
+                np.vstack([_E1, _ONES]),
+                np.array([0.5, 1.0]),
+                None,
+                None,
+            ),
+        ],
+        ids=[
+            "unconstrained",
+            "slack-inequality",
+            "equality-other-coordinate",
+            "positive-multiplier-other-coordinate",
+            "inequality-wrong-sign",
+            "descent-along-equality",
+            "outside-inequality-cone",
+        ],
+    )
+    def test_stall_with_feasible_descent_not_converged(
+        self,
+        grad: tuple[float, float],
+        A: NDArray[np.float64] | None,
+        b: NDArray[np.float64] | None,
+        C: NDArray[np.float64] | None,
+        d: NDArray[np.float64] | None,
+    ) -> None:
+        options = AugLagOptions()
+        result = auglag_minimize(
+            _pinned_obj(_X0, grad=np.array(grad)),
+            _X0,
+            A_ineq=A,
+            b_ineq=b,
+            C_eq=C,
+            d_eq=d,
+            options=options,
+        )
+        assert not result.converged
+        np.testing.assert_array_equal(result.theta, _X0)
+        assert "stall" in result.message.lower()
+        # Gives up as soon as the stall is detected rather than burning the
+        # remaining outer budget on an immobile θ.
+        assert result.n_outer_iter < options.max_outer_iter
+
+    @pytest.mark.parametrize(
+        "f0,slope,expect_converged",
+        [
+            # Bound θ_tol^(2/3)·(1+|f|) ≈ 4.6e-6 · 1001 ≈ 4.6e-3.
+            (1000.0, 1e-6, True),  # numerical floor of a large-|f| fit
+            (1000.0, 1e-1, False),  # far above the floor
+            # |f| ≈ 0: bound ≈ 4.6e-6.
+            (0.0, 1e-6, True),
+            (0.0, 1e-4, False),
+        ],
+    )
+    def test_stall_stationarity_bound(
+        self, f0: float, slope: float, expect_converged: bool
+    ) -> None:
+        """An unexplained gradient is tolerated only up to the
+        Gill–Murray–Wright U3 floor ‖r‖∞ ≤ θ_tol^(2/3)·(1 + |f|) — the
+        gradient floor attainable when f itself is only resolved to relative
+        precision θ_tol²."""
+        result = auglag_minimize(
+            _pinned_obj(_X0, f0=f0, grad=slope),
+            _X0,
+            A_ineq=_E1,
+            b_ineq=np.array([0.0]),
+            C_eq=None,
+            d_eq=None,
+        )
+        assert result.converged is expect_converged
+
+
+class TestStallOnSmoothQuadratic:
+    """End-to-end form of the #134 review counter-example: a smooth quadratic
+    f = ½‖θ − (0, 1)‖² with θ₁ fixed at 1 by an equality, started at (1, 2).
+    The constrained optimum is (1, 1).  Starving L-BFGS-B's line search
+    (``maxls=1``) makes the inner solve stall at the start point; that stall
+    previously came back ``converged=True`` with KKT residual 1.0 because an
+    equality row existed at all."""
+
+    _C = np.array([[1.0, 0.0]])
+    _D = np.array([1.0])
+    _X_START = np.array([1.0, 2.0])
+    _X_OPT = np.array([1.0, 1.0])
+
+    @pytest.mark.parametrize(
+        "inner_options",
+        [
+            {"maxls": 1},
+            AugLagOptions().inner_options,
+        ],
+        ids=["starved-line-search", "default"],
+    )
+    def test_converged_implies_constrained_optimum(
+        self, inner_options: dict[str, object]
+    ) -> None:
+        result = auglag_minimize(
+            quadratic_obj(np.array([0.0, 1.0])),
+            self._X_START,
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=self._C,
+            d_eq=self._D,
+            options=AugLagOptions(inner_options=inner_options),
+        )
+        if result.converged:
+            np.testing.assert_allclose(result.theta, self._X_OPT, atol=1e-6)
+        else:
+            assert "stall" in result.message.lower()
+
+    def test_starved_line_search_reports_failure(self) -> None:
+        """Pin the failure path: with ``maxls=1`` θ₂ never leaves 2, and the
+        solver must say so instead of declaring the stall a KKT floor."""
+        result = auglag_minimize(
+            quadratic_obj(np.array([0.0, 1.0])),
+            self._X_START,
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=self._C,
+            d_eq=self._D,
+            options=AugLagOptions(inner_options={"maxls": 1}),
+        )
+        if np.allclose(result.theta, self._X_OPT, atol=1e-6):
+            pytest.skip("L-BFGS-B reached the optimum despite maxls=1")
+        assert not result.converged
+        assert result.kkt_residual > 0.5
+
+    def test_default_options_reach_optimum(self) -> None:
+        result = auglag_minimize(
+            quadratic_obj(np.array([0.0, 1.0])),
+            self._X_START,
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=self._C,
+            d_eq=self._D,
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, self._X_OPT, atol=1e-6)
+
+
+class TestProjectedStationarity:
+    """Unit tests for ``_projected_stationarity``: the residual of the best
+    representation ∇f = Cᵀλ + A_𝒜ᵀμ (λ free, μ ≥ 0) and the duality gap
+    μ*ᵀmax(g, 0) of the working-set rows it uses."""
+
+    @pytest.mark.parametrize(
+        "grad,C,A,g,expected_resid,expected_gap",
+        [
+            # Nothing to explain the gradient with.
+            ((3.0, -4.0), None, None, None, 4.0, 0.0),
+            # Equality normal absorbs ∇f entirely.
+            ((2.0, 2.0), _ONES, None, None, 0.0, 0.0),
+            # Equality on θ₁ leaves the θ₂ component.
+            ((1.0, 1.0), _E1, None, None, 1.0, 0.0),
+            # Rank-deficient C (duplicated direction) behaves like one row.
+            ((1.0, 1.0), np.array([[1.0, 0.0], [2.0, 0.0]]), None, None, 1.0, 0.0),
+            # Inequality, correct sign: μ = 2.
+            ((2.0, 0.0), None, _E1, (0.0,), 0.0, 0.0),
+            # Inequality, wrong sign: μ clipped to 0, nothing absorbed.
+            ((-2.0, 0.0), None, _E1, (0.0,), 2.0, 0.0),
+            # Working-set row with slack 0.1 used at μ = 2: gap 0.2.
+            ((2.0, 0.0), None, _E1, (0.1,), 0.0, 0.2),
+            # Slightly violated row (g < 0) contributes no gap.
+            ((2.0, 0.0), None, _E1, (-1e-8,), 0.0, 0.0),
+            # Equality (free sign, λ = −3) and inequality (μ = 2) together.
+            ((-3.0, 2.0), _E1, _E2, (0.0,), 0.0, 0.0),
+            # Inequality normal projected onto null(C): the θ₁ part of
+            # (1, 1) is irrelevant once θ₁ is fixed, μ = 1 absorbs θ₂.
+            ((5.0, 1.0), _E1, _ONES, (0.0,), 0.0, 0.0),
+        ],
+        ids=[
+            "unconstrained",
+            "equality-absorbs",
+            "equality-other-coordinate",
+            "equality-rank-deficient",
+            "inequality-right-sign",
+            "inequality-wrong-sign",
+            "slack-row-gap",
+            "violated-row-no-gap",
+            "equality-and-inequality",
+            "inequality-projected-on-equality",
+        ],
+    )
+    def test_known_values(
+        self,
+        grad: tuple[float, float],
+        C: NDArray[np.float64] | None,
+        A: NDArray[np.float64] | None,
+        g: tuple[float, ...] | None,
+        expected_resid: float,
+        expected_gap: float,
+    ) -> None:
+        C_ = np.zeros((0, 2)) if C is None else C
+        A_ = np.zeros((0, 2)) if A is None else A
+        g_ = np.zeros(0) if g is None else np.array(g)
+        resid, gap = _projected_stationarity(np.array(grad), C_, A_, g_)
+        np.testing.assert_allclose(resid, expected_resid, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(gap, expected_gap, rtol=1e-10, atol=1e-12)
+
+    def test_empty_parameter_vector(self) -> None:
+        resid, gap = _projected_stationarity(
+            np.zeros(0), np.zeros((0, 0)), np.zeros((0, 0)), np.zeros(0)
+        )
+        assert resid == 0.0
+        assert gap == 0.0
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3])
+    def test_residual_is_feasible_descent_direction(self, seed: int) -> None:
+        """Any unexplained residual r yields d = −r with C d = 0, A_𝒜 d ≥ 0
+        and ∇fᵀd = −‖r‖₂² < 0 — the descent direction a stall left behind."""
+        from scipy.optimize import nnls
+
+        rng = np.random.default_rng(seed)
+        n, m_eq, m_act = 6, 2, 4
+        grad = rng.normal(size=n)
+        C = rng.normal(size=(m_eq, n))
+        A = rng.normal(size=(m_act, n))
+        resid_inf, _ = _projected_stationarity(grad, C, A, np.zeros(m_act))
+        # Rebuild r independently: project onto null(C), then NNLS.
+        P = np.eye(n) - np.linalg.pinv(C) @ C
+        mu, _ = nnls(P @ A.T, P @ grad)
+        r = P @ grad - P @ A.T @ mu
+        np.testing.assert_allclose(np.max(np.abs(r)), resid_inf, rtol=1e-8)
+        d = -r
+        np.testing.assert_allclose(C @ d, 0.0, atol=1e-10)
+        assert np.all(A @ d >= -1e-10)
+        np.testing.assert_allclose(grad @ d, -(r @ r), rtol=1e-8, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------

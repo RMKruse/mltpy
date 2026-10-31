@@ -1475,6 +1475,102 @@ fit_v_bc <- tram::BoxCox(y ~ x_d | x_s, data = df_v_bc,
                    y = y_v_bc, x_d = x_d_v_bc, x_s = x_s_v_bc,
                    support = c(a_v_bc, b_v_bc))
 
+# ---------------------------------------------------------------------------
+# confband reference — *scaling* BoxCox fit (heteroskedastic baseline).
+#
+# Reuses the interior seed-770 BoxCox(y ~ x_d | x_s) fit above (so the θ_b
+# block of vcov is well-conditioned and matches mltpy's ``inv(H)``; a
+# boundary fit would need R's active-set vcov penalty and would not match a
+# bare delta-method band).  Builds the pointwise Wald band by the delta
+# method on the *full* ``[θ_b | β | γ]`` parameter vector, exercising the γ
+# columns of the Jacobian:
+#
+#   h(y|x_d,x_s) = h_0(y)·s + x_d·β,   s = exp(0.5·x_s·γ),   h' = h_0'·s
+#
+# Sign convention: ``coef(as.mlt(fit))`` and ``vcov(as.mlt(fit))`` are in
+# R's ``h − x_d·β_R`` parameterisation, so the β column of the Jacobian is
+# ``∂h/∂β_R = −x_d`` and the back-transformed curve uses ``h = h_0·s −
+# x_d·β_R`` — this matches mltpy's ``h + x_d·β`` curve because mltpy stores
+# β = −β_R (ADR 0002, Decision 5).  The resulting band is parameterisation-
+# invariant, so the mltpy parity test compares directly without any flip.
+#
+# Writes (m = grid length):
+#   reference/confband_scaling_y_grid.txt  — m-point grid
+#   reference/confband_scaling_profile.txt — "x_d0 x_s0" (single profile)
+#   reference/confband_scaling_<what>.txt  — (m, 3) row-major [est, lwr, upr]
+# ---------------------------------------------------------------------------
+m_cbs   <- as.mlt(fit_v_bc)
+cf_cbs  <- coef(m_cbs)
+V_cbs   <- as.matrix(vcov(m_cbs))
+p_cbs   <- 5L
+nm_cbs  <- names(cf_cbs)
+theta_b_cbs <- cf_cbs[1:p_cbs]
+beta_r_cbs  <- cf_cbs[grep("x_d", nm_cbs)]
+gamma_r_cbs <- cf_cbs[grep("scl", nm_cbs)]
+
+# Single covariate / scaling profile and an interior grid (avoid endpoints
+# where h' -> 0 on the Bernstein basis).
+xd0_cbs <- 0.6
+xs0_cbs <- 0.7
+yg_cbs  <- seq(a_v_bc + 0.3, b_v_bc - 0.3, length.out = 15)
+
+bb_cbs <- Bernstein_basis(numeric_var("y", support = c(a_v_bc, b_v_bc)),
+                          order = 4, ui = "increasing")
+B_cbs  <- model.matrix(bb_cbs, data = data.frame(y = yg_cbs))
+D_cbs  <- model.matrix(bb_cbs, data = data.frame(y = yg_cbs), deriv = c(y = 1L))
+
+s_cbs   <- as.numeric(exp(0.5 * xs0_cbs * gamma_r_cbs))
+h0_cbs  <- as.numeric(B_cbs %*% theta_b_cbs)
+hp0_cbs <- as.numeric(D_cbs %*% theta_b_cbs)
+h_cbs   <- h0_cbs * s_cbs - xd0_cbs * beta_r_cbs   # = mltpy's h_0·s + x_d·β
+hp_cbs  <- hp0_cbs * s_cbs
+qn_cbs  <- qnorm(0.975)
+
+# Jacobian in [θ_b | β_R | γ] order (matching V_cbs).  `with_loghp` adds the
+# ∂(log h')/∂θ contribution present in the density / hazard linear predictors.
+.cbs_jac <- function(coeff, with_loghp) {
+  J <- matrix(0, length(yg_cbs), p_cbs + 2L)
+  J[, 1:p_cbs] <- if (with_loghp) coeff * (s_cbs * B_cbs) + D_cbs / hp0_cbs
+                  else coeff * (s_cbs * B_cbs)
+  J[, p_cbs + 1L] <- coeff * (-xd0_cbs)                       # ∂h/∂β_R = -x_d
+  J[, p_cbs + 2L] <- if (with_loghp) 0.5 * xs0_cbs * (coeff * h0_cbs * s_cbs + 1)
+                     else coeff * h0_cbs * s_cbs * 0.5 * xs0_cbs
+  J
+}
+.cbs_var <- function(J) rowSums((J %*% V_cbs) * J)
+
+# trafo / distribution / survivor (η = h; coeff = 1, no log h' term).
+se_h_cbs <- sqrt(.cbs_var(.cbs_jac(1, FALSE)))
+lo_cbs   <- h_cbs - qn_cbs * se_h_cbs
+hi_cbs   <- h_cbs + qn_cbs * se_h_cbs
+.write_band(h_cbs, lo_cbs, hi_cbs, "confband_scaling_trafo.txt")
+.write_band(pnorm(h_cbs), pnorm(lo_cbs), pnorm(hi_cbs),
+            "confband_scaling_distribution.txt")
+.write_band(1 - pnorm(h_cbs), 1 - pnorm(hi_cbs), 1 - pnorm(lo_cbs),
+            "confband_scaling_survivor.txt")
+
+# density (η = log f(h) + log h'; coeff = ψ(h) = -h for N(0,1)).
+psi_cbs   <- -h_cbs
+se_d_cbs  <- sqrt(.cbs_var(.cbs_jac(psi_cbs, TRUE)))
+eta_d_cbs <- dnorm(h_cbs, log = TRUE) + log(hp_cbs)
+.write_band(exp(eta_d_cbs), exp(eta_d_cbs - qn_cbs * se_d_cbs),
+            exp(eta_d_cbs + qn_cbs * se_d_cbs), "confband_scaling_density.txt")
+
+# hazard (η = log f(h) + log h' - log S(h); coeff = ψ(h) + λ(h)).
+lam_cbs   <- dnorm(h_cbs) / pnorm(h_cbs, lower.tail = FALSE)
+se_z_cbs  <- sqrt(.cbs_var(.cbs_jac(psi_cbs + lam_cbs, TRUE)))
+eta_z_cbs <- dnorm(h_cbs, log = TRUE) + log(hp_cbs) -
+             pnorm(h_cbs, lower.tail = FALSE, log.p = TRUE)
+.write_band(exp(eta_z_cbs), exp(eta_z_cbs - qn_cbs * se_z_cbs),
+            exp(eta_z_cbs + qn_cbs * se_z_cbs), "confband_scaling_hazard.txt")
+
+writeLines(format(yg_cbs, digits = 15),
+           con = file.path(out_dir, "confband_scaling_y_grid.txt"))
+writeLines(paste(format(xd0_cbs, digits = 15), format(xs0_cbs, digits = 15)),
+           con = file.path(out_dir, "confband_scaling_profile.txt"))
+cat(sprintf("confband scaling refs: p=%d, m=%d, profile=(%.2f, %.2f)\n",
+            p_cbs, length(yg_cbs), xd0_cbs, xs0_cbs))
+
 # Dedicated Colr vcov fit — n=200, order=4, seed=770 gives an interior MLE.
 set.seed(770)
 n_v_co <- 200
@@ -1697,3 +1793,940 @@ cat(sprintf("profile_ci_baseline: p=%d rows written\n",
 .write_profile_ci_ref(fit_bc,   "profile_ci_boxcox.txt")
 .write_profile_ci_ref(fit_colr, "profile_ci_colr.txt")
 .write_profile_ci_ref(fit_cx,   "profile_ci_coxph.txt")
+
+# ---------------------------------------------------------------------------
+# Scaling + InteractionBasis (stram) — issue #103, ADR 0003.
+#
+# The non-proportional, heteroskedastic CTM: an interacting Bernstein-y ×
+# Bernstein-x baseline scaled by exp(0.5 · x_s · γ), exact data, Normal base.
+# This is the mltpy analogue of R's no-shift shift-scale model
+# ``y | s ~ 1 | z`` (class ``stram``); R `tram` flags the combination "highly
+# experimental" (see docs/adr/0003-scaling-with-interaction.md).
+#
+# We fit it directly through ``mlt::ctm`` rather than the ``tram`` formula
+# interface — exactly as the ``interaction_bs_bs_*`` fixtures above do — so the
+# response (Bernstein-y) and interacting (Bernstein-x) bases match mltpy's
+# ``InteractionBasis`` term-for-term.  The scale term is a one-column linear
+# basis in ``x_s`` (intercept removed), giving s(x) = x_s and the documented
+# √(exp(s·γ)) = exp(0.5·x_s·γ) factor (mlt's default ``scale_shift = FALSE``).
+#
+# mlt's coefficient vector orders [ baseline (response × interacting) |
+# scaling ]; with no shift block the trailing q_s entries are γ.  γ is sign-
+# AND magnitude-aligned with mltpy (no flip — ADR 0003 Decision 6 / ADR 0002
+# Decision 5), so the Python ratchet compares ``model.gamma_`` to
+# ``stram_*_gamma.txt`` directly.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_normal_``):
+#   *_y_train.txt    — response, length n
+#   *_x_train.txt    — interacting covariate, length n
+#   *_x_s_train.txt  — scaling covariate, length n
+#   *_y_support.txt  — "a b" on one line
+#   *_theta.txt      — full coef(fit): [vec(Θ) (mlt order) | γ], length p*q+q_s
+#   *_gamma.txt      — scale coefficients only, length q_s
+#   *_gamma_vcov.txt — γ block of vcov(fit), (q_s, q_s) flattened row-major
+#                      (issue #105: Wald SEs for γ on the interaction path)
+#   *_loglik.txt     — scalar logLik
+#
+# Active constraint and precision (issue #125): unlike the sibling stram blocks
+# this MLE is NOT interior — the middle Θ column (x = 0.5) sits on the
+# monotonicity boundary, Θ[1, 2] = Θ[2, 2].  The default alabama fit stops at
+# abstol = 1e-7, which leaves γ ~5e-5 (relative) short of the optimum and the
+# boundary row infeasible by ~1e-8.  The plain-BFGS polish the sibling blocks
+# use is unconstrained and so not valid here; instead the fit is polished with
+# mlt's ``spg`` optimiser (BB::BBoptim with an exact linear projection onto
+# ``ui θ ≥ ci``), which lands on the boundary exactly.  Starting the same
+# polish from a tighter-auglag point reproduces γ to ~2e-9 (relative).
+#
+# Requires mlt >= 1.7 (``scaling`` / ``scale_shift`` in ``ctm``).  Fixtures
+# materialised with R 4.6.1, mlt 1.8.4, basefun 1.2.6, variables 1.1.2,
+# BB 2026.1.0, alabama 2025.1.0 (tram 1.4.7 installed; not used by this block).
+# ---------------------------------------------------------------------------
+set.seed(20260525)
+n_st <- 300L
+p_st <- 3L  # number of Bernstein-y functions
+q_st <- 3L  # number of Bernstein-x functions
+x_st   <- runif(n_st, 0, 1)
+x_s_st <- rnorm(n_st)
+# Heteroskedastic conditional response: location shifts mildly with x, spread
+# grows with x_s.  The MLE has one active monotonicity row (see above).
+y_st <- 0.5 + 1.0 * x_st + rnorm(n_st, sd = exp(0.5 * 0.3 * x_s_st)) * 0.6
+a_st <- min(y_st) - 0.2
+b_st <- max(y_st) + 0.2
+
+df_st <- data.frame(y = y_st, x = x_st, x_s = x_s_st)
+m_y_st <- numeric_var("y", support = c(a_st, b_st))
+m_x_st <- numeric_var("x", support = c(0, 1))
+b_y_st <- Bernstein_basis(m_y_st, order = p_st - 1L, ui = "increasing")
+b_x_st <- Bernstein_basis(m_x_st, order = q_st - 1L)
+# One-column linear scaling basis in x_s (no intercept) → s(x) = x_s.
+b_s_st <- as.basis(~ x_s, data = df_st, remove_intercept = TRUE)
+
+ctm_st <- ctm(response = b_y_st,
+              interacting = b_x_st,
+              scaling = b_s_st,
+              scale_shift = FALSE,
+              todistr = "Normal")
+fit0_st <- mlt(ctm_st, data = df_st)
+fit_st  <- mlt(ctm_st, data = df_st, theta = coef(fit0_st),
+               optim = mltoptim(spg = list(ftol = 1e-15, gtol = 1e-10,
+                                           maxit = 100000L, quiet = TRUE,
+                                           checkGrad = FALSE))["spg"])
+# Converged, feasible (every Θ column non-decreasing), and on the boundary.
+Theta_st <- matrix(coef(fit_st)[1:(p_st * q_st)], p_st, q_st)
+stopifnot(fit_st$convergence == 0,
+          min(diff(Theta_st)) >= 0,
+          min(diff(Theta_st)) < 1e-8,
+          as.numeric(logLik(fit_st)) > as.numeric(logLik(fit0_st)))
+
+theta_st <- coef(fit_st)
+ll_st    <- as.numeric(logLik(fit_st))
+# Scaling coefficients are the trailing q_s entries (no shift block); also
+# identifiable by the scaling-basis column name(s).
+scl_names_st <- colnames(model.matrix(b_s_st, data = df_st))
+gamma_st <- theta_st[scl_names_st]
+# γγ block of the inverse observed information.  vcov.mlt is solve(Hessian)
+# and ignores the active monotonicity row — the same quantity mltpy's default
+# vcov() returns as inv(H) from the finite-difference interaction Hessian.
+gamma_vcov_st <- vcov(fit_st)[scl_names_st, scl_names_st, drop = FALSE]
+
+writeLines(format(y_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_y_train.txt"))
+writeLines(format(x_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_x_train.txt"))
+writeLines(format(x_s_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_x_s_train.txt"))
+writeLines(paste(format(a_st, digits = 15), format(b_st, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_normal_y_support.txt"))
+writeLines(format(theta_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_theta.txt"))
+writeLines(format(as.numeric(gamma_st), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_gamma.txt"))
+writeLines(format(flatten_row_major(gamma_vcov_st), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_gamma_vcov.txt"))
+writeLines(format(ll_st, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_normal_loglik.txt"))
+
+cat(sprintf("stram_bs_bs normal ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_st, p_st, q_st, length(gamma_st), ll_st))
+
+# ---------------------------------------------------------------------------
+# Coxph(interacting=..., scaling=...) — issue #106.
+#
+# The survival analogue of the stram block above: same Bernstein-y ×
+# Bernstein-x interacting baseline scaled by exp(0.5 · x_s · γ), but with the
+# minimum extreme value link (``todistr = "MinExtrVal"``) that mltpy's Coxph
+# forces, so log[-log S(t | x, x_s)] = h(t | x) · exp(0.5 · x_s · γ).  Exact
+# (uncensored) event times only — the interaction likelihood path is
+# exact-data only.  Fitted through ``mlt::ctm`` for term-for-term basis
+# agreement with mltpy's ``InteractionBasis``; γ is sign- and magnitude-aligned
+# with mltpy (no flip).
+#
+# Data: log[-log S(t)] = exp(0.5·γ·x_s)·(2·(t − 4.5) + 0.8·(x − 0.5)) with
+# γ = 0.4 — a non-proportional-hazards model whose baseline is linear in t and
+# in x, so it lies exactly in the Bernstein-y (order 2) ⊗ Bernstein-x (order 1)
+# span.  With n = 1000 the MLE is strictly interior (every Θ column has
+# increments ≈ 3 or more): no active monotonicity constraint leaves a flat
+# ridge, so γ is determined well below the 1e-6 parity tolerance.
+#
+# Precision: mlt's default auglag stops on alabama's inner BFGS tolerance
+# (reltol ≈ 1.5e-8 on |ℓ| ≈ 10³), which leaves γ about 1e-6 (relative) short
+# of the optimum.  Because the MLE is interior, the fit is polished from that
+# solution with plain BFGS at reltol = 1e-15; ``checkconstraints = TRUE``
+# confirms the polished point is still feasible.  A second polish moves θ by
+# ~1e-15.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_mev_``):
+#   *_y_train.txt    — event times, length n
+#   *_x_train.txt    — interacting covariate, length n
+#   *_x_s_train.txt  — scaling covariate, length n
+#   *_y_support.txt  — "a b" on one line
+#   *_theta.txt      — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt      — scale coefficients only, length q_s
+#   *_loglik.txt     — scalar logLik
+#   *_grid.txt       — prediction grid, one "t x x_s" row per line
+#   *_survivor.txt   — S(t | x, x_s) at each grid row
+#   *_hazard.txt     — hazard f/S at each grid row
+# ---------------------------------------------------------------------------
+set.seed(20261031)
+n_mv <- 1000L
+p_mv <- 3L  # number of Bernstein-y functions
+q_mv <- 2L  # number of Bernstein-x functions
+x_mv   <- runif(n_mv, 0, 1)
+x_s_mv <- rnorm(n_mv)
+# Invert S(t) = exp(-exp(k · h0(t | x))) at S = U for t.
+k_mv <- exp(0.5 * 0.4 * x_s_mv)
+y_mv <- 4.5 - 0.4 * (x_mv - 0.5) + log(-log(runif(n_mv))) / (2 * k_mv)
+a_mv <- min(y_mv) - 0.1
+b_mv <- max(y_mv) + 0.1
+
+df_mv <- data.frame(y = y_mv, x = x_mv, x_s = x_s_mv)
+m_y_mv <- numeric_var("y", support = c(a_mv, b_mv))
+m_x_mv <- numeric_var("x", support = c(0, 1))
+b_y_mv <- Bernstein_basis(m_y_mv, order = p_mv - 1L, ui = "increasing")
+b_x_mv <- Bernstein_basis(m_x_mv, order = q_mv - 1L)
+b_s_mv <- as.basis(~ x_s, data = df_mv, remove_intercept = TRUE)
+
+ctm_mv <- ctm(response = b_y_mv,
+              interacting = b_x_mv,
+              scaling = b_s_mv,
+              scale_shift = FALSE,
+              todistr = "MinExtrVal")
+fit0_mv <- mlt(ctm_mv, data = df_mv)
+fit_mv  <- mlt(ctm_mv, data = df_mv, theta = coef(fit0_mv),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+stopifnot(fit_mv$convergence == 0,
+          min(diff(matrix(coef(fit_mv)[1:(p_mv * q_mv)], p_mv, q_mv))) > 1)
+
+theta_mv <- coef(fit_mv)
+ll_mv    <- as.numeric(logLik(fit_mv))
+scl_names_mv <- colnames(model.matrix(b_s_mv, data = df_mv))
+gamma_mv <- theta_mv[scl_names_mv]
+
+# Per-row predictions at (t, x, x_s).  ``predict()`` on a ctm with a
+# ``scaling`` term errors inside mlt (predict.cbind_bases, observed with
+# mlt 1.8.4), so h is assembled from the tensor basis directly:
+# h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ), with the
+# first p·q coefficients being vec(Θ) in the box-basis column order.  The
+# stopifnot() below checks this reconstruction reproduces logLik(fit).
+# Minimum extreme value: S = exp(−exp(h)), hazard = f/S = exp(h)·h'.
+bb_mv <- b(bresponse = b_y_mv, binteracting = b_x_mv)
+pq_mv <- p_mv * q_mv
+.h_mv <- function(d) {
+  f <- exp(0.5 * d$x_s * gamma_mv)
+  list(h  = drop(model.matrix(bb_mv, data = d) %*% theta_mv[1:pq_mv]) * f,
+       hp = drop(model.matrix(bb_mv, data = d, deriv = c(y = 1)) %*%
+                   theta_mv[1:pq_mv]) * f)
+}
+tr_mv <- .h_mv(df_mv)
+stopifnot(isTRUE(all.equal(sum(tr_mv$h - exp(tr_mv$h) + log(tr_mv$hp)), ll_mv,
+                           tolerance = 1e-10)))
+
+grid_mv <- expand.grid(y = quantile(y_mv, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       x = c(0.2, 0.8),
+                       x_s = c(-1, 0, 1.5))
+hg_mv   <- .h_mv(grid_mv)
+surv_mv <- exp(-exp(hg_mv$h))
+haz_mv  <- exp(hg_mv$h) * hg_mv$hp
+
+writeLines(format(y_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_y_train.txt"))
+writeLines(format(x_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_x_train.txt"))
+writeLines(format(x_s_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_x_s_train.txt"))
+writeLines(paste(format(a_mv, digits = 15), format(b_mv, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_mev_y_support.txt"))
+writeLines(format(theta_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_theta.txt"))
+writeLines(format(as.numeric(gamma_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_gamma.txt"))
+writeLines(format(ll_mv, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_loglik.txt"))
+write.table(format(as.matrix(grid_mv), digits = 15),
+            file = file.path(out_dir, "stram_bs_bs_mev_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(as.numeric(surv_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_survivor.txt"))
+writeLines(format(as.numeric(haz_mv), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_mev_hazard.txt"))
+
+cat(sprintf("stram_bs_bs mev ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_mv, p_mv, q_mv, length(gamma_mv), ll_mv))
+
+# ---------------------------------------------------------------------------
+# Colr(interacting=..., scaling=...) — issue #108.
+#
+# The continuous-outcome logistic analogue of the stram_bs_bs_mev block above:
+# the same Bernstein-y × Bernstein-x interacting baseline scaled by
+# exp(0.5 · x_s · γ), but with the standard logistic link
+# (``todistr = "Logistic"``) that mltpy's Colr forces, so
+# logit F(y | x, x_s) = h(y | x) · exp(0.5 · x_s · γ) — a non-proportional-odds
+# CTM.  Exact (uncensored) responses only — the interaction likelihood path is
+# exact-data only.  Fitted through ``mlt::ctm`` for term-for-term basis
+# agreement with mltpy's ``InteractionBasis``; γ is sign- and magnitude-aligned
+# with mltpy (no flip).
+#
+# Data: logit F(y) = exp(0.5·γ·x_s)·(2·(y − 4.5) + 0.8·(x − 0.5)) with
+# γ = 0.4, whose baseline is linear in y and in x and so lies exactly in the
+# Bernstein-y (order 2) ⊗ Bernstein-x (order 1) span.  With n = 1000 the MLE
+# is strictly interior (every Θ column increment is well above 1), so γ is
+# determined well below the 1e-6 parity tolerance.  The same BFGS polish at
+# reltol = 1e-15 as the mev block takes γ past alabama's inner tolerance.
+#
+# Fixtures emitted (prefix ``stram_bs_bs_logistic_``):
+#   *_y_train.txt      — responses, length n
+#   *_x_train.txt      — interacting covariate, length n
+#   *_x_s_train.txt    — scaling covariate, length n
+#   *_y_support.txt    — "a b" on one line
+#   *_theta.txt        — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt        — scale coefficients only, length q_s
+#   *_gamma_tram.txt   — γ from the tram::Colr(y | x ~ 1 | x_s) stram fit
+#   *_loglik.txt       — scalar logLik
+#   *_grid.txt         — prediction grid, one "y x x_s" row per line
+#   *_distribution.txt — F(y | x, x_s) at each grid row
+#   *_density.txt      — f(y | x, x_s) = dlogis(h)·h' at each grid row
+# ---------------------------------------------------------------------------
+set.seed(20261108)
+n_lg <- 1000L
+p_lg <- 3L  # number of Bernstein-y functions
+q_lg <- 2L  # number of Bernstein-x functions
+x_lg   <- runif(n_lg, 0, 1)
+x_s_lg <- rnorm(n_lg)
+# Invert F(y) = plogis(k · h0(y | x)) at F = U for y.
+k_lg <- exp(0.5 * 0.4 * x_s_lg)
+y_lg <- 4.5 - 0.4 * (x_lg - 0.5) + qlogis(runif(n_lg)) / (2 * k_lg)
+a_lg <- min(y_lg) - 0.1
+b_lg <- max(y_lg) + 0.1
+
+df_lg <- data.frame(y = y_lg, x = x_lg, x_s = x_s_lg)
+m_y_lg <- numeric_var("y", support = c(a_lg, b_lg))
+m_x_lg <- numeric_var("x", support = c(0, 1))
+b_y_lg <- Bernstein_basis(m_y_lg, order = p_lg - 1L, ui = "increasing")
+b_x_lg <- Bernstein_basis(m_x_lg, order = q_lg - 1L)
+b_s_lg <- as.basis(~ x_s, data = df_lg, remove_intercept = TRUE)
+
+ctm_lg <- ctm(response = b_y_lg,
+              interacting = b_x_lg,
+              scaling = b_s_lg,
+              scale_shift = FALSE,
+              todistr = "Logistic")
+fit0_lg <- mlt(ctm_lg, data = df_lg)
+fit_lg  <- mlt(ctm_lg, data = df_lg, theta = coef(fit0_lg),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+stopifnot(fit_lg$convergence == 0,
+          min(diff(matrix(coef(fit_lg)[1:(p_lg * q_lg)], p_lg, q_lg))) > 1)
+
+theta_lg <- coef(fit_lg)
+ll_lg    <- as.numeric(logLik(fit_lg))
+scl_names_lg <- colnames(model.matrix(b_s_lg, data = df_lg))
+gamma_lg <- theta_lg[scl_names_lg]
+
+# Cross-check against the literal tram formula route, ``tram::Colr(y | x ~ 1
+# | x_s)`` (class ``stram``; tram warns that strata + scale is "highly
+# experimental").  Its interacting term is the linear model matrix (1, x),
+# which spans the same space as Bernstein-x of order 1 on [0, 1], so the two
+# fits share the MLE: same logLik and γ, and Θ maps as
+# Θ[, x = 0] = (Intercept) and Θ[, x = 1] = (Intercept) + x.  Polished with
+# the same BFGS step as the ctm fit.
+suppressPackageStartupMessages(library(tram))
+tram_lg0 <- suppressWarnings(
+  Colr(y | x ~ 1 | x_s, data = df_lg, order = p_lg - 1L,
+       support = c(a_lg, b_lg), bounds = c(a_lg, b_lg)))
+stopifnot(inherits(tram_lg0, "stram"))
+tram_lg <- mlt(tram_lg0$model, data = df_lg,
+               theta = coef(tram_lg0, with_baseline = TRUE),
+               optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                             method = "BFGS",
+                                             maxit = 100000L,
+                                             reltol = 1e-15))["optim"])
+tram_cf_lg <- coef(tram_lg)
+gamma_tram_lg <- tram_cf_lg[paste0("scl_", scl_names_lg)]
+tram_theta_lg <- matrix(tram_cf_lg[1:(p_lg * q_lg)], p_lg, q_lg)
+stopifnot(
+  tram_lg$convergence == 0,
+  isTRUE(all.equal(as.numeric(logLik(tram_lg)), ll_lg, tolerance = 1e-10)),
+  isTRUE(all.equal(unname(gamma_tram_lg), unname(gamma_lg), tolerance = 1e-6)),
+  isTRUE(all.equal(cbind(tram_theta_lg[, 1], rowSums(tram_theta_lg)),
+                   matrix(theta_lg[1:(p_lg * q_lg)], p_lg, q_lg),
+                   tolerance = 1e-6, check.attributes = FALSE)))
+
+# Per-row predictions at (y, x, x_s), assembled from the tensor basis exactly
+# as in the mev block (``predict()`` on a scaled ctm errors in mlt 1.8.4):
+# h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ).  The
+# stopifnot() below checks the reconstruction reproduces logLik(fit).
+# Logistic: F = plogis(h), f = dlogis(h)·h'.
+bb_lg <- b(bresponse = b_y_lg, binteracting = b_x_lg)
+pq_lg <- p_lg * q_lg
+.h_lg <- function(d) {
+  f <- exp(0.5 * d$x_s * gamma_lg)
+  list(h  = drop(model.matrix(bb_lg, data = d) %*% theta_lg[1:pq_lg]) * f,
+       hp = drop(model.matrix(bb_lg, data = d, deriv = c(y = 1)) %*%
+                   theta_lg[1:pq_lg]) * f)
+}
+tr_lg <- .h_lg(df_lg)
+stopifnot(isTRUE(all.equal(sum(dlogis(tr_lg$h, log = TRUE) + log(tr_lg$hp)),
+                           ll_lg, tolerance = 1e-10)))
+
+grid_lg <- expand.grid(y = quantile(y_lg, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       x = c(0.2, 0.8),
+                       x_s = c(-1, 0, 1.5))
+hg_lg   <- .h_lg(grid_lg)
+dist_lg <- plogis(hg_lg$h)
+dens_lg <- dlogis(hg_lg$h) * hg_lg$hp
+
+writeLines(format(y_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_y_train.txt"))
+writeLines(format(x_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_x_train.txt"))
+writeLines(format(x_s_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_x_s_train.txt"))
+writeLines(paste(format(a_lg, digits = 15), format(b_lg, digits = 15)),
+           con = file.path(out_dir, "stram_bs_bs_logistic_y_support.txt"))
+writeLines(format(theta_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_theta.txt"))
+writeLines(format(as.numeric(gamma_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_gamma.txt"))
+writeLines(format(as.numeric(gamma_tram_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_gamma_tram.txt"))
+writeLines(format(ll_lg, digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_loglik.txt"))
+write.table(format(as.matrix(grid_lg), digits = 15),
+            file = file.path(out_dir, "stram_bs_bs_logistic_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(as.numeric(dist_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_distribution.txt"))
+writeLines(format(as.numeric(dens_lg), digits = 15),
+           con = file.path(out_dir, "stram_bs_bs_logistic_density.txt"))
+
+cat(sprintf("stram_bs_bs logistic ref: n=%d, p=%d, q=%d, q_s=%d, ll=%.6f\n",
+            n_lg, p_lg, q_lg, length(gamma_lg), ll_lg))
+
+# ---------------------------------------------------------------------------
+# BoxCox(interacting=..., scaling=...) — issue #107.
+#
+# The stratified, scaled Box-Cox model of ADR 0003 Decision 6, fitted through
+# the R ``tram`` formula interface as the no-shift ``stram`` model
+#
+#     BoxCox(y | s ~ 1 | z)
+#
+# i.e. h(y | s, z) = (a(y)ᵀ Θ e_s) · exp(0.5 · z · γ) with a Normal link.  The
+# stratum s is a 3-level factor; mltpy's analogue is
+# ``BoxCox(interacting=OneHotBasis(K=3), scaling=z)``.  tram encodes s with
+# treatment contrasts — columns ``Bs_i(y):(Intercept)``, ``Bs_i(y):sb``,
+# ``Bs_i(y):sc`` — so its Θ is a linear reparametrisation of mltpy's one-hot
+# Θ: column k of the one-hot Θ is the intercept column plus contrast column k
+# (zero for the reference level).  The function space, logLik and γ are
+# identical at an interior MLE; ``*_theta_onehot.txt`` stores the mapped Θ.
+#
+# Data: within stratum k, h = exp(0.5·γ·z)·sl_k·(y − mu_k) with γ = 0.4 —
+# linear in y, hence exactly in the Bernstein (order 2) span, with different
+# slopes and locations per stratum (crossing conditional CDFs).  n = 900 keeps
+# the MLE strictly interior (every Θ column increment > 1).
+#
+# Precision: as in the stram_bs_bs_mev block, tram's default auglag stops
+# ~5e-3 short of the optimum on Θ, so the fit is polished with plain BFGS at
+# reltol = 1e-15 from that solution (``checkconstraints = TRUE`` confirms
+# feasibility); a second polish moves θ by ~1e-16.
+#
+# ``predict()`` on a stram fit errors inside mlt (observed with mlt 1.8.4), so
+# h is assembled from the tensor basis directly and the stopifnot() below
+# checks it reproduces logLik(fit).  Normal link: F = Φ(h), f = φ(h)·h'; the
+# quantile solves h(y) = Φ⁻¹(p) by uniroot on the support.
+#
+# Fixtures emitted (prefix ``stram_onehot_bs_boxcox_``):
+#   *_y_train.txt       — response, length n
+#   *_s_train.txt       — stratum codes 0..K-1 (mltpy OneHotBasis labels)
+#   *_x_s_train.txt     — scaling covariate z, length n
+#   *_y_support.txt     — "a b" on one line
+#   *_theta.txt         — raw coef(fit, with_baseline = TRUE): [Θ (tram
+#                         treatment-contrast order) | γ]
+#   *_theta_onehot.txt  — one-hot Θ, (p, K) flattened row-major (mltpy vec_C)
+#   *_gamma.txt         — scale coefficient coef(fit)[fit$scalecoef], length 1
+#   *_loglik.txt        — scalar logLik
+#   *_grid.txt          — prediction grid, one "y s z" row per line
+#   *_distribution.txt  — F(y | s, z) at each grid row
+#   *_density.txt       — f(y | s, z) at each grid row
+#   *_qgrid.txt         — quantile grid, one "p s z" row per line
+#   *_quantile.txt      — F⁻¹(p | s, z) at each quantile-grid row
+# ---------------------------------------------------------------------------
+set.seed(20261101)
+n_bx <- 900L
+p_bx <- 3L  # number of Bernstein-y functions
+lev_bx <- c("a", "b", "c")
+s_bx   <- factor(sample(lev_bx, n_bx, replace = TRUE), levels = lev_bx)
+z_bx   <- rnorm(n_bx)
+sl_bx  <- c(a = 1.5, b = 2.5, c = 2.0)[as.character(s_bx)]
+mu_bx  <- c(a = 0.0, b = 0.5, c = -0.3)[as.character(s_bx)]
+y_bx   <- mu_bx + rnorm(n_bx) / (sl_bx * exp(0.5 * 0.4 * z_bx))
+sup_bx <- c(min(y_bx) - 0.2, max(y_bx) + 0.2)
+df_bx  <- data.frame(y = y_bx, s = s_bx, z = z_bx)
+
+fit0_bx <- suppressWarnings(  # "highly experimental" stram warning
+  BoxCox(y | s ~ 1 | z, data = df_bx, order = p_bx - 1L, support = sup_bx,
+         bounds = c(-Inf, Inf)))
+fit_bx <- suppressWarnings(
+  BoxCox(y | s ~ 1 | z, data = df_bx, order = p_bx - 1L, support = sup_bx,
+         bounds = c(-Inf, Inf), theta = coef(fit0_bx, with_baseline = TRUE),
+         optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                       method = "BFGS",
+                                       maxit = 100000L,
+                                       reltol = 1e-15))["optim"]))
+stopifnot(inherits(fit_bx, "stram"), fit_bx$convergence == 0)
+
+theta_bx <- coef(fit_bx, with_baseline = TRUE)
+ll_bx    <- as.numeric(logLik(fit_bx))
+gamma_bx <- theta_bx[fit_bx$scalecoef]
+
+# Tensor basis with the same response basis and treatment contrasts as tram;
+# its column names match the baseline entries of coef(fit).
+bb_bx <- b(bresponse = Bernstein_basis(numeric_var("y", support = sup_bx),
+                                       order = p_bx - 1L, ui = "increasing"),
+           binteracting = as.basis(~ s, data = df_bx))
+th0_bx <- theta_bx[colnames(model.matrix(bb_bx, data = df_bx))]
+.h_bx <- function(d) {
+  f <- exp(0.5 * d$z * gamma_bx)
+  list(h  = drop(model.matrix(bb_bx, data = d) %*% th0_bx) * f,
+       hp = drop(model.matrix(bb_bx, data = d, deriv = c(y = 1)) %*% th0_bx) * f)
+}
+tr_bx <- .h_bx(df_bx)
+stopifnot(isTRUE(all.equal(sum(dnorm(tr_bx$h, log = TRUE) + log(tr_bx$hp)),
+                           ll_bx, tolerance = 1e-10)))
+
+# One-hot Θ: rows = Bernstein-y functions, columns = strata a, b, c.
+C_bx <- matrix(th0_bx, nrow = p_bx)  # columns: (Intercept), sb, sc
+Theta_bx <- cbind(C_bx[, 1], C_bx[, 1] + C_bx[, -1, drop = FALSE])
+stopifnot(min(diff(Theta_bx)) > 1)
+
+grid_bx <- expand.grid(y = quantile(y_bx, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       s = factor(lev_bx, levels = lev_bx),
+                       z = c(-1, 0, 1.5))
+hg_bx <- .h_bx(grid_bx)
+cdf_bx <- pnorm(hg_bx$h)
+pdf_bx <- dnorm(hg_bx$h) * hg_bx$hp
+
+qgrid_bx <- expand.grid(p = c(0.1, 0.5, 0.9),
+                        s = factor(lev_bx, levels = lev_bx),
+                        z = c(-1, 0, 1.5))
+q_bx <- vapply(seq_len(nrow(qgrid_bx)), function(i) {
+  r <- qgrid_bx[i, ]
+  uniroot(function(yy) .h_bx(data.frame(y = yy, s = r$s, z = r$z))$h -
+            qnorm(r$p), interval = sup_bx, tol = 1e-14)$root
+}, numeric(1))
+
+.codes_bx <- function(g) cbind(g[[1]], as.integer(g$s) - 1L, g$z)
+writeLines(format(y_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_y_train.txt"))
+writeLines(as.character(as.integer(s_bx) - 1L),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_s_train.txt"))
+writeLines(format(z_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_x_s_train.txt"))
+writeLines(paste(format(sup_bx[1], digits = 15), format(sup_bx[2], digits = 15)),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_y_support.txt"))
+writeLines(format(theta_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_theta.txt"))
+writeLines(format(flatten_row_major(Theta_bx), digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_theta_onehot.txt"))
+writeLines(format(as.numeric(gamma_bx), digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_gamma.txt"))
+writeLines(format(ll_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_loglik.txt"))
+write.table(format(.codes_bx(grid_bx), digits = 15),
+            file = file.path(out_dir, "stram_onehot_bs_boxcox_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(cdf_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_distribution.txt"))
+writeLines(format(pdf_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_density.txt"))
+write.table(format(.codes_bx(qgrid_bx), digits = 15),
+            file = file.path(out_dir, "stram_onehot_bs_boxcox_qgrid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(q_bx, digits = 15),
+           con = file.path(out_dir, "stram_onehot_bs_boxcox_quantile.txt"))
+
+cat(sprintf("stram_onehot_bs boxcox ref: n=%d, p=%d, K=%d, ll=%.6f, gamma=%.6f\n",
+            n_bx, p_bx, length(lev_bx), ll_bx, gamma_bx))
+
+# ---------------------------------------------------------------------------
+# Lm(interacting=..., scaling=...) — issue #109.
+#
+# The stratified, scaled normal linear model of ADR 0003 Decision 6, fitted
+# through the R ``tram`` formula interface as the no-shift ``stram`` model
+#
+#     Lm(y | s ~ 1 | z)
+#
+# i.e. h(y | s, z) = (c0_s + c1_s · y) · exp(0.5 · z · γ) with a Normal link:
+# within stratum s, Y is normal with its own mean and standard deviation,
+# both modulated by z.  mltpy's analogue is
+# ``Lm(interacting=OneHotBasis(K=3), scaling=z)``.
+#
+# Two reparametrisations separate tram's Θ from mltpy's:
+#   * tram::Lm's response basis is the polynomial (1, y) — coefficients
+#     ``(Intercept):*`` and ``y:*`` — whereas mltpy's Lm uses the order-1
+#     Bernstein basis on the support (a, b).  Both span the affine functions
+#     of y: θ0 = c0 + c1·a, θ1 = c0 + c1·b, and c1 ≥ 0 ⇔ θ1 ≥ θ0.
+#   * tram encodes s with treatment contrasts; one-hot column k is the
+#     intercept column plus contrast column k (zero for the reference level).
+# The function space, logLik and γ are therefore identical at an interior
+# MLE; ``*_theta_onehot.txt`` stores the mapped Bernstein one-hot Θ.
+#
+# Data: within stratum k, h = exp(0.5·γ·z)·sl_k·(y − mu_k) with γ = −0.6 —
+# exactly the model above.  The support is widened by 1 on each side so every
+# grid quantile lies well inside it (the affine model does not depend on it).
+#
+# Precision: as in the BoxCox block, the default auglag fit is polished with
+# plain BFGS at reltol = 1e-15 (``checkconstraints = TRUE`` confirms
+# feasibility).  h is assembled from the coefficients directly and the
+# stopifnot() below checks it reproduces logLik(fit), which also pins tram's
+# response basis to the raw-y polynomial.  F = Φ(h), f = φ(h)·h', and the
+# quantile is closed-form: y = (Φ⁻¹(p)·exp(−0.5·z·γ) − c0_s) / c1_s.
+#
+# Fixtures emitted (prefix ``stram_onehot_lm_``):
+#   *_y_train.txt       — response, length n
+#   *_s_train.txt       — stratum codes 0..K-1 (mltpy OneHotBasis labels)
+#   *_x_s_train.txt     — scaling covariate z, length n
+#   *_y_support.txt     — "a b" on one line
+#   *_theta.txt         — raw coef(fit, with_baseline = TRUE): [Θ (tram
+#                         polynomial-y, treatment-contrast order) | γ]
+#   *_theta_onehot.txt  — Bernstein one-hot Θ, (2, K) flattened row-major
+#                         (mltpy vec_C)
+#   *_gamma.txt         — scale coefficient coef(fit)[fit$scalecoef], length 1
+#   *_loglik.txt        — scalar logLik
+#   *_grid.txt          — prediction grid, one "y s z" row per line
+#   *_distribution.txt  — F(y | s, z) at each grid row
+#   *_density.txt       — f(y | s, z) at each grid row
+#   *_qgrid.txt         — quantile grid, one "p s z" row per line
+#   *_quantile.txt      — F⁻¹(p | s, z) at each quantile-grid row
+# ---------------------------------------------------------------------------
+set.seed(20261109)
+n_lm <- 900L
+lev_lm <- c("a", "b", "c")
+s_lm   <- factor(sample(lev_lm, n_lm, replace = TRUE), levels = lev_lm)
+z_lm   <- rnorm(n_lm)
+sl_lm  <- c(a = 1.2, b = 2.0, c = 3.0)[as.character(s_lm)]
+mu_lm  <- c(a = 1.0, b = 1.5, c = 0.4)[as.character(s_lm)]
+y_lm   <- mu_lm + rnorm(n_lm) / (sl_lm * exp(0.5 * -0.6 * z_lm))
+sup_lm <- c(min(y_lm) - 1, max(y_lm) + 1)
+df_lm  <- data.frame(y = y_lm, s = s_lm, z = z_lm)
+
+fit0_lm <- suppressWarnings(  # "highly experimental" stram warning
+  Lm(y | s ~ 1 | z, data = df_lm))
+fit_lm <- suppressWarnings(
+  Lm(y | s ~ 1 | z, data = df_lm, theta = coef(fit0_lm, with_baseline = TRUE),
+     optim = mltoptim(optim = list(checkconstraints = TRUE,
+                                   method = "BFGS",
+                                   maxit = 100000L,
+                                   reltol = 1e-15))["optim"]))
+stopifnot(inherits(fit_lm, "stram"), fit_lm$convergence == 0)
+
+theta_lm <- coef(fit_lm, with_baseline = TRUE)
+ll_lm    <- as.numeric(logLik(fit_lm))
+gamma_lm <- theta_lm[fit_lm$scalecoef]
+
+# Per-stratum affine coefficients (c0_k, c1_k) from the treatment contrasts.
+th0_lm <- theta_lm[setdiff(names(theta_lm), fit_lm$scalecoef)]
+C_lm <- matrix(th0_lm, nrow = 2L)  # cols: (Intercept), sb, sc
+stopifnot(names(th0_lm) ==
+            paste0(c("(Intercept)", "y"), ":",
+                   rep(c("(Intercept)", "sb", "sc"), each = 2L)))
+Cs_lm <- cbind(C_lm[, 1], C_lm[, 1] + C_lm[, -1, drop = FALSE])  # (2, K)
+stopifnot(min(Cs_lm[2, ]) > 0.5)  # interior: every slope well above 0
+
+.h_lm <- function(d) {
+  k <- as.integer(d$s)
+  f <- exp(0.5 * d$z * gamma_lm)
+  list(h = (Cs_lm[1, k] + Cs_lm[2, k] * d$y) * f, hp = Cs_lm[2, k] * f)
+}
+tr_lm <- .h_lm(df_lm)
+stopifnot(isTRUE(all.equal(sum(dnorm(tr_lm$h, log = TRUE) + log(tr_lm$hp)),
+                           ll_lm, tolerance = 1e-10)))
+
+# Bernstein (order 1) one-hot Θ: rows = (θ0, θ1), columns = strata a, b, c.
+Theta_lm <- rbind(Cs_lm[1, ] + Cs_lm[2, ] * sup_lm[1],
+                  Cs_lm[1, ] + Cs_lm[2, ] * sup_lm[2])
+
+grid_lm <- expand.grid(y = quantile(y_lm, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                       s = factor(lev_lm, levels = lev_lm),
+                       z = c(-1, 0, 1.5))
+hg_lm <- .h_lm(grid_lm)
+cdf_lm <- pnorm(hg_lm$h)
+pdf_lm <- dnorm(hg_lm$h) * hg_lm$hp
+
+qgrid_lm <- expand.grid(p = c(0.1, 0.5, 0.9),
+                        s = factor(lev_lm, levels = lev_lm),
+                        z = c(-1, 0, 1.5))
+kq_lm <- as.integer(qgrid_lm$s)
+q_lm <- (qnorm(qgrid_lm$p) * exp(-0.5 * qgrid_lm$z * gamma_lm) - Cs_lm[1, kq_lm]) /
+  Cs_lm[2, kq_lm]
+stopifnot(all(q_lm > sup_lm[1] + 0.1), all(q_lm < sup_lm[2] - 0.1))
+
+.codes_lm <- function(g) cbind(g[[1]], as.integer(g$s) - 1L, g$z)
+writeLines(format(y_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_y_train.txt"))
+writeLines(as.character(as.integer(s_lm) - 1L),
+           con = file.path(out_dir, "stram_onehot_lm_s_train.txt"))
+writeLines(format(z_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_x_s_train.txt"))
+writeLines(paste(format(sup_lm[1], digits = 15), format(sup_lm[2], digits = 15)),
+           con = file.path(out_dir, "stram_onehot_lm_y_support.txt"))
+writeLines(format(theta_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_theta.txt"))
+writeLines(format(flatten_row_major(Theta_lm), digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_theta_onehot.txt"))
+writeLines(format(as.numeric(gamma_lm), digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_gamma.txt"))
+writeLines(format(ll_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_loglik.txt"))
+write.table(format(.codes_lm(grid_lm), digits = 15),
+            file = file.path(out_dir, "stram_onehot_lm_grid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(cdf_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_distribution.txt"))
+writeLines(format(pdf_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_density.txt"))
+write.table(format(.codes_lm(qgrid_lm), digits = 15),
+            file = file.path(out_dir, "stram_onehot_lm_qgrid.txt"),
+            row.names = FALSE, col.names = FALSE, quote = FALSE)
+writeLines(format(q_lm, digits = 15),
+           con = file.path(out_dir, "stram_onehot_lm_quantile.txt"))
+
+cat(sprintf("stram_onehot lm ref: n=%d, K=%d, ll=%.6f, gamma=%.6f\n",
+            n_lm, length(lev_lm), ll_lm, gamma_lm))
+
+# ---------------------------------------------------------------------------
+# Survreg(interacting=..., scaling=...) — issue #110.
+#
+# The log-time analogue of the stram_bs_bs_* blocks above.  mltpy's Survreg
+# models the transformation on log(t) (``LogBernsteinBasis``), so the response
+# basis is Bernstein on log(t) (``log_first = TRUE``) of order 1 — the
+# strictly affine baseline ``tram::Survreg`` always fits — tensored with an
+# order-1 Bernstein-x interacting basis and scaled by exp(0.5 · x_s · γ):
+#
+#     F_Z^{-1}(F(t | x, x_s)) = h(t | x) · exp(0.5 · x_s · γ),
+#     h(t | x) = (a(log t) ⊗ b(x))ᵀ vec(Θ),
+#
+# with the link of each Survreg family: weibull ↔ ``MinExtrVal``, lognormal ↔
+# ``Normal``, loglogistic ↔ ``Logistic``.  Exact (uncensored) event times
+# only — the interaction likelihood path is exact-data only.  Fitted through
+# ``mlt::ctm`` for term-for-term basis agreement with mltpy's
+# ``InteractionBasis(LogBernsteinBasis, BernsteinBasis)``; γ is sign- and
+# magnitude-aligned with mltpy (no flip).
+#
+# Data: h(t | x) = exp(0.5·γ·x_s)·(2·(log t − 1) + 0.8·(x − 0.5)) with
+# γ = 0.4, which is affine in log t and in x and so lies exactly in the
+# log-Bernstein-y (order 1) ⊗ Bernstein-x (order 1) span.  With n = 1000 the
+# MLE is strictly interior (every Θ column increment is well above 1), and
+# the same BFGS polish at reltol = 1e-15 as the stram_bs_bs blocks takes γ
+# past alabama's inner tolerance.
+#
+# Cross-check against the literal tram formula route,
+# ``tram::Survreg(y | x ~ 1 | x_s, dist = <dist>)`` (class ``stram``; tram
+# warns that strata + scale is "highly experimental").  Its response basis is
+# (1, log t) and its interacting term the linear (1, x) design, which span the
+# same spaces as the order-1 Bernstein bases, so the two fits share the MLE:
+# same logLik and γ, and with C the tram (response × interacting) coefficient
+# matrix, Θ = M · [C[, 1], C[, 1] + C[, 2]] where M = [[1, log a], [1, log b]]
+# maps (1, log t) coefficients to Bernstein-on-[log a, log b] coefficients.
+#
+# Fixtures emitted (prefix ``stram_logbs_bs_<dist>_``, dist ∈ weibull,
+# lognormal, loglogistic):
+#   *_y_train.txt      — event times, length n
+#   *_x_train.txt      — interacting covariate, length n
+#   *_x_s_train.txt    — scaling covariate, length n
+#   *_y_support.txt    — "a b" on one line (original time scale)
+#   *_theta.txt        — full coef(fit): [vec(Θ) (mlt order) | γ]
+#   *_gamma.txt        — scale coefficients only, length q_s
+#   *_gamma_tram.txt   — γ from the tram::Survreg(y | x ~ 1 | x_s) stram fit
+#   *_loglik.txt       — scalar logLik
+#   *_grid.txt         — prediction grid, one "t x x_s" row per line
+#   *_survivor.txt     — S(t | x, x_s) at each grid row
+#   *_density.txt      — f(t | x, x_s) = f_Z(h)·h' at each grid row
+#   *_hazard.txt       — f(t | x, x_s) / S(t | x, x_s) at each grid row
+#   *_qgrid.txt        — quantile grid, one "p x x_s" row per line
+#   *_quantile.txt     — F⁻¹(p | x, x_s) at each quantile-grid row
+# ---------------------------------------------------------------------------
+suppressPackageStartupMessages(library(tram))
+
+.write_survreg_stram <- function(dist_name, todistr, seed) {
+  zfun <- switch(todistr,
+    MinExtrVal = list(
+      q = function(u) log(-log1p(-u)),
+      d = function(z) exp(z - exp(z)),
+      s = function(z) exp(-exp(z))),
+    Normal = list(q = qnorm, d = dnorm,
+                  s = function(z) pnorm(z, lower.tail = FALSE)),
+    Logistic = list(q = qlogis, d = dlogis,
+                    s = function(z) plogis(z, lower.tail = FALSE)))
+
+  set.seed(seed)
+  n_sv <- 1000L
+  p_sv <- 2L  # log-Bernstein-y functions (order 1, tram::Survreg's baseline)
+  q_sv <- 2L  # Bernstein-x functions
+  x_sv   <- runif(n_sv, 0, 1)
+  x_s_sv <- rnorm(n_sv)
+  # Invert F_Z(k · h0(t | x)) = U for log t.
+  k_sv <- exp(0.5 * 0.4 * x_s_sv)
+  y_sv <- exp(1 - 0.4 * (x_sv - 0.5) + zfun$q(runif(n_sv)) / (2 * k_sv))
+  a_sv <- min(y_sv) * 0.9
+  b_sv <- max(y_sv) * 1.1
+
+  df_sv <- data.frame(y = y_sv, x = x_sv, x_s = x_s_sv)
+  m_y_sv <- numeric_var("y", support = c(a_sv, b_sv), bounds = c(0, Inf))
+  m_x_sv <- numeric_var("x", support = c(0, 1))
+  b_y_sv <- Bernstein_basis(m_y_sv, order = p_sv - 1L, ui = "increasing",
+                            log_first = TRUE)
+  b_x_sv <- Bernstein_basis(m_x_sv, order = q_sv - 1L)
+  b_s_sv <- as.basis(~ x_s, data = df_sv, remove_intercept = TRUE)
+
+  polish <- mltoptim(optim = list(checkconstraints = TRUE, method = "BFGS",
+                                  maxit = 100000L, reltol = 1e-15))["optim"]
+  ctm_sv <- ctm(response = b_y_sv, interacting = b_x_sv, scaling = b_s_sv,
+                scale_shift = FALSE, todistr = todistr)
+  fit0_sv <- mlt(ctm_sv, data = df_sv)
+  fit_sv  <- mlt(ctm_sv, data = df_sv, theta = coef(fit0_sv), optim = polish)
+  stopifnot(fit_sv$convergence == 0,
+            min(diff(matrix(coef(fit_sv)[1:(p_sv * q_sv)], p_sv, q_sv))) > 1)
+
+  theta_sv <- coef(fit_sv)
+  ll_sv    <- as.numeric(logLik(fit_sv))
+  scl_names_sv <- colnames(model.matrix(b_s_sv, data = df_sv))
+  gamma_sv <- theta_sv[scl_names_sv]
+
+  # Literal tram stram route, polished the same way.
+  tram_sv0 <- suppressWarnings(
+    Survreg(y | x ~ 1 | x_s, data = df_sv, dist = dist_name,
+            support = c(a_sv, b_sv), bounds = c(0, Inf)))
+  stopifnot(inherits(tram_sv0, "stram"))
+  tram_sv <- mlt(tram_sv0$model, data = df_sv,
+                 theta = coef(tram_sv0, with_baseline = TRUE), optim = polish)
+  tram_cf_sv <- coef(tram_sv)
+  gamma_tram_sv <- tram_cf_sv[paste0("scl_", scl_names_sv)]
+  C_sv <- matrix(tram_cf_sv[1:(p_sv * q_sv)], p_sv, q_sv)
+  M_sv <- cbind(1, log(c(a_sv, b_sv)))
+  stopifnot(
+    tram_sv$convergence == 0,
+    isTRUE(all.equal(as.numeric(logLik(tram_sv)), ll_sv, tolerance = 1e-10)),
+    isTRUE(all.equal(unname(gamma_tram_sv), unname(gamma_sv),
+                     tolerance = 1e-6)),
+    isTRUE(all.equal(M_sv %*% cbind(C_sv[, 1], rowSums(C_sv)),
+                     matrix(theta_sv[1:(p_sv * q_sv)], p_sv, q_sv),
+                     tolerance = 1e-6, check.attributes = FALSE)))
+
+  # Per-row predictions at (t, x, x_s), assembled from the tensor basis as in
+  # the stram_bs_bs blocks (``predict()`` on a scaled ctm errors in mlt
+  # 1.8.4): h = Z·vec(Θ) · exp(0.5·x_s·γ), h' = Z'·vec(Θ) · exp(0.5·x_s·γ),
+  # where Z' already carries the 1/t chain-rule factor of log_first.  The
+  # stopifnot() below checks the reconstruction reproduces logLik(fit).
+  bb_sv <- b(bresponse = b_y_sv, binteracting = b_x_sv)
+  pq_sv <- p_sv * q_sv
+  .h_sv <- function(d) {
+    f <- exp(0.5 * d$x_s * gamma_sv)
+    list(h  = drop(model.matrix(bb_sv, data = d) %*% theta_sv[1:pq_sv]) * f,
+         hp = drop(model.matrix(bb_sv, data = d, deriv = c(y = 1)) %*%
+                     theta_sv[1:pq_sv]) * f)
+  }
+  tr_sv <- .h_sv(df_sv)
+  stopifnot(isTRUE(all.equal(sum(log(zfun$d(tr_sv$h)) + log(tr_sv$hp)),
+                             ll_sv, tolerance = 1e-10)))
+
+  grid_sv <- expand.grid(y = quantile(y_sv, c(0.1, 0.3, 0.5, 0.7, 0.9)),
+                         x = c(0.2, 0.8),
+                         x_s = c(-1, 0, 1.5))
+  hg_sv   <- .h_sv(grid_sv)
+  surv_sv <- zfun$s(hg_sv$h)
+  dens_sv <- zfun$d(hg_sv$h) * hg_sv$hp
+  haz_sv  <- dens_sv / surv_sv
+
+  qgrid_sv <- expand.grid(p = c(0.1, 0.5, 0.9),
+                          x = c(0.2, 0.8),
+                          x_s = c(-1, 0, 1.5))
+  quant_sv <- vapply(seq_len(nrow(qgrid_sv)), function(i) {
+    r <- qgrid_sv[i, ]
+    exp(uniroot(function(lt) .h_sv(data.frame(y = exp(lt), x = r$x,
+                                              x_s = r$x_s))$h - zfun$q(r$p),
+                interval = log(c(a_sv, b_sv)), tol = 1e-14)$root)
+  }, numeric(1))
+
+  out <- function(name) {
+    file.path(out_dir, sprintf("stram_logbs_bs_%s_%s.txt", dist_name, name))
+  }
+  writeLines(format(y_sv, digits = 15), con = out("y_train"))
+  writeLines(format(x_sv, digits = 15), con = out("x_train"))
+  writeLines(format(x_s_sv, digits = 15), con = out("x_s_train"))
+  writeLines(paste(format(a_sv, digits = 15), format(b_sv, digits = 15)),
+             con = out("y_support"))
+  writeLines(format(theta_sv, digits = 15), con = out("theta"))
+  writeLines(format(as.numeric(gamma_sv), digits = 15), con = out("gamma"))
+  writeLines(format(as.numeric(gamma_tram_sv), digits = 15),
+             con = out("gamma_tram"))
+  writeLines(format(ll_sv, digits = 15), con = out("loglik"))
+  write.table(format(as.matrix(grid_sv), digits = 15), file = out("grid"),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  writeLines(format(as.numeric(surv_sv), digits = 15), con = out("survivor"))
+  writeLines(format(as.numeric(dens_sv), digits = 15), con = out("density"))
+  writeLines(format(as.numeric(haz_sv), digits = 15), con = out("hazard"))
+  write.table(format(as.matrix(qgrid_sv), digits = 15), file = out("qgrid"),
+              row.names = FALSE, col.names = FALSE, quote = FALSE)
+  writeLines(format(quant_sv, digits = 15), con = out("quantile"))
+
+  cat(sprintf(paste0("stram_logbs_bs %s ref: n=%d, p=%d, q=%d, q_s=%d, ",
+                     "ll=%.6f, gamma=%.6f\n"),
+              dist_name, n_sv, p_sv, q_sv, length(gamma_sv), ll_sv, gamma_sv))
+}
+
+.write_survreg_stram("weibull",     "MinExtrVal", 20261110)
+.write_survreg_stram("lognormal",   "Normal",     20261111)
+.write_survreg_stram("loglogistic", "Logistic",   20261112)
+
+# ---------------------------------------------------------------------------
+# Interaction auglag false-stall reproduction — issue #142
+#
+# Bernstein-y (order 6, support (-4, 4)) ⊗ Bernstein-x (order 3, support
+# (-1, 1)), Normal base, exact data.  On this data mltpy's auglag used to
+# stall after a failed inner L-BFGS-B solve and report converged=True at a
+# non-stationary point (logLik ≈ -2604.7 at n = 1000 instead of ≈ -1403.9).
+#
+# The training data were drawn with NumPy's PCG64 stream, which R cannot
+# replay, so they are read from files written by
+# ``python reference/write_interaction_stall_data.py``:
+#
+#   reference/interaction_stall_n<n>_y_train.txt — training y, length n
+#   reference/interaction_stall_n<n>_x_train.txt — training x, length n
+#
+# Writes, for n ∈ {1000, 2000}:
+#
+#   reference/interaction_stall_n<n>_theta.txt  — coef(fit) in mlt's order
+#                                                 (y-index fastest, i.e.
+#                                                 column-major over Θ; length
+#                                                 p*q = 28)
+#   reference/interaction_stall_n<n>_loglik.txt — scalar logLik
+#
+# Precision: as in the stram_bs_bs_normal block (#125), the MLE is not
+# interior (a Θ column sits on its monotonicity boundary) and the default
+# alabama fit stops short of it, so the fit is polished with mlt's projected
+# ``spg`` optimiser, which stays exactly inside ``ui θ ≥ ci``.
+#
+# Fixtures materialised with R 4.6.1, mlt 1.8.4, basefun 1.2.6,
+# variables 1.1.2, BB 2026.1.0, alabama 2025.1.0.
+# ---------------------------------------------------------------------------
+
+.write_interaction_stall <- function(n) {
+  path <- function(name) {
+    file.path(out_dir, sprintf("interaction_stall_n%d_%s.txt", n, name))
+  }
+  y_st <- scan(path("y_train"), quiet = TRUE)
+  x_st <- scan(path("x_train"), quiet = TRUE)
+  stopifnot(length(y_st) == n, length(x_st) == n)
+
+  b_y_st <- Bernstein_basis(numeric_var("y", support = c(-4, 4)),
+                            order = 6, ui = "increasing")
+  b_x_st <- Bernstein_basis(numeric_var("x", support = c(-1, 1)), order = 3)
+  ctm_st <- ctm(response = b_y_st, interacting = b_x_st, todistr = "Normal")
+  df_st  <- data.frame(y = y_st, x = x_st)
+  fit0_st <- mlt(ctm_st, data = df_st)
+  fit_st  <- mlt(ctm_st, data = df_st, theta = coef(fit0_st),
+                 optim = mltoptim(spg = list(ftol = 1e-15, gtol = 1e-10,
+                                             maxit = 100000L, quiet = TRUE,
+                                             checkGrad = FALSE))["spg"])
+  # Converged, feasible (every Θ column non-decreasing), and not worse than
+  # the default fit.
+  Theta_st <- matrix(coef(fit_st), 7L, 4L)
+  stopifnot(fit_st$convergence == 0,
+            min(diff(Theta_st)) >= 0,
+            as.numeric(logLik(fit_st)) >= as.numeric(logLik(fit0_st)))
+  theta_st <- coef(fit_st)
+  ll_st    <- as.numeric(logLik(fit_st))
+
+  writeLines(format(theta_st, digits = 15), con = path("theta"))
+  writeLines(format(ll_st, digits = 15), con = path("loglik"))
+  cat(sprintf("interaction_stall n=%d ref: p*q=%d, ll=%.6f\n",
+              n, length(theta_st), ll_st))
+}
+
+.write_interaction_stall(1000L)
+.write_interaction_stall(2000L)

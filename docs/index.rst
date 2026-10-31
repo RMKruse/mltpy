@@ -27,6 +27,7 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
    examples/04_interacting_terms
    examples/05_scaling_terms
    examples/06_profile_likelihood
+   examples/07_stratified_heteroskedastic
 
 .. toctree::
    :maxdepth: 1
@@ -46,6 +47,8 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
 
    adr/0001-tensor-product-interaction-basis
    adr/0002-scaling-terms
+   adr/0003-scaling-with-interaction
+   adr/0004-auglag-stall-acceptance
 
 .. toctree::
    :maxdepth: 1

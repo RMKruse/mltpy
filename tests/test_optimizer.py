@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from mltpy._auglag import AugLagOptions
-from mltpy.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import MonotonicityConstraint
-from mltpy.likelihood import negative_log_likelihood
+from mltpy.likelihood import InfeasibleParameterError, negative_log_likelihood
 from mltpy.optimizer import (
+    _INFEASIBLE_NLL,
+    _INFEASIBLE_NLL_HEADROOM,
     OptimizationResult,
     OptimizerConfig,
+    _infeasible_penalty,
     _initial_theta,
     _make_objective,
     _perturb_and_project,
     _project_to_feasible,
+    _restart_loop,
     optimize,
 )
 from mltpy.variables import CensoredData, CensoringType
@@ -512,6 +517,119 @@ class TestMakeObjectivePenalty:
         assert np.all(D @ theta >= -1e-9)
 
 
+class TestInfeasiblePenaltyScale:
+    """The penalty must dominate this fit's feasible objective values whatever
+    their scale (review of #136: with large weights a fixed 1e10 sat *below*
+    the likelihood and became the solver's minimum)."""
+
+    def test_floor_for_ordinary_objective(self):
+        theta = np.zeros(2)
+        assert _infeasible_penalty(theta, lambda t: 923.0) == _INFEASIBLE_NLL
+
+    @pytest.mark.parametrize("f_init", [9.2e10, -9.2e10])
+    def test_scales_with_objective_magnitude(self, f_init):
+        penalty = _infeasible_penalty(np.zeros(2), lambda t: f_init)
+        assert penalty == _INFEASIBLE_NLL_HEADROOM * (1.0 + abs(f_init))
+        assert penalty > abs(f_init)
+
+    def test_infeasible_or_nonfinite_start_falls_back_to_floor(self):
+        def raises(t):
+            raise InfeasibleParameterError("h' <= 0")
+
+        assert _infeasible_penalty(np.zeros(2), raises) == _INFEASIBLE_NLL
+        assert _infeasible_penalty(np.zeros(2), lambda t: np.inf) == _INFEASIBLE_NLL
+
+    def test_make_objective_returns_given_penalty(self):
+        basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+        y = np.array([0.3, 0.5, 0.7])
+        theta_bad = np.array([10.0, 5.0, 0.0, -5.0])
+        for use_gradient in (True, False):
+            obj = _make_objective(
+                basis, y, None, CensoringType.NONE, use_gradient, penalty=4.2e17
+            )
+            out = obj(theta_bad)
+            assert (out[0] if use_gradient else out) == 4.2e17
+
+
+class TestRestartLoopVerifiesLikelihood:
+    """``_restart_loop`` scores candidates by the unpenalised likelihood, never
+    by the solver's ``.fun``, which is the penalty on an infeasible θ."""
+
+    @staticmethod
+    def _run(results):
+        it = iter(results)
+        return lambda t: next(it)
+
+    @staticmethod
+    def _nll(result):
+        if result.infeasible:
+            raise InfeasibleParameterError("h' <= 0")
+        return result.true_nll
+
+    def test_penalty_result_is_never_retained(self):
+        """A penalty value below the real likelihood loses to the real fit,
+        and its ``converged`` flag does not end the loop."""
+        penalty = SimpleNamespace(
+            fun=1e10, true_nll=None, infeasible=True, ok=True, name="penalty"
+        )
+        real = SimpleNamespace(
+            fun=9.2e10, true_nll=9.2e10, infeasible=False, ok=True, name="real"
+        )
+        best, best_nll, n_restarts = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=3),
+            lambda t: t,
+            self._run([penalty, real]),
+            lambda r: r.ok,
+            self._nll,
+        )
+        assert best.name == "real"
+        assert best_nll == 9.2e10
+        assert n_restarts == 1
+
+    def test_selects_on_verified_value(self):
+        a = SimpleNamespace(fun=1.0, true_nll=5.0, infeasible=False, name="a")
+        b = SimpleNamespace(fun=2.0, true_nll=3.0, infeasible=False, name="b")
+        best, best_nll, _ = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=1),
+            lambda t: t,
+            self._run([a, b]),
+            lambda r: False,
+            self._nll,
+        )
+        assert best.name == "b"
+        assert best_nll == 3.0
+
+    def test_all_infeasible_returns_none(self):
+        bad = [
+            SimpleNamespace(fun=1e10, true_nll=None, infeasible=True),
+            SimpleNamespace(fun=1e10, true_nll=np.inf, infeasible=False),
+        ]
+        best, best_nll, _ = _restart_loop(
+            np.zeros(2),
+            OptimizerConfig(max_restarts=1),
+            lambda t: t,
+            self._run(bad),
+            lambda r: True,
+            self._nll,
+        )
+        assert best is None
+        assert best_nll == np.inf
+
+    def test_verbose_warns_on_discarded_attempt(self):
+        bad = SimpleNamespace(fun=1e10, true_nll=None, infeasible=True)
+        with pytest.warns(RuntimeWarning, match="infeasible"):
+            _restart_loop(
+                np.zeros(2),
+                OptimizerConfig(max_restarts=0, verbose=True),
+                lambda t: t,
+                self._run([bad]),
+                lambda r: True,
+                self._nll,
+            )
+
+
 # ---------------------------------------------------------------------------
 # optimize() — scipy-exception / all-fail fallback
 # ---------------------------------------------------------------------------
@@ -1004,3 +1122,110 @@ class TestFixedParamsScipy:
         cfg = OptimizerConfig(solver=solver, fixed_params={})
         result = optimize(basis, y, config=cfg)
         assert result.converged
+
+
+# ---------------------------------------------------------------------------
+# Interaction design reuse (issue #147)
+# ---------------------------------------------------------------------------
+
+
+class TestInteractionDesignReuse:
+    """The dense Kronecker designs are built once per fit and then released.
+
+    ``design = a(y) ⊗ b(x)`` and ``d_design = a'(y) ⊗ b(x)`` do not depend on
+    θ, so an interaction fit builds them once (one
+    :meth:`InteractionBasis.evaluate_with_derivative` call) and reuses them for
+    every objective, gradient, infeasibility-penalty and polish-Hessian
+    evaluation, instead of rebuilding two dense ``(n, p·q)`` matrices per
+    evaluation.  They are not retained once the fit returns.
+    """
+
+    @staticmethod
+    def _setup(
+        scaled: bool,
+    ) -> tuple[InteractionBasis, np.ndarray, np.ndarray, np.ndarray | None]:
+
+        rng = np.random.default_rng(20261031)
+        n = 300
+        X = rng.uniform(-1.0, 1.0, (n, 1))
+        y = np.clip(rng.normal(0.4 * X[:, 0], 1.0), -3.9, 3.9)
+        basis = InteractionBasis(
+            y_basis=BernsteinBasis(order=2, support=(-4.0, 4.0)),
+            x_basis=BernsteinBasis(order=1, support=(-1.0, 1.0)),
+        )
+        scaling = rng.uniform(-1.0, 1.0, (n, 1)) if scaled else None
+        return basis, y, X, scaling
+
+    @staticmethod
+    def _spy_builds(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+        """Record every design pair returned by ``evaluate_with_derivative``."""
+        built: list[tuple[np.ndarray, np.ndarray]] = []
+        original = InteractionBasis.evaluate_with_derivative
+
+        def spy(
+            self: InteractionBasis, y: np.ndarray, X: np.ndarray
+        ) -> tuple[np.ndarray, np.ndarray]:
+            out = original(self, y, X)
+            built.append(out)
+            return out
+
+        monkeypatch.setattr(InteractionBasis, "evaluate_with_derivative", spy)
+        return built
+
+    @pytest.mark.parametrize("scaled", [False, True], ids=["unscaled", "scaled"])
+    @pytest.mark.parametrize("solver", ["auglag", "slsqp", "trust-constr"])
+    def test_optimize_builds_design_once(self, monkeypatch, solver, scaled):
+        """One build per ``optimize()`` call, however many evaluations it makes."""
+        basis, y, X, scaling = self._setup(scaled)
+        built = self._spy_builds(monkeypatch)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = optimize(
+                basis,
+                y,
+                X=X,
+                config=OptimizerConfig(solver=solver, random_state=0),
+                scaling=scaling,
+            )
+        assert np.isfinite(result.log_likelihood)
+        assert len(built) == 1
+
+    def test_polish_hessian_reuses_design(self, monkeypatch):
+        """The FD polish Hessian (2m(m+1) likelihood calls each) adds no builds."""
+        import mltpy.optimizer as optimizer_module
+
+        basis, y, X, _ = self._setup(scaled=False)
+        polish_calls: list[int] = []
+        original_polish = optimizer_module._ncg_polish
+
+        def counting_polish(*args, **kwargs):  # type: ignore[no-untyped-def]
+            polish_calls.append(1)
+            return original_polish(*args, **kwargs)
+
+        monkeypatch.setattr(optimizer_module, "_ncg_polish", counting_polish)
+        built = self._spy_builds(monkeypatch)
+        optimize(basis, y, X=X, config=OptimizerConfig(random_state=0))
+        # Precondition: this data has no active monotonicity rows, so polish runs.
+        assert polish_calls == [1]
+        assert len(built) == 1
+
+    def test_fit_does_not_retain_designs(self, monkeypatch):
+        """Every design built during ``fit()`` is garbage once ``fit()`` returns."""
+        import gc
+        import weakref
+
+        from mltpy.model import ConditionalTransformationModel
+
+        basis, y, X, _ = self._setup(scaled=False)
+        built = self._spy_builds(monkeypatch)
+        model = ConditionalTransformationModel(
+            basis=basis, optimizer_config=OptimizerConfig(random_state=0)
+        )
+        model.fit(y, X)
+        refs = [weakref.ref(a) for pair in built for a in pair]
+        built.clear()
+        gc.collect()
+        assert refs
+        assert all(r() is None for r in refs)

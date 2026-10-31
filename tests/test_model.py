@@ -12,7 +12,7 @@ from hypothesis import strategies as st
 from scipy.stats import logistic as _logistic
 from scipy.stats import norm
 
-from mltpy.basis import BernsteinBasis
+from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.model import (
     MLT,
     AnovaResult,
@@ -339,6 +339,127 @@ class TestScore:
         assert model.score(y) >= ll_init - 1e-6
 
 
+@pytest.fixture(scope="module")
+def scaling_score_data() -> tuple[np.ndarray, ...]:
+    rng = np.random.default_rng(144)
+    n = 80
+    X = rng.uniform(0.05, 0.95, (n, 1))
+    X_scale = rng.normal(size=(n, 2))
+    y = rng.uniform(0.05, 0.95, n)
+    weights = rng.uniform(0.5, 2.0, n)
+    offset = rng.normal(scale=0.1, size=n)
+    return y, X, X_scale, weights, offset
+
+
+@pytest.fixture(scope="module", params=[False, True], ids=["shift", "interaction"])
+def scaling_score_model(
+    request: pytest.FixtureRequest, scaling_score_data: tuple[np.ndarray, ...]
+) -> ConditionalTransformationModel:
+    y, X, X_scale, weights, offset = scaling_score_data
+    basis = BernsteinBasis(order=3, support=(0.0, 1.0))
+    if request.param:
+        basis = InteractionBasis(basis, BernsteinBasis(order=1, support=(0.0, 1.0)))
+    model = ConditionalTransformationModel(basis, scaling=X_scale)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="scaling= with InteractionBasis")
+        model.fit(y, X=X, weights=weights, offset=offset)
+    return model
+
+
+class TestScaledScore:
+    def test_training_score_matches_fitted_likelihood(
+        self,
+        scaling_score_model: ConditionalTransformationModel,
+        scaling_score_data: tuple[np.ndarray, ...],
+    ) -> None:
+        y, X, X_scale, weights, offset = scaling_score_data
+        score = scaling_score_model.score(
+            y, X=X, weights=weights, offset=offset, X_scale=X_scale
+        )
+        assert score == pytest.approx(
+            scaling_score_model.result_.log_likelihood, abs=1e-10
+        )
+
+    def test_new_data_score_matches_weighted_logdensity(
+        self,
+        scaling_score_model: ConditionalTransformationModel,
+        scaling_score_data: tuple[np.ndarray, ...],
+    ) -> None:
+        y, X, X_scale, weights, offset = (a[:7].copy() for a in scaling_score_data)
+        y += 0.01
+        X_scale += 0.5
+        expected = weights @ scaling_score_model.predict(
+            y, X_new=X, X_scale_new=X_scale, offset_new=offset, what="logdensity"
+        )
+        assert scaling_score_model.score(
+            y, X=X, X_scale=X_scale, weights=weights, offset=offset
+        ) == pytest.approx(expected, abs=1e-10)
+
+    @pytest.mark.parametrize(
+        "X_scale, message",
+        [
+            (None, "X_scale must be provided"),
+            (np.array(1.0), "X_scale must be a 2-D array"),
+            (np.ones((5, 2, 1)), "X_scale must be a 2-D array"),
+            (np.ones((4, 2)), "X_scale has 4 rows but y has 5"),
+            (np.ones((5, 1)), "X_scale has 1 columns.*q_s=2"),
+            (np.full((5, 2), np.nan), "X_scale must be finite"),
+            (np.full((5, 2), np.inf), "X_scale must be finite"),
+        ],
+        ids=["missing", "scalar", "3d", "rows", "columns", "nan", "inf"],
+    )
+    def test_invalid_scaling_design_raises(
+        self,
+        scaling_score_model: ConditionalTransformationModel,
+        scaling_score_data: tuple[np.ndarray, ...],
+        X_scale: np.ndarray | None,
+        message: str,
+    ) -> None:
+        y, X, *_ = scaling_score_data
+        with pytest.raises(ValueError, match=message):
+            scaling_score_model.score(y[:5], X=X[:5], X_scale=X_scale)
+
+    @pytest.mark.parametrize("new_data", [False, True])
+    def test_same_size_data_requires_explicit_scaling(
+        self,
+        scaling_score_model: ConditionalTransformationModel,
+        scaling_score_data: tuple[np.ndarray, ...],
+        new_data: bool,
+    ) -> None:
+        y, X, *_ = scaling_score_data
+        with pytest.raises(ValueError, match="X_scale must be provided"):
+            scaling_score_model.score(y + (0.01 if new_data else 0.0), X=X)
+
+    def test_unscaled_model_rejects_scaling(self) -> None:
+        y = simple_y()
+        model = make_ctm().fit(y)
+        with pytest.raises(ValueError, match="not fitted with scaling="):
+            model.score(y, X_scale=np.ones((len(y), 1)))
+
+    def test_one_dimensional_scaling(self) -> None:
+        y = simple_y()
+        X_scale = np.linspace(-1.0, 1.0, len(y))
+        model = MLT(order=3, support=(0.0, 1.0), scaling=X_scale).fit(y)
+        assert model.score(y, X_scale=X_scale) == pytest.approx(
+            model.result_.log_likelihood, abs=1e-10
+        )
+
+    def test_censored_score_matches_fitted_likelihood(
+        self, scaling_score_data: tuple[np.ndarray, ...]
+    ) -> None:
+        y, X, X_scale, weights, offset = scaling_score_data
+        cd = CensoredData.right_censored(y, censored=np.arange(len(y)) % 3 == 0)
+        model = MLT(
+            order=3,
+            support=(0.0, 1.0),
+            censoring=CensoringType.RIGHT,
+            scaling=X_scale,
+        ).fit(cd, X=X, weights=weights, offset=offset)
+        assert model.score(
+            cd, X=X, X_scale=X_scale, weights=weights, offset=offset
+        ) == pytest.approx(model.result_.log_likelihood, abs=1e-10)
+
+
 # ---------------------------------------------------------------------------
 # simulate()
 # ---------------------------------------------------------------------------
@@ -396,6 +517,69 @@ def _fit_mlt_with_covariate(
     support = (float(y.min()) - 0.2, float(y.max()) + 0.2)
     model = MLT(order=5, support=support).fit(y, X=x.reshape(-1, 1))
     return model, x, y
+
+
+class TestRightCensoredQuantileBatch:
+    @pytest.fixture(scope="class", params=[False, True], ids=["baseline", "with-X"])
+    @classmethod
+    def fitted(cls, request):
+        rng = np.random.default_rng(145)
+        X = rng.uniform(-1, 1, (100, 1)) if request.param else None
+        y = rng.lognormal(0.3 if X is None else 0.3 * X[:, 0], 0.4, 100)
+        cd = CensoredData.right_censored(y, rng.random(100) < 0.3)
+        return MLT(
+            order=4,
+            support=(0.0, 8.0),
+            censoring=CensoringType.RIGHT,
+            optimizer_config=OptimizerConfig(random_state=0),
+        ).fit(cd, X=X), request.param
+
+    @pytest.mark.parametrize("profiles", ["equal", "interleaved", "distinct", "offset"])
+    @pytest.mark.parametrize("saturating", [False, True])
+    def test_batch_equals_individual_calls(self, fitted, profiles, saturating):
+        fitted, has_X = fitted
+        probs = np.array([0.8, 0.2, 0.65, 0.4, 0.5, 0.95])
+        X = None
+        if has_X:
+            x = {
+                "equal": np.full(6, 0.25),
+                "interleaved": np.array([0.5, -0.5, 0.0, 0.5, -0.5, 0.0]),
+                "distinct": np.array([0.9, -0.8, 0.1, -0.3, 0.6, 0.4]),
+                "offset": np.full(6, 0.25),
+            }[profiles]
+            X = x[:, None]
+        offset = np.linspace(-0.3, 0.3, 6) if profiles == "offset" else np.zeros(6)
+        if saturating:
+            offset[[0, -1]] = [-1000.0, 1000.0]
+
+        with warnings.catch_warnings(record=True) as batch_warnings:
+            warnings.simplefilter("always", UserWarning)
+            batch = fitted.predict(probs, X_new=X, offset_new=offset, what="quantile")
+        with warnings.catch_warnings(record=True) as individual_warnings:
+            warnings.simplefilter("always", UserWarning)
+            individual = np.concatenate(
+                [
+                    fitted.predict(
+                        probs[i : i + 1],
+                        X_new=None if X is None else X[i : i + 1],
+                        offset_new=offset[i : i + 1],
+                        what="quantile",
+                    )
+                    for i in range(len(probs))
+                ]
+            )
+        np.testing.assert_array_equal(batch.view(np.uint64), individual.view(np.uint64))
+        expected = (
+            "predict(what='quantile'): probability target lies outside "
+            "the finite R-style inversion grid at one or more points; "
+            "returning boundary-saturated quantiles."
+        )
+        assert [(w.category, str(w.message)) for w in batch_warnings] == (
+            [(UserWarning, expected)] if saturating else []
+        )
+        assert {str(w.message) for w in individual_warnings} == (
+            {expected} if saturating else set()
+        )
 
 
 class TestPredictQuantileConditional:
@@ -1663,8 +1847,8 @@ class TestScalingStub:
     """ADR 0002 surface: scaling= kwarg behaviour on supported / unsupported
     paths.  After #71 closes the censoring + base-distribution coverage,
     every censoring type and every link except ``"exponential"`` accepts
-    ``scaling=`` (InteractionBasis combinations remain out of scope and
-    raise at construction).
+    ``scaling=``.  InteractionBasis combinations are covered by ADR 0003
+    (exact data only — see ``tests/test_interaction_scaling.py``).
     """
 
     def test_scaling_none_is_default_and_byte_identical(self):

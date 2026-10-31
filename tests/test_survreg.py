@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -261,6 +263,79 @@ class TestSurvregPredict:
         S = model.survival(grid)
         h = model.hazard(grid)
         np.testing.assert_allclose(h, f / S, rtol=1e-8)
+
+
+class TestSurvregQuantileBatch:
+    @pytest.fixture(scope="class", params=[False, True], ids=["baseline", "with-X"])
+    @classmethod
+    def fitted(cls, request):
+        from mltpy import OptimizerConfig, Survreg
+
+        rng = np.random.default_rng(145)
+        X = rng.uniform(-1, 1, (100, 1)) if request.param else None
+        y = rng.lognormal(0.3 if X is None else 0.3 * X[:, 0], 0.4, 100)
+        cd = CensoredData.right_censored(y, rng.random(100) < 0.3)
+        return Survreg(
+            support=(0.1, 8.0),
+            distribution="lognormal",
+            optimizer_config=OptimizerConfig(random_state=0),
+        ).fit(cd, X=X), request.param
+
+    @pytest.mark.parametrize("profiles", ["equal", "interleaved", "distinct", "offset"])
+    @pytest.mark.parametrize("saturating", [False, True])
+    def test_batch_equals_individual_calls(self, fitted, profiles, saturating):
+        fitted, has_X = fitted
+        probs = np.array([0.8, 0.2, 0.65, 0.4, 0.5, 0.95])
+        X = None
+        if has_X:
+            x = {
+                "equal": np.full(6, 0.25),
+                "interleaved": np.array([0.5, -0.5, 0.0, 0.5, -0.5, 0.0]),
+                "distinct": np.array([0.9, -0.8, 0.1, -0.3, 0.6, 0.4]),
+                "offset": np.full(6, 0.25),
+            }[profiles]
+            X = x[:, None]
+        offset = np.linspace(-0.3, 0.3, 6) if profiles == "offset" else np.zeros(6)
+        if saturating:
+            offset[[0, -1]] = [-1000.0, 1000.0]
+
+        with warnings.catch_warnings(record=True) as batch_warnings:
+            warnings.simplefilter("always", UserWarning)
+            batch = fitted.predict(probs, X_new=X, offset_new=offset, what="quantile")
+        with warnings.catch_warnings(record=True) as individual_warnings:
+            warnings.simplefilter("always", UserWarning)
+            individual = np.concatenate(
+                [
+                    fitted.predict(
+                        probs[i : i + 1],
+                        X_new=None if X is None else X[i : i + 1],
+                        offset_new=offset[i : i + 1],
+                        what="quantile",
+                    )
+                    for i in range(len(probs))
+                ]
+            )
+        np.testing.assert_array_equal(batch.view(np.uint64), individual.view(np.uint64))
+        expected = (
+            "predict(what='quantile'): probability target lies outside "
+            "the finite inversion grid at one or more points; "
+            "returning boundary-saturated quantiles."
+        )
+        assert [(w.category, str(w.message)) for w in batch_warnings] == (
+            [(UserWarning, expected)] if saturating else []
+        )
+        assert {str(w.message) for w in individual_warnings} == (
+            {expected} if saturating else set()
+        )
+
+    def test_positive_support_round_trip(self, fitted):
+        fitted, has_X = fitted
+        probs = np.array([0.2, 0.5, 0.8])
+        X = np.zeros((3, 1)) if has_X else None
+        quantiles = fitted.predict(probs, X_new=X, what="quantile")
+        assert np.all(quantiles >= 0.1)
+        actual = fitted.predict(quantiles, X_new=X, what="distribution")
+        np.testing.assert_allclose(actual, probs, atol=2e-4)
 
 
 # ---------------------------------------------------------------------------

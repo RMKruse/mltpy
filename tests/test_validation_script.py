@@ -525,16 +525,34 @@ def reference_npy_cache() -> None:
         convert_case(case_dir)
 
 
+_TRACKED_RESULTS = Path(__file__).resolve().parent.parent / "validation" / "results"
+_REPORT_NAMES = ("validation_report.json", "validation_report.md")
+
+
+def _snapshot_tracked_reports() -> dict[str, bytes | None]:
+    return {
+        name: (p.read_bytes() if (p := _TRACKED_RESULTS / name).is_file() else None)
+        for name in _REPORT_NAMES
+    }
+
+
 def test_integration_run_validation_single_case(
-    reference_npy_cache: None,
+    reference_npy_cache: None, tmp_path: Path
 ) -> None:
-    """Run the validation script on case_01_mlt_200_4, expect exit code 0."""
+    """Run the validation script on case_01_mlt_200_4, expect exit code 0.
+
+    Reports go to ``--out-dir`` so the committed full-run report under
+    ``validation/results/`` is never overwritten by this single-case run.
+    """
+    before = _snapshot_tracked_reports()
     result = subprocess.run(
         [
             sys.executable,
             "validation/run_validation.py",
             "--case",
             "case_01_mlt_200_4",
+            "--out-dir",
+            str(tmp_path),
         ],
         capture_output=True,
         text=True,
@@ -545,3 +563,7 @@ def test_integration_run_validation_single_case(
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
+    records = json.loads((tmp_path / "validation_report.json").read_text())
+    assert [r["case_id"] for r in records] == ["case_01_mlt_200_4"]
+    assert (tmp_path / "validation_report.md").is_file()
+    assert _snapshot_tracked_reports() == before

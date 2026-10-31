@@ -34,9 +34,11 @@ from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.likelihood import (
     _H_CLIP,
     BaseDistribution,
+    DistOps,
     InfeasibleParameterError,
     _get_dist,
     _neg_score,
+    _split_theta_scaled,
     _validate_offset,
     _validate_weights_offset,
     log_likelihood,
@@ -144,6 +146,143 @@ _SIMULATE_U_EPS = 1e-10
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
 
+def _invert_shift_groups(
+    probs: NDArray[np.float64],
+    shift: NDArray[np.float64],
+    curve: Callable[[float], tuple[NDArray[np.float64], NDArray[np.float64]] | None],
+    lower: float,
+    upper: float,
+) -> tuple[NDArray[np.float64], bool]:
+    """Reuse one inverse curve at a time, scattering quantiles to input order."""
+    out = np.empty(probs.size, dtype=np.float64)
+    saturated = False
+    previous: float | None = None
+    current = None
+    for i in np.argsort(shift, kind="stable"):
+        s = float(shift[i])
+        if previous is None or s != previous:
+            current = None
+            current = curve(s)
+            previous = s
+        p = probs[i]
+        if current is None:
+            out[i] = lower
+            saturated = True
+        elif p < current[0][0]:
+            out[i] = lower
+            saturated = True
+        elif p > current[0][-1]:
+            out[i] = upper
+            saturated = True
+        else:
+            out[i] = float(np.interp(p, current[0], current[1]))
+    return out, saturated
+
+
+def _apply_what(
+    what: str,
+    h: NDArray[np.float64],
+    hp: NDArray[np.float64],
+    dist: DistOps,
+) -> NDArray[np.float64]:
+    """Map a transformation ``h`` and its derivative ``h'`` to a predict target.
+
+    Single source of truth for the ``predict()`` dispatch ladder, shared by
+    the shift-basis and interaction-basis paths so the two cannot drift apart.
+    Every probability-scale target is computed in log-space (``logpdf``,
+    ``logsf``, ``logcdf``) per the CLAUDE.md numerical-stability mandate, and
+    ``h`` is clipped to ``±_H_CLIP`` before any distribution call.
+
+    Parameters
+    ----------
+    what:
+        One of the non-``quantile`` members of :data:`_VALID_WHAT`.  ``"trafo"``
+        returns ``h`` unclipped; every other value is a distribution-scale
+        target.
+    h:
+        Transformation values ``h(y|x)`` of shape ``(m,)``.
+    hp:
+        Derivative ``h'(y|x) = ∂h/∂y`` of shape ``(m,)``.  Only consulted for
+        the density/hazard family (:data:`_HP_REQUIRING_WHAT`).
+    dist:
+        Base distribution providing ``cdf``/``sf``/``pdf``/``logpdf``/
+        ``logsf``/``logcdf`` and ``kind``.
+
+    Returns
+    -------
+    NDArray[np.float64]
+        The requested target evaluated at every point, shape ``(m,)``.
+
+    Raises
+    ------
+    InfeasibleParameterError
+        If ``what`` requires ``h'(y) > 0`` (density, hazard, and their logs)
+        but ``hp`` is non-positive at one or more points.
+
+    Notes
+    -----
+    Emits a :class:`UserWarning` (``stacklevel=3``, so it points at the
+    caller of ``predict``) when ``|h|`` exceeds ``_H_CLIP`` and the clip
+    therefore saturates the returned values.
+    """
+    _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
+
+    if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
+        raise InfeasibleParameterError(
+            f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
+            f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
+            "one or more requested points.  This indicates a non-monotone "
+            "transformation — fit() should have rejected this parameter; "
+            "if you see this, the model state is inconsistent."
+        )
+
+    if what == "trafo":
+        return h
+
+    # Clip h to ±_H_CLIP before distribution calls — the same bound
+    # likelihood.py and confband() use everywhere else — and warn when the
+    # clip actually bites so the caller knows the returned values at those
+    # points are saturated at a floor/ceiling rather than the true
+    # asymptotic limit.
+    if np.any(np.abs(h) > _H_CLIP):
+        warnings.warn(
+            f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
+            "one or more points; clipping for numerical stability. "
+            "Values at these points are saturated, not the true "
+            "asymptotic limit.",
+            stacklevel=3,
+        )
+    h_c = np.clip(h, -_H_CLIP, _H_CLIP)
+
+    if what == "distribution":
+        return dist.cdf(h_c)
+    if what == "logdistribution":
+        return cast(NDArray[np.float64], _logcdf(h_c))
+    if what == "survivor":
+        return cast(NDArray[np.float64], dist.sf(h_c))
+    if what == "logsurvivor":
+        return dist.logsf(h_c)
+    if what == "density":
+        return dist.pdf(h_c) * hp
+    if what == "logdensity":
+        return dist.logpdf(h_c) + np.log(hp)
+    if what == "hazard":
+        return cast(
+            NDArray[np.float64],
+            np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
+        )
+    if what == "loghazard":
+        return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
+    if what == "cumhazard":
+        return -dist.logsf(h_c)
+    if what == "logcumhazard":
+        return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
+    if what == "odds":
+        return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
+    # logodds
+    return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
+
+
 def _extract_feature_names(X: object) -> list[str] | None:
     """Extract column names from DataFrame-like ``X``, else ``None``.
 
@@ -210,20 +349,17 @@ class ConditionalTransformationModel:
         scaling_arr: NDArray[np.float64] | None = None
         scaling_feature_names: list[str] | None = None
         if scaling is not None:
-            # ADR 0002 — non-interaction shift + scaled path supports all four
-            # censoring types (#71) and every base distribution except
-            # ``"exponential"`` (which is rejected because its support
-            # feasibility row becomes non-linear in γ; see Decision 3).
-            if isinstance(basis, InteractionBasis):
-                raise ValueError(
-                    "scaling= is not supported with InteractionBasis "
-                    "(see docs/adr/0002-scaling-terms.md, Decision 2)."
-                )
+            # ADR 0002 — the non-interaction shift + scaled path supports all
+            # four censoring types (#71).  ADR 0003 (#103) integrates scaling
+            # with ``InteractionBasis`` (exact data only).  Both paths reject
+            # ``"exponential"`` because its support-feasibility row becomes
+            # non-linear in γ (ADR 0002 Decision 3 / ADR 0003 Decision 5).
             if base_distribution == "exponential":
                 raise ValueError(
                     "scaling= is not supported with base_distribution="
                     "'exponential' (see docs/adr/0002-scaling-terms.md, "
-                    "Decision 3)."
+                    "Decision 3, and docs/adr/0003-scaling-with-interaction.md, "
+                    "Decision 5)."
                 )
             scaling_feature_names = _extract_feature_names(scaling)
             scaling_arr = np.asarray(scaling, dtype=float)
@@ -322,24 +458,96 @@ class ConditionalTransformationModel:
             return None
         p = self.basis.n_y_params
         q = self.basis.n_x_params
-        return self.theta_.reshape(p, q)
+        # On the scaled-interaction path theta_ = [vec_C(Θ) | γ]; reshape only
+        # the leading p·q block (ADR 0003 Decision 1).
+        return self.theta_[: p * q].reshape(p, q)
 
     @property
-    def gamma_coef_(self) -> NDArray[np.float64] | None:
-        """Scaling-block coefficients ``γ`` (length ``q_s``).
+    def gamma_(self) -> NDArray[np.float64]:
+        """Fitted scaling-block coefficients ``γ`` (length ``q_s``).
 
-        ``None`` before :meth:`fit` or when the model was constructed without
-        ``scaling=``.  Sign-aligned with R ``tram::*(scale=...)``'s scaling
-        block (no flip needed for parity comparisons; see
-        ``docs/adr/0002-scaling-terms.md``, Decision 5).
+        Sign-aligned with R ``tram::*(scale=...)``'s scaling block (no flip
+        needed for parity comparisons; see ``docs/adr/0002-scaling-terms.md``,
+        Decision 5).  Raises rather than returning ``None`` so the contract
+        matches the other fitted-coefficient accessors (``coef_``, ``sigma_``,
+        ``intercept_``).
+
+        Raises
+        ------
+        NotFittedError
+            If accessed before :meth:`fit`.
+        ValueError
+            If the model was constructed without ``scaling=``.
         """
-        if self.theta_ is None or self.scaling is None:
-            return None
+        self._check_is_fitted()
+        if self.scaling is None:
+            raise ValueError("Model was not fitted with scaling=; gamma_ is undefined.")
+        if self.theta_ is None:
+            raise RuntimeError("Unexpected None theta_ for fitted model")
         if isinstance(self.basis, InteractionBasis):
-            return None
+            # Interaction layout is [vec_C(Θ) | γ]; γ is the trailing q_s block
+            # (ADR 0003).  No contiguous shift block, so _split_fitted_theta
+            # does not apply here.
+            n_theta = self.basis.n_y_params * self.basis.n_x_params
+            return self.theta_[n_theta:]
+        _, _, gamma, _, _, _ = self._split_fitted_theta()
+        if gamma is None:
+            raise RuntimeError("Unexpected None γ block for a scaled fit")
+        return gamma
+
+    def _split_fitted_theta(
+        self,
+    ) -> tuple[
+        NDArray[np.float64],
+        NDArray[np.float64] | None,
+        NDArray[np.float64] | None,
+        int,
+        int,
+        int,
+    ]:
+        """Decompose the fitted ``theta_`` into its ``[theta_b | β | γ]`` blocks.
+
+        Single source of truth for the shift-path parameter layout
+        ``theta_ = [theta_b (p) | β (q_d, shift) | γ (q_s, scaling)]``
+        (ADR 0002).  The actual slicing is delegated to
+        :func:`mltpy.likelihood._split_theta_scaled`, the same helper the
+        likelihood path uses, so the predict / Cox-Snell / confband / summary
+        call sites cannot drift apart (the failure mode behind the confband
+        and Cox-Snell scaling bugs fixed in this codebase's history).
+
+        Returns
+        -------
+        tuple
+            ``(theta_b, beta, gamma, p, q_d, q_s)``.  ``beta`` is ``None`` when
+            there are no shift covariates (``q_d == 0``); ``gamma`` is ``None``
+            when the model was fitted without ``scaling=`` (``q_s == 0``).  The
+            three integer sizes are returned alongside so callers that also
+            need the counts (Jacobian assembly, ``X``-shape validation) do not
+            re-derive them.
+
+        Raises
+        ------
+        RuntimeError
+            If ``theta_`` is missing (model not fitted).
+        NotImplementedError
+            If called on an :class:`~mltpy.basis.InteractionBasis` model, whose
+            layout is ``[vec_C(Θ) | γ]`` with no contiguous shift block.
+        """
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are unexpectedly missing; the model "
+                "must be fitted before its parameter blocks can be split."
+            )
+        if isinstance(self.basis, InteractionBasis):
+            raise NotImplementedError(
+                "_split_fitted_theta() is only valid on the shift-basis path; "
+                "InteractionBasis uses the [vec_C(Theta) | gamma] layout."
+            )
         p = self.basis.order + 1
-        q_d = 0 if self._X_train_ is None else self._X_train_.shape[1]
-        return self.theta_[p + q_d :]
+        q_s = 0 if self.scaling is None else self.scaling.shape[1]
+        q_d = self.theta_.size - p - q_s
+        theta_b, beta, gamma = _split_theta_scaled(self.theta_, p, q_d, q_s)
+        return theta_b, beta, gamma, p, q_d, q_s
 
     def _check_is_fitted(self) -> None:
         """Raise :exc:`NotFittedError` if the model has not been fitted yet."""
@@ -467,6 +675,17 @@ class ConditionalTransformationModel:
             raise ValueError(
                 f"scaling has {self.scaling.shape[0]} rows but y has {n} "
                 "observations; both must match."
+            )
+
+        if self.scaling is not None and isinstance(self.basis, InteractionBasis):
+            # ADR 0003 Decision 7 — mirror R tram's stram "highly experimental"
+            # warning for the combined non-proportional, heteroskedastic CTM.
+            warnings.warn(
+                "scaling= with InteractionBasis is an experimental path; "
+                "validate against your use case (mirrors R tram's stram "
+                "warning).",
+                UserWarning,
+                stacklevel=2,
             )
 
         censoring_arg = CensoringType.NONE if self.censoring is None else self.censoring
@@ -608,8 +827,10 @@ class ConditionalTransformationModel:
             New-data scaling-design matrix of shape ``(m, q_s)``, required
             when the model was fitted with ``scaling=``.  Enters via
             ``h(y|x_d, x_s) = h_0(y) · exp(0.5 · x_s · γ) + x_d · β`` —
-            same parameterisation as :meth:`fit`.  Pass ``None`` for
-            non-scaling fits.
+            same parameterisation as :meth:`fit`.  On ``InteractionBasis``
+            models (ADR 0003) there is no ``β`` block and the factor scales
+            the interacting baseline: ``h = (a(y) ⊗ b(x))ᵀ vec(Θ) ·
+            exp(0.5 · x_s · γ)``.  Pass ``None`` for non-scaling fits.
         what:
             Type of prediction.  Let ``h = h(y|x)`` and ``h' = ∂h/∂y``; ``F``,
             ``S``, ``f`` denote the base distribution's CDF, survivor, and PDF.
@@ -725,74 +946,36 @@ class ConditionalTransformationModel:
                 )
             if what == "quantile":
                 return self._predict_quantile_interaction(
-                    y_arr, X_arr, offset=offset_arr
+                    y_arr, X_arr, offset=offset_arr, X_scale=X_scale_arr
                 )
             x_1d = self.basis._coerce_x(X_arr)
             design = self.basis.evaluate(y_arr, x_1d)  # (m, p*q)
             d_design = self.basis.derivative(y_arr, x_1d)  # (m, p*q)
-            h = design @ self.theta_
-            hp = d_design @ self.theta_
+            # θ = [vec_C(Θ) | γ] (ADR 0003): the design only spans vec_C(Θ).
+            pq = self.basis.n_params
+            theta_vec = self.theta_[:pq]
+            h = design @ theta_vec
+            hp = d_design @ theta_vec
+            # Scaling factor f_i = exp(0.5 · x_s,i · γ) multiplies the
+            # interacting baseline and its y-derivative alike; the offset
+            # enters after scaling, as in the likelihood.
+            if X_scale_arr is not None:
+                f_scale = np.exp(0.5 * (X_scale_arr @ self.theta_[pq:]))
+                h = h * f_scale
+                hp = hp * f_scale
             if offset_arr is not None:
                 h = h + offset_arr
 
+            # `what` is already validated against _VALID_WHAT at the top of
+            # predict(), and "quantile" returned above — so every remaining
+            # value is a distribution-scale target the shared ladder handles.
             dist = _get_dist(self.base_distribution)
-            _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-
-            if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
-                raise InfeasibleParameterError(
-                    f"predict(what={what!r}) requires h'(y) > 0."
-                )
-            if what == "trafo":
-                return h
-            if np.any(np.abs(h) > _H_CLIP):
-                warnings.warn(
-                    f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
-                    "one or more points; clipping for numerical stability.",
-                    stacklevel=2,
-                )
-            h_c = np.clip(h, -_H_CLIP, _H_CLIP)
-            if what == "distribution":
-                return dist.cdf(h_c)
-            if what == "logdistribution":
-                return cast(NDArray[np.float64], _logcdf(h_c))
-            if what == "survivor":
-                return cast(NDArray[np.float64], dist.sf(h_c))
-            if what == "logsurvivor":
-                return dist.logsf(h_c)
-            if what == "density":
-                return dist.pdf(h_c) * hp
-            if what == "logdensity":
-                with np.errstate(divide="ignore"):
-                    return dist.logpdf(h_c) + np.log(hp)
-            if what == "hazard":
-                return cast(NDArray[np.float64], dist.pdf(h_c) * hp / dist.sf(h_c))
-            if what == "loghazard":
-                return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
-            if what == "cumhazard":
-                return -dist.logsf(h_c)
-            if what == "logcumhazard":
-                return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
-            if what == "odds":
-                return cast(NDArray[np.float64], dist.cdf(h_c) / dist.sf(h_c))
-            if what == "logodds":
-                return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
-            raise ValueError(
-                f"what={what!r} is not supported for InteractionBasis predict."
-            )
+            return _apply_what(what, h, hp, dist)
 
         # ------------------------------------------------------------------
         # Standard (shift) basis path
         # ------------------------------------------------------------------
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
-        q_s = 0 if self.scaling is None else self.scaling.shape[1]
-        q_d = self.theta_.size - p - q_s
-        beta_fit: NDArray[np.float64] | None = (
-            self.theta_[p : p + q_d] if q_d > 0 else None
-        )
-        gamma_fit: NDArray[np.float64] | None = (
-            self.theta_[p + q_d :] if q_s > 0 else None
-        )
+        theta_b, beta_fit, gamma_fit, p, q_d, q_s = self._split_fitted_theta()
 
         if what == "quantile":
             xbeta: NDArray[np.float64] | None = None
@@ -851,61 +1034,7 @@ class ConditionalTransformationModel:
             h = h + offset_arr
 
         dist = _get_dist(self.base_distribution)
-        _logcdf = log_ndtr if dist.kind == "normal" else dist.logcdf
-        if what in _HP_REQUIRING_WHAT and np.any(hp <= 0.0):
-            raise InfeasibleParameterError(
-                f"predict(what={what!r}) requires h'(y) > 0, but the fitted "
-                f"theta_ yields min(h'(y)) = {float(np.min(hp)):.4g} ≤ 0 at "
-                "one or more requested points.  This indicates a non-monotone "
-                "transformation — fit() should have rejected this parameter; "
-                "if you see this, the model state is inconsistent."
-            )
-
-        if what == "trafo":
-            return h
-
-        # Clip h to ±_H_CLIP before distribution calls — the same bound
-        # likelihood.py and confband() use everywhere else — and warn when
-        # the clip actually bites so the caller knows the returned values
-        # at those points are saturated at a floor/ceiling rather than the
-        # true asymptotic limit.
-        if np.any(np.abs(h) > _H_CLIP):
-            warnings.warn(
-                f"predict(what={what!r}): |h(y|x)| exceeds ±{_H_CLIP} at "
-                "one or more points; clipping for numerical stability. "
-                "Values at these points are saturated, not the true "
-                "asymptotic limit.",
-                stacklevel=2,
-            )
-        h_c = np.clip(h, -_H_CLIP, _H_CLIP)
-
-        if what == "distribution":
-            return dist.cdf(h_c)
-        if what == "logdistribution":
-            return cast(NDArray[np.float64], _logcdf(h_c))
-        if what == "survivor":
-            return cast(NDArray[np.float64], dist.sf(h_c))
-        if what == "logsurvivor":
-            return dist.logsf(h_c)
-        if what == "density":
-            return dist.pdf(h_c) * hp
-        if what == "logdensity":
-            return dist.logpdf(h_c) + np.log(hp)
-        if what == "hazard":
-            return cast(
-                NDArray[np.float64],
-                np.exp(dist.logpdf(h_c) - dist.logsf(h_c)) * hp,
-            )
-        if what == "loghazard":
-            return dist.logpdf(h_c) + np.log(hp) - dist.logsf(h_c)
-        if what == "cumhazard":
-            return -dist.logsf(h_c)
-        if what == "logcumhazard":
-            return cast(NDArray[np.float64], np.log(-dist.logsf(h_c)))
-        if what == "odds":
-            return cast(NDArray[np.float64], np.exp(_logcdf(h_c) - dist.logsf(h_c)))
-        # logodds
-        return cast(NDArray[np.float64], _logcdf(h_c) - dist.logsf(h_c))
+        return _apply_what(what, h, hp, dist)
 
     def _predict_quantile(
         self,
@@ -975,20 +1104,18 @@ class ConditionalTransformationModel:
             h_base_grid = cast(NDArray[np.float64], T_grid @ binom_theta)
 
             eps = float(np.sqrt(np.finfo(float).eps))
-            out = np.empty(n_probs, dtype=np.float64)
-            saturated = False
 
-            for i, p in enumerate(probs_arr):
-                cdf_grid = dist.cdf(h_base_grid + shift[i])
+            def curve(
+                s: float,
+            ) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+                cdf_grid = dist.cdf(h_base_grid + s)
                 # For survival-time responses, R's grid starts at 0 and the
                 # CDF at time zero is treated as zero.
                 cdf_grid[0] = 0.0
 
                 finite = np.isfinite(cdf_grid)
                 if not np.any(finite):
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
                 cmin = float(np.min(cdf_grid[finite]))
                 cmax = float(np.max(cdf_grid[finite]))
@@ -1004,9 +1131,7 @@ class ConditionalTransformationModel:
                 qk = q_grid[keep]
                 ck = cdf_grid[keep]
                 if qk.size < 2:
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
                 n_spline = max(3 * qk.size, 3)
                 q_s = np.linspace(
@@ -1022,9 +1147,7 @@ class ConditionalTransformationModel:
 
                 finite_s = np.isfinite(c_s)
                 if not np.any(finite_s):
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
                 q_s = q_s[finite_s]
                 c_s = c_s[finite_s]
 
@@ -1035,18 +1158,13 @@ class ConditionalTransformationModel:
                 c_s = c_s[uniq]
                 q_s = q_s[uniq]
                 if c_s.size == 0:
-                    out[i] = q_grid[0]
-                    saturated = True
-                    continue
+                    return None
 
-                if p < c_s[0]:
-                    out[i] = q_grid[0]
-                    saturated = True
-                elif p > c_s[-1]:
-                    out[i] = q_grid[-1]
-                    saturated = True
-                else:
-                    out[i] = float(np.interp(p, c_s, q_s))
+                return c_s, q_s
+
+            out, saturated = _invert_shift_groups(
+                probs_arr, shift, curve, float(q_grid[0]), float(q_grid[-1])
+            )
 
             if saturated:
                 warnings.warn(
@@ -1210,12 +1328,17 @@ class ConditionalTransformationModel:
         probs: NDArray[np.float64],
         X: NDArray[np.float64],
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Row-wise quantile inversion for ``InteractionBasis`` models.
 
         For each row ``i``, solve ``h(q_i | x_i) = F⁻¹(probs_i) − offset_i``
         where ``h(y|x) = a(y)ᵀ Θ b(x)`` and ``F⁻¹`` is the base-distribution
         quantile.  Per-row bracket: ``[h(a, x_i) + ε, h(b, x_i) − ε]``.
+
+        For scaled models (ADR 0003) ``h(y|x, x_s) = a(y)ᵀ Θ b(x) · f_i`` with
+        ``f_i = exp(0.5 · x_s,i · γ) > 0``; the target is divided by ``f_i``
+        so inversion runs against the unscaled baseline and its bracket.
 
         Parameters
         ----------
@@ -1227,13 +1350,23 @@ class ConditionalTransformationModel:
         offset:
             Optional per-row offset added to ``h`` before inversion,
             shape ``(m,)`` or ``None``.
+        X_scale:
+            Scaling-design matrix of shape ``(m, q_s)`` for models fitted
+            with ``scaling=``; ``None`` otherwise.
 
         Returns
         -------
         NDArray of shape ``(m,)`` with values in ``basis.support``.
         """
-        assert isinstance(self.basis, InteractionBasis)
-        assert self.theta_ is not None
+        if not isinstance(self.basis, InteractionBasis):
+            raise RuntimeError(
+                "_predict_quantile_interaction requires an InteractionBasis; "
+                "this is an internal invariant violation."
+            )
+        if self.theta_ is None:
+            raise RuntimeError(
+                "Model parameters (theta_) are missing; fit() must run first."
+            )
         a, b = self.basis.support
         probs_arr = np.asarray(probs, dtype=np.float64)
         m = probs_arr.shape[0]
@@ -1242,7 +1375,8 @@ class ConditionalTransformationModel:
 
         p = self.basis.n_y_params
         q = self.basis.n_x_params
-        Theta = self.theta_.reshape(p, q)  # (p, q)
+        # θ = [vec_C(Θ) | γ]: only the leading p·q block reshapes to Θ.
+        Theta = self.theta_[: p * q].reshape(p, q)  # (p, q)
 
         x_1d = self.basis._coerce_x(X)
         B_x = self.basis.x_basis.evaluate(x_1d)  # (m, q)
@@ -1264,9 +1398,12 @@ class ConditionalTransformationModel:
             else np.asarray(offset, dtype=np.float64)
         )
         z_raw = dist.ppf(probs_arr) - shift
+        if X_scale is not None:
+            z_raw = z_raw / np.exp(0.5 * (X_scale @ self.theta_[p * q :]))
         if np.any((z_raw < z_min) | (z_raw > z_max)):
             warnings.warn(
-                "predict(what='quantile'): F⁻¹(p) − offset exceeds the per-row "
+                "predict(what='quantile'): F⁻¹(p) − offset (divided by "
+                "exp(0.5·x_s·γ) on scaled models) exceeds the per-row "
                 "bracket [h(a, x_i)+ε, h(b, x_i)−ε] at one or more points; "
                 "clipping for numerical stability.  Quantiles at these points "
                 "are saturated at the basis endpoints, not the true asymptotic "
@@ -1278,13 +1415,17 @@ class ConditionalTransformationModel:
 
         # Vectorised bisection: at each midpoint evaluate the y-basis once and
         # take the row-wise inner product with the per-row baseline-θ.
+        # Midpoints are used once; avoid derivatives and shared-cache retention.
+        evaluate_mid = getattr(
+            self.basis.y_basis, "_evaluate_uncached", self.basis.y_basis.evaluate
+        )
         lo = np.full(m, a, dtype=float)
         hi = np.full(m, b, dtype=float)
         mid = 0.5 * (lo + hi)
         for _ in range(60):
             if np.max(hi - lo) < _BRENTQ_EPS:
                 break
-            A_mid = self.basis.y_basis.evaluate(mid)  # (m, p)
+            A_mid = evaluate_mid(mid)  # (m, p)
             h_mid = np.einsum("ij,ij->i", A_mid, theta_rows)
             below = h_mid < z
             lo = np.where(below, mid, lo)
@@ -1298,6 +1439,7 @@ class ConditionalTransformationModel:
         X: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> float:
         """Log-likelihood at the fitted parameters (sklearn-compatible).
 
@@ -1313,6 +1455,13 @@ class ConditionalTransformationModel:
             Optional per-observation weights.
         offset:
             Optional per-observation offset added to ``h``.
+        X_scale:
+            Scaling-design matrix of shape ``(n, q_s)``. Required when the
+            model was fitted with ``scaling=``, including on training data;
+            pass the training scaling matrix to reproduce the fitted
+            log-likelihood (with the same weights and offset). A 1-D array
+            is accepted for a single scaling column. Must be ``None`` for
+            models fitted without scaling.
 
         Returns
         -------
@@ -1322,6 +1471,19 @@ class ConditionalTransformationModel:
         ------
         NotFittedError
             If called before :meth:`fit`.
+        ValueError
+            If ``X_scale`` is missing for a scaled model, supplied for an
+            unscaled model, has the wrong shape, or contains non-finite values.
+
+        Notes
+        -----
+        Evaluates the sum of observation log-likelihoods, including scaling,
+        censoring, weights and offsets as in :meth:`fit`.
+
+        Examples
+        --------
+        >>> model = MLT(order=4, support=(0, 1), scaling=X_s).fit(y, X)
+        >>> ll = model.score(y, X, X_scale=X_s)
         """
         self._check_is_fitted()
         if self.theta_ is None:
@@ -1331,6 +1493,38 @@ class ConditionalTransformationModel:
         y_clean, X_clean = self._validate_input(y, X)
         n = int(y_clean.n) if isinstance(y_clean, CensoredData) else len(y_clean)
         weights_clean, offset_clean = _validate_weights_offset(weights, offset, n)
+        X_scale_clean: NDArray[np.float64] | None = None
+        if self.scaling is not None:
+            if X_scale is None:
+                raise ValueError(
+                    "Model was fitted with scaling=; X_scale must be provided "
+                    f"(shape ({n}, {self.scaling.shape[1]}))."
+                )
+            X_scale_clean = np.asarray(X_scale, dtype=float)
+            if X_scale_clean.ndim == 1:
+                X_scale_clean = X_scale_clean[:, None]
+            if X_scale_clean.ndim != 2:
+                raise ValueError(
+                    "X_scale must be a 2-D array of shape (n, q_s); "
+                    f"got shape {X_scale_clean.shape}."
+                )
+            if X_scale_clean.shape[0] != n:
+                raise ValueError(
+                    f"X_scale has {X_scale_clean.shape[0]} rows but y has {n} "
+                    "observations; both must match."
+                )
+            if X_scale_clean.shape[1] != self.scaling.shape[1]:
+                raise ValueError(
+                    f"X_scale has {X_scale_clean.shape[1]} columns but the "
+                    f"fitted model has q_s={self.scaling.shape[1]} scaling "
+                    "coefficients."
+                )
+            if not np.all(np.isfinite(X_scale_clean)):
+                raise ValueError("X_scale must be finite (no NaN or inf).")
+        elif X_scale is not None:
+            raise ValueError(
+                "Model was not fitted with scaling=; X_scale must be None."
+            )
         cens = CensoringType.NONE if self.censoring is None else self.censoring
         return log_likelihood(
             self.theta_,
@@ -1341,6 +1535,7 @@ class ConditionalTransformationModel:
             base_distribution=self.base_distribution,
             weights=weights_clean,
             offset=offset_clean,
+            scaling=X_scale_clean,
         )
 
     _ACTIVE_CONSTRAINT_TOL: float = 1e-8
@@ -1630,13 +1825,20 @@ class ConditionalTransformationModel:
         # Cox-Snell / deviance: evaluate -log S(y|x) at a single point per
         # observation.  Pick the point per censoring status of each row.
         y_eval = self._cox_snell_eval_points()
-        p = self.basis.order + 1
-        theta_b = self.theta_[:p]
+        # Parameter layout: theta_ = [theta_b (p) | beta (q_d, shift) |
+        # gamma (q_s, scaling)].  Split exactly as predict()/transform() do so
+        # the scaling block is honoured rather than mis-read as shift
+        # coefficients (ADR 0002).
+        theta_b, beta_fit, gamma_fit, _, _, _ = self._split_fitted_theta()
         B = self.basis.evaluate(y_eval)
         h = B @ theta_b
-        if self._X_train_ is not None and len(self.theta_) > p:
-            beta = self.theta_[p:]
-            h = h + self._X_train_ @ beta
+        # Scaling factor f_i = exp(0.5 · x_s,i · γ); same convention as
+        # transform() and likelihood._ll_none.  Applies to h_0 before the
+        # shift and offset are added.
+        if gamma_fit is not None and self.scaling is not None:
+            h = h * np.exp(0.5 * (self.scaling @ gamma_fit))
+        if beta_fit is not None and self._X_train_ is not None:
+            h = h + self._X_train_ @ beta_fit
         if self._offset_train_ is not None:
             h = h + self._offset_train_
         h_c = np.clip(h, -_H_CLIP, _H_CLIP)
@@ -2287,6 +2489,7 @@ class ConditionalTransformationModel:
             "trafo", "distribution", "survivor", "density", "hazard"
         ] = "distribution",
         offset: NDArray[np.float64] | None = None,
+        X_scale: NDArray[np.float64] | None = None,
     ) -> NDArray[np.float64]:
         """Pointwise delta-method confidence band for a predicted curve.
 
@@ -2313,16 +2516,25 @@ class ConditionalTransformationModel:
         * ``"hazard"``       — ``η = log f(h) + log h' − log S(h)``;
           back-transform = ``exp(·)``
 
+        For models fitted with ``scaling=`` (ADR 0002) the transformation is
+        ``h(y|x_d, x_s) = h_0(y)·s + x_d·β`` with the strictly-positive
+        scale factor ``s = exp(0.5·x_s·γ)`` and derivative ``h' = h_0'·s``
+        (so ``log h' = log h_0' + 0.5·x_s·γ``).  The delta-method Jacobian
+        therefore gains a ``γ`` block; supply the scaling profile via
+        ``X_scale``.  The fitted ``vcov()`` already returns the full
+        ``[θ_b | β | γ]`` block, so the band is the correct asymptotic
+        interval, not a baseline-only approximation.
+
         Parameters
         ----------
         y_grid:
             Response values at which to evaluate the band.  Must lie within
             ``basis.support``.
         X:
-            Covariate profile for a single curve.  Accepts a 1D array of
-            length ``q`` or a 2D ``(1, q)`` array; broadcast across
-            ``y_grid``.  Required when the model was fit with covariates;
-            must be ``None`` when it was not.
+            Shift-covariate profile for a single curve.  Accepts a 1D array
+            of length ``q_d`` or a 2D ``(1, q_d)`` array; broadcast across
+            ``y_grid``.  Required when the model was fit with shift
+            covariates; must be ``None`` when it was not.
         level:
             Confidence level in ``(0, 1)``.  Defaults to ``0.95``.
         what:
@@ -2332,6 +2544,11 @@ class ConditionalTransformationModel:
             Optional per-grid-point offset of shape ``(len(y_grid),)``.
             Added to ``h`` before computing the band; does not affect the
             delta-method Jacobian (offset is constant w.r.t. ``theta``).
+        X_scale:
+            Scaling-covariate profile for a single curve, shape ``(q_s,)``
+            or ``(1, q_s)``, broadcast across ``y_grid``.  Required when the
+            model was fitted with ``scaling=`` and must be ``None``
+            otherwise.
 
         Returns
         -------
@@ -2345,8 +2562,8 @@ class ConditionalTransformationModel:
             If called before :meth:`fit`.
         ValueError
             If ``level`` is outside ``(0, 1)``, ``what`` is not supported,
-            or the shape/presence of ``X`` is inconsistent with the fitted
-            model.
+            or the shape/presence of ``X`` / ``X_scale`` is inconsistent
+            with the fitted model.
         RuntimeError
             Propagated from :meth:`vcov` on singular Hessians, or if the
             fitted basis violates monotonicity at a grid point
@@ -2386,32 +2603,65 @@ class ConditionalTransformationModel:
                 f"what={what!r} is invalid. Allowed: {_VALID_CONFBAND_WHAT}."
             )
 
-        p = self.basis.order + 1
-        q = self.theta_.size - p
-        theta_b = self.theta_[:p]
-        beta = self.theta_[p:] if q > 0 else None
+        # Parameter layout: theta_ = [theta_b (p) | beta (q_d, shift) |
+        # gamma (q_s, scaling)] (ADR 0002).  vcov() returns the matching full
+        # block, so the Jacobian below is assembled in the same
+        # [theta_b | beta | gamma] column order.
+        theta_b, beta, gamma, p, q_d, q_s = self._split_fitted_theta()
+        n_par = p + q_d + q_s
 
-        # Validate X versus the fitted parameter layout
-        if q == 0:
+        # Validate X (shift profile) versus the fitted parameter layout.
+        if q_d == 0:
             if X is not None:
                 raise ValueError(
-                    "The model was fitted without covariates; X must be None."
+                    "The model was fitted without shift covariates; X must be None."
                 )
             x_row: NDArray[np.float64] | None = None
         else:
             if X is None:
                 raise ValueError(
-                    f"The model was fitted with {q} covariates; X is "
-                    "required (shape (q,) or (1, q))."
+                    f"The model was fitted with {q_d} shift covariates; X is "
+                    "required (shape (q_d,) or (1, q_d))."
                 )
             X_arr = np.asarray(X, dtype=float)
             if X_arr.ndim == 1:
                 X_arr = X_arr[None, :]
-            if X_arr.shape != (1, q):
+            if X_arr.shape != (1, q_d):
                 raise ValueError(
-                    f"X has shape {X_arr.shape}, expected (q,) or (1, q) with q={q}."
+                    f"X has shape {X_arr.shape}, expected (q_d,) or (1, q_d) "
+                    f"with q_d={q_d}."
                 )
             x_row = X_arr[0]
+
+        # Validate X_scale (scaling profile) versus the fitted layout.
+        if q_s == 0:
+            if X_scale is not None:
+                raise ValueError(
+                    "The model was fitted without scaling=; X_scale must be None."
+                )
+            xs_row: NDArray[np.float64] | None = None
+        else:
+            if X_scale is None:
+                raise ValueError(
+                    f"The model was fitted with scaling= ({q_s} columns); "
+                    "X_scale is required (shape (q_s,) or (1, q_s))."
+                )
+            Xs_arr = np.asarray(X_scale, dtype=float)
+            if Xs_arr.ndim == 1:
+                Xs_arr = Xs_arr[None, :]
+            if Xs_arr.shape != (1, q_s):
+                raise ValueError(
+                    f"X_scale has shape {Xs_arr.shape}, expected (q_s,) or "
+                    f"(1, q_s) with q_s={q_s}."
+                )
+            xs_row = Xs_arr[0]
+
+        # Scale factor s = exp(0.5·x_s·γ) > 0 (constant across y_grid for a
+        # single profile); s = 1 on the shift-only path.
+        if xs_row is not None and gamma is not None:
+            s = float(np.exp(0.5 * (xs_row @ gamma)))
+        else:
+            s = 1.0
 
         y_arr = np.asarray(y_grid, dtype=float).ravel()
         m = y_arr.size
@@ -2422,15 +2672,19 @@ class ConditionalTransformationModel:
 
         B = self.basis.evaluate(y_arr)  # (m, p)
         D = self.basis.derivative(y_arr, order=1)  # (m, p)
-        h = B @ theta_b
-        hp = D @ theta_b
+        h0 = B @ theta_b  # baseline transformation h_0(y)
+        hp0 = D @ theta_b  # baseline derivative h_0'(y)
+        # Scaled transformation and its y-derivative: h = h_0·s + x_d·β,
+        # h' = h_0'·s.  s = 1 reduces to the shift-only model exactly.
+        h = h0 * s
+        hp = hp0 * s
         if x_row is not None and beta is not None:
             h = h + float(x_row @ beta)
 
         if offset_arr is not None:
             h = h + offset_arr
 
-        # Assemble per-grid-point Jacobian J of shape (m, p+q).
+        # Assemble per-grid-point Jacobian J of shape (m, n_par).
         # For scales whose η involves log h', also validate h' > 0.
         if what in ("density", "hazard") and np.any(hp <= 0.0):
             raise RuntimeError(
@@ -2443,12 +2697,16 @@ class ConditionalTransformationModel:
         dist = _get_dist(self.base_distribution)
 
         if what in ("trafo", "distribution", "survivor"):
-            # η = h;  J_b = B(y),  J_β = x_row  (broadcast)
-            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
-            J = np.empty((m, p + q), dtype=np.float64)
-            J[:, :p] = B
-            if q > 0 and x_row is not None:
-                J[:, p:] = x_row[None, :]
+            # η = h = h_0·s + x_d·β.  Jacobian columns, in [θ_b | β | γ] order:
+            #   ∂η/∂θ_b = s · B(y)
+            #   ∂η/∂β   = x_d                       (broadcast across y_grid)
+            #   ∂η/∂γ_k = h_0 · s · 0.5 · x_s,k     (since ∂s/∂γ_k = 0.5·x_s,k·s)
+            J = np.empty((m, n_par), dtype=np.float64)
+            J[:, :p] = s * B
+            if q_d > 0 and x_row is not None:
+                J[:, p : p + q_d] = x_row[None, :]
+            if q_s > 0 and xs_row is not None:
+                J[:, p + q_d :] = (0.5 * s * h0)[:, None] * xs_row[None, :]
             eta = h
         else:
             # "density" or "hazard":
@@ -2456,11 +2714,15 @@ class ConditionalTransformationModel:
             #   hazard :  η = log f(h) + log h' - log S(h)
             #   ∂/∂h  of log f(h)   = ψ(h)
             #   ∂/∂h  of (-log S(h)) = λ(h) = f(h)/S(h)
-            # So:
-            #   dη/dθ_b = coeff * B(y) + D(y) / h'
-            #   dη/dβ   = coeff * x_row
+            # With h = h_0·s + x_d·β and log h' = log h_0' + 0.5·x_s·γ,
+            # the chain rule gives (columns in [θ_b | β | γ] order):
+            #   dη/dθ_b = coeff · s · B(y) + D(y) / h_0'
+            #   dη/dβ   = coeff · x_d
+            #   dη/dγ_k = 0.5 · x_s,k · (coeff · h_0 · s + 1)
+            #             └ from log f(h) ┘   └ from log h' ┘
             # with coeff = ψ(h)         (density)
             #      coeff = ψ(h) + λ(h)  (hazard)
+            # The "+1" on the γ term is ∂(0.5·x_s·γ)/∂γ_k from log h'.
             # At extreme |h|, logsf(h) → -∞ for light-tailed bases (normal,
             # min/max extreme value), so ψ and λ = exp(logpdf − logsf) can
             # overflow and propagate inf into J and η.  Clip to ±_H_CLIP
@@ -2485,11 +2747,15 @@ class ConditionalTransformationModel:
             else:
                 coeff = psi
 
-            # q == 0 ⇒ J is (m, p), no β columns; the branch below is skipped.
-            J = np.empty((m, p + q), dtype=np.float64)
-            J[:, :p] = coeff[:, None] * B + D / hp[:, None]
-            if q > 0 and x_row is not None:
-                J[:, p:] = coeff[:, None] * x_row[None, :]
+            # Empty β/γ blocks are simply skipped (n_par == p when both absent).
+            J = np.empty((m, n_par), dtype=np.float64)
+            J[:, :p] = coeff[:, None] * (s * B) + D / hp0[:, None]
+            if q_d > 0 and x_row is not None:
+                J[:, p : p + q_d] = coeff[:, None] * x_row[None, :]
+            if q_s > 0 and xs_row is not None:
+                J[:, p + q_d :] = (0.5 * (coeff * h0 * s + 1.0))[:, None] * xs_row[
+                    None, :
+                ]
 
             if what == "density":
                 eta = dist.logpdf(h_c) + np.log(hp)

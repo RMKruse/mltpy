@@ -404,7 +404,7 @@ class TestInvalidInputs:
             self.model.confint(parm=[0, 999])
 
     def test_confband_unexpected_X(self):
-        with pytest.raises(ValueError, match="without covariates"):
+        with pytest.raises(ValueError, match="without shift covariates"):
             self.model.confband(np.array([0.5]), X=np.array([1.0]))
 
 

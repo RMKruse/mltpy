@@ -1,0 +1,2612 @@
+{
+  "base": "860d664a0dd697a426735df60dcd75f5852ed0df",
+  "reps": 7,
+  "environment": {
+    "python": "3.13.13",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "blas": "accelerate",
+    "git_sha": "860d664a0dd697a426735df60dcd75f5852ed0df",
+    "omp_threads": null,
+    "veclib_threads": null
+  },
+  "fits": {
+    "ia_bs3x1_m8_n1000": {
+      "fit_seconds": 0.007385083008557558,
+      "n_params": 8,
+      "converged": true,
+      "kkt_residual": 4.2770988528673115e-07,
+      "ll": -1408.9571920037813,
+      "ll_minus_slsqp": 2.2737367544323206e-13,
+      "max_abs_dtheta_vs_slsqp": 4.857459647844564e-07,
+      "valid": true
+    },
+    "ia_bs4x2_m15_n1000": {
+      "fit_seconds": 0.018217875011032447,
+      "n_params": 15,
+      "converged": true,
+      "kkt_residual": 3.0243933268891965e-06,
+      "ll": -1406.7844624214658,
+      "ll_minus_slsqp": 7.536073098890483e-09,
+      "max_abs_dtheta_vs_slsqp": 5.227034949761844e-06,
+      "valid": true
+    },
+    "ia_bs6x3_m28_n250": {
+      "fit_seconds": 0.03398391598602757,
+      "n_params": 28,
+      "converged": true,
+      "kkt_residual": 1.4515916347823676e-06,
+      "ll": -347.8531177297371,
+      "ll_minus_slsqp": 1.5321575119742192e-09,
+      "max_abs_dtheta_vs_slsqp": 2.7986016331027486e-05,
+      "valid": true
+    },
+    "ia_scaled_bs3x1_m9_n1000": {
+      "fit_seconds": 0.010771875007776543,
+      "n_params": 9,
+      "converged": true,
+      "kkt_residual": 4.820942933747574e-07,
+      "ll": -1406.955373113075,
+      "ll_minus_slsqp": 0.0,
+      "max_abs_dtheta_vs_slsqp": 2.1390206494942277e-07,
+      "valid": true
+    },
+    "survreg_interacting": {
+      "fit_seconds": 0.002975499985041097,
+      "n_params": 4,
+      "converged": true,
+      "kkt_residual": 2.4745943960624572e-08,
+      "ll": -1520.0364167108187,
+      "ll_minus_slsqp": 0.0,
+      "max_abs_dtheta_vs_slsqp": 6.444524469628732e-09,
+      "valid": true
+    },
+    "survreg_interacting_scaled": {
+      "fit_seconds": 0.004546416981611401,
+      "n_params": 5,
+      "converged": true,
+      "kkt_residual": 1.7226755488763956e-07,
+      "ll": -1446.83874099457,
+      "ll_minus_slsqp": 2.2737367544323206e-13,
+      "max_abs_dtheta_vs_slsqp": 2.932239873132403e-08,
+      "valid": true
+    }
+  },
+  "cells": [
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.2474580144044012,
+        1.3054170121904463,
+        1.2748329900205135,
+        1.305542013142258,
+        1.41350002377294,
+        1.2865419848822057,
+        1.2739160156343132
+      ],
+      "after_ms": [
+        0.5917499947827309,
+        0.5820829828735441,
+        0.6032499950379133,
+        0.5532919894903898,
+        0.702209013979882,
+        0.5371250153984874,
+        0.595749996136874
+      ],
+      "before_median_ms": 1.2865419848822057,
+      "after_median_ms": 0.5917499947827309,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.3846549987792969,
+        "peak_mib": 0.41826629638671875,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.2685546875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.341796875
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.013921737670898438,
+        "peak_mib": 0.04530525207519531,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0039825439453125,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.006317138671875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.2291250168345869,
+        1.2664999812841415,
+        1.3630420144181699,
+        1.3129170110914856,
+        1.4525419974233955,
+        1.2754169874824584,
+        1.3300410064402968
+      ],
+      "after_ms": [
+        0.5893329798709601,
+        0.5224170163273811,
+        0.7110829756129533,
+        0.6030420190654695,
+        0.6404169835150242,
+        0.5402499809861183,
+        0.6127909873612225
+      ],
+      "before_median_ms": 1.3129170110914856,
+      "after_median_ms": 0.6030420190654695,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.3836660385131836,
+        "peak_mib": 0.4190492630004883,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.2685546875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.341796875
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.013727188110351562,
+        "peak_mib": 0.04678916931152344,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0039825439453125,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.006317138671875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        4.173666005954146,
+        4.238249995978549,
+        4.514750005910173,
+        4.406374995596707,
+        4.584499984048307,
+        4.336874990258366,
+        4.445500002475455
+      ],
+      "after_ms": [
+        2.0833749731536955,
+        2.0481249957811087,
+        2.1682080114260316,
+        2.042250009253621,
+        2.2013330017216504,
+        2.010249998420477,
+        2.1480419964063913
+      ],
+      "before_median_ms": 4.406374995596707,
+      "after_median_ms": 2.0833749731536955,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 3.4672727584838867,
+        "peak_mib": 3.7696218490600586,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 2.685546875,
+          "key_mib": 0.732421875,
+          "total_mib": 3.41796875
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.0754861831665039,
+        "peak_mib": 0.3549814224243164,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0383148193359375,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.061248779296875
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        4.534833977231756,
+        4.4354579877108335,
+        4.501832998357713,
+        4.465708014322445,
+        4.447207989869639,
+        4.310290998546407,
+        4.4881250069011
+      ],
+      "after_ms": [
+        2.161041018553078,
+        2.0897920185234398,
+        2.183792006690055,
+        2.039999992121011,
+        2.183790988055989,
+        2.108542015776038,
+        2.1805830183438957
+      ],
+      "before_median_ms": 4.465708014322445,
+      "after_median_ms": 2.161041018553078,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 3.4671716690063477,
+        "peak_mib": 3.778092384338379,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 2.685546875,
+          "key_mib": 0.732421875,
+          "total_mib": 3.41796875
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.07603931427001953,
+        "peak_mib": 0.3641061782836914,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0383148193359375,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.061248779296875
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        33.81074999924749,
+        33.85449998313561,
+        34.32245799922384,
+        34.43416699883528,
+        34.23608298180625,
+        33.64895799313672,
+        35.26895900722593
+      ],
+      "after_ms": [
+        16.820333985378966,
+        16.434417018899694,
+        17.02208400820382,
+        16.558208997594193,
+        16.949957993347198,
+        16.160667000804096,
+        17.01229199534282
+      ],
+      "before_median_ms": 34.23608298180625,
+      "after_median_ms": 16.820333985378966,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 34.298216819763184,
+        "peak_mib": 36.80171489715576,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 26.85546875,
+          "key_mib": 7.32421875,
+          "total_mib": 34.1796875
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6939811706542969,
+        "peak_mib": 2.9685850143432617,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3816375732421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.610565185546875
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        33.50654200767167,
+        33.58804198796861,
+        33.884790987940505,
+        34.083667007507756,
+        33.82345801219344,
+        33.93912498722784,
+        34.20958298374899
+      ],
+      "after_ms": [
+        16.950499993981794,
+        16.488875000504777,
+        16.75924999290146,
+        16.443915985291824,
+        16.882083989912644,
+        16.547333012567833,
+        16.506041021784768
+      ],
+      "before_median_ms": 33.884790987940505,
+      "after_median_ms": 16.547333012567833,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 34.2976016998291,
+        "peak_mib": 36.87950325012207,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 26.85546875,
+          "key_mib": 7.32421875,
+          "total_mib": 34.1796875
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6936931610107422,
+        "peak_mib": 3.046708106994629,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3816375732421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.610565185546875
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        331.462250003824,
+        320.6832080031745,
+        326.11024999641813,
+        323.93316700472496,
+        321.1757499957457,
+        322.02716698520817,
+        322.03345900052227
+      ],
+      "after_ms": [
+        161.23737502493896,
+        159.2795839824248,
+        161.1182919878047,
+        162.9061670100782,
+        161.9604579755105,
+        160.15841698390432,
+        164.60387501865625
+      ],
+      "before_median_ms": 322.03345900052227,
+      "after_median_ms": 161.23737502493896,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 342.60153579711914,
+        "peak_mib": 366.4768753051758,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 268.5546875,
+          "key_mib": 73.2421875,
+          "total_mib": 341.796875
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.873650550842285,
+        "peak_mib": 28.460206031799316,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8148651123046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.103729248046875
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_bs3x1_m8_n1000",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        325.5123340059072,
+        321.49504200788215,
+        323.76125000882894,
+        320.23012498393655,
+        325.63358297920786,
+        324.55066600232385,
+        325.5970420141239
+      ],
+      "after_ms": [
+        162.24691702518612,
+        158.75429098377936,
+        161.62733401870355,
+        159.13145800004713,
+        163.02416700636968,
+        159.1889160044957,
+        161.56979199149646
+      ],
+      "before_median_ms": 324.55066600232385,
+      "after_median_ms": 161.56979199149646,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 342.6014347076416,
+        "peak_mib": 367.24182319641113,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 268.5546875,
+          "key_mib": 73.2421875,
+          "total_mib": 341.796875
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.8733625411987305,
+        "peak_mib": 29.224974632263184,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8148651123046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.103729248046875
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.3046249805483967,
+        1.3658750103786588,
+        1.4187500055413693,
+        1.3679999974556267,
+        1.5498330176342279,
+        1.283916993997991,
+        1.411334000295028
+      ],
+      "after_ms": [
+        0.6529169913846999,
+        0.5943340074736625,
+        0.6727500003762543,
+        0.5864579870831221,
+        0.66562500433065,
+        0.5789170099887997,
+        0.6718340155202895
+      ],
+      "before_median_ms": 1.3679999974556267,
+      "after_median_ms": 0.6529169913846999,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.45621490478515625,
+        "peak_mib": 0.49522876739501953,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.341796875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.4150390625
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.016022682189941406,
+        "peak_mib": 0.05200672149658203,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.006317138671875,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0086517333984375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.3267909816931933,
+        1.3611250033136457,
+        1.4346249809022993,
+        1.3773749815300107,
+        1.430833013728261,
+        1.3877909805160016,
+        1.4967920142225921
+      ],
+      "after_ms": [
+        0.6500000017695129,
+        0.5970420024823397,
+        0.6853340019006282,
+        0.6037089915480465,
+        0.668499997118488,
+        0.5970000056549907,
+        0.660916994092986
+      ],
+      "before_median_ms": 1.3877909805160016,
+      "after_median_ms": 0.6500000017695129,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.4571418762207031,
+        "peak_mib": 0.4977874755859375,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.341796875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.4150390625
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.016248703002929688,
+        "peak_mib": 0.05391120910644531,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.006317138671875,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0086517333984375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        5.124084011185914,
+        5.281749996356666,
+        5.367917008697987,
+        5.104834010126069,
+        5.229374975897372,
+        5.114208004670218,
+        5.352541978936642
+      ],
+      "after_ms": [
+        2.5449579989071935,
+        2.401499979896471,
+        2.447959006531164,
+        2.375624986598268,
+        2.569916017819196,
+        2.3489170125685632,
+        2.6443329988978803
+      ],
+      "before_median_ms": 5.229374975897372,
+      "after_median_ms": 2.447959006531164,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 4.1993207931518555,
+        "peak_mib": 4.555137634277344,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 3.41796875,
+          "key_mib": 0.732421875,
+          "total_mib": 4.150390625
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.10000896453857422,
+        "peak_mib": 0.42530345916748047,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.061248779296875,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0841827392578125
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        5.083208001451567,
+        5.0851249834522605,
+        5.220249993726611,
+        5.125249997945502,
+        5.147417017724365,
+        5.155125021701679,
+        5.330457992386073
+      ],
+      "after_ms": [
+        2.624709013616666,
+        2.458958013448864,
+        2.5628750154282898,
+        2.4035829992499202,
+        2.5509589759167284,
+        2.4491660005878657,
+        2.516041975468397
+      ],
+      "before_median_ms": 5.147417017724365,
+      "after_median_ms": 2.516041975468397,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 4.1991729736328125,
+        "peak_mib": 4.5646820068359375,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 3.41796875,
+          "key_mib": 0.732421875,
+          "total_mib": 4.150390625
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.09902000427246094,
+        "peak_mib": 0.43401432037353516,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.061248779296875,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0841827392578125
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        41.14845799631439,
+        41.58129100687802,
+        41.95454198634252,
+        41.17262500221841,
+        41.85483400942758,
+        41.26095800893381,
+        42.32333297841251
+      ],
+      "after_ms": [
+        20.766333007486537,
+        19.98549999552779,
+        20.67224998609163,
+        19.885415997123346,
+        20.785915985470638,
+        20.16225000261329,
+        20.57583400164731
+      ],
+      "before_median_ms": 41.58129100687802,
+      "after_median_ms": 20.57583400164731,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 41.622435569763184,
+        "peak_mib": 44.5074348449707,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 34.1796875,
+          "key_mib": 7.32421875,
+          "total_mib": 41.50390625
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.9228153228759766,
+        "peak_mib": 3.502634048461914,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.610565185546875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.8394927978515625
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        41.637125017587095,
+        41.1690000037197,
+        45.32420801115222,
+        41.4670419995673,
+        41.9571659876965,
+        41.30454099504277,
+        42.404415988130495
+      ],
+      "after_ms": [
+        20.64737500040792,
+        19.97362499241717,
+        20.82058400264941,
+        20.238750003045425,
+        20.78629200696014,
+        20.021083008032292,
+        20.981500012567267
+      ],
+      "before_median_ms": 41.637125017587095,
+      "after_median_ms": 20.64737500040792,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 41.61990451812744,
+        "peak_mib": 44.58326053619385,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 34.1796875,
+          "key_mib": 7.32421875,
+          "total_mib": 41.50390625
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.9241628646850586,
+        "peak_mib": 3.582392692565918,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.610565185546875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.8394927978515625
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        407.0558749954216,
+        399.93979199789464,
+        405.95087499241345,
+        399.5395409874618,
+        404.50420798151754,
+        398.228999983985,
+        408.1454999977723
+      ],
+      "after_ms": [
+        199.5958749903366,
+        195.24079098482616,
+        200.8193749934435,
+        194.3767500051763,
+        200.09549998212606,
+        194.39312498434447,
+        202.44820800144225
+      ],
+      "before_median_ms": 404.50420798151754,
+      "after_median_ms": 199.5958749903366,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 415.84358310699463,
+        "peak_mib": 443.5336046218872,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 341.796875,
+          "key_mib": 73.2421875,
+          "total_mib": 415.0390625
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 9.162327766418457,
+        "peak_mib": 33.80058670043945,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 6.103729248046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 8.392593383789062
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_bs4x2_m15_n1000",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        404.76787500665523,
+        400.5475410085637,
+        407.6537909859326,
+        399.98708400526084,
+        409.4120830122847,
+        403.9719580032397,
+        406.14445801475085
+      ],
+      "after_ms": [
+        201.79379198816605,
+        195.1347080175765,
+        201.38520799810067,
+        195.41949999984354,
+        201.09499999671243,
+        196.13179098814726,
+        200.9558329882566
+      ],
+      "before_median_ms": 404.76787500665523,
+      "after_median_ms": 200.9558329882566,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 415.84282779693604,
+        "peak_mib": 444.2978982925415,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 341.796875,
+          "key_mib": 73.2421875,
+          "total_mib": 415.0390625
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 9.163955688476562,
+        "peak_mib": 34.56727123260498,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 6.103729248046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 8.392593383789062
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.539082993986085,
+        1.5542079927399755,
+        1.6852080007083714,
+        1.708750001853332,
+        1.6479589976370335,
+        1.5855410019867122,
+        1.674707978963852
+      ],
+      "after_ms": [
+        0.7526249974034727,
+        0.6835829990450293,
+        0.7783329929225147,
+        0.6794579967390746,
+        0.7737499836366624,
+        0.6712920148856938,
+        0.7235829834826291
+      ],
+      "before_median_ms": 1.6479589976370335,
+      "after_median_ms": 0.7235829834826291,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.6024656295776367,
+        "peak_mib": 0.6513814926147461,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.48828125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.5615234375
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.020272254943847656,
+        "peak_mib": 0.06541061401367188,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.008697509765625,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0110321044921875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.5367500018328428,
+        1.52749998960644,
+        1.636375003727153,
+        1.5949170046951622,
+        1.5472090162802488,
+        1.552082976559177,
+        1.622292009415105
+      ],
+      "after_ms": [
+        0.7324169855564833,
+        0.6618750048801303,
+        0.7515829929616302,
+        0.6716669886372983,
+        0.7377089932560921,
+        0.672499998472631,
+        0.7654580113012344
+      ],
+      "before_median_ms": 1.552082976559177,
+      "after_median_ms": 0.7324169855564833,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.6038599014282227,
+        "peak_mib": 0.654454231262207,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.48828125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.5615234375
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.01909637451171875,
+        "peak_mib": 0.06595993041992188,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.008697509765625,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0110321044921875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        6.82237499859184,
+        6.721624988131225,
+        6.816542008891702,
+        6.761124997865409,
+        6.869041011668742,
+        6.91658299183473,
+        7.103333016857505
+      ],
+      "after_ms": [
+        3.348832979099825,
+        3.1852920074015856,
+        3.279208001913503,
+        3.122958994936198,
+        3.303166973637417,
+        3.126750001683831,
+        3.396833984879777
+      ],
+      "before_median_ms": 6.82237499859184,
+      "after_median_ms": 3.279208001913503,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 5.663884162902832,
+        "peak_mib": 6.118866920471191,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 4.8828125,
+          "key_mib": 0.732421875,
+          "total_mib": 5.615234375
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.12294197082519531,
+        "peak_mib": 0.5398349761962891,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.084228515625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.1071624755859375
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        6.761708005797118,
+        6.74333400093019,
+        6.973125011427328,
+        6.735375005519018,
+        6.852165999589488,
+        6.788041006075218,
+        6.865708011901006
+      ],
+      "after_ms": [
+        3.337957983603701,
+        3.187833004631102,
+        3.444333007792011,
+        3.204790991730988,
+        3.36791601148434,
+        3.167625021887943,
+        3.334667009767145
+      ],
+      "before_median_ms": 6.788041006075218,
+      "after_median_ms": 3.334667009767145,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 5.66326904296875,
+        "peak_mib": 6.126870155334473,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 4.8828125,
+          "key_mib": 0.732421875,
+          "total_mib": 5.615234375
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.12181282043457031,
+        "peak_mib": 0.5472774505615234,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.084228515625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.1071624755859375
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        56.72520800726488,
+        56.754207995254546,
+        57.702833000803366,
+        56.74341699341312,
+        57.62641699402593,
+        56.82795899338089,
+        57.659082987811416
+      ],
+      "after_ms": [
+        28.253333002794534,
+        27.471125009469688,
+        28.16283400170505,
+        27.307291980832815,
+        28.09325000271201,
+        27.251333987805992,
+        28.147625009296462
+      ],
+      "before_median_ms": 56.82795899338089,
+      "after_median_ms": 28.09325000271201,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 56.27045249938965,
+        "peak_mib": 59.84208106994629,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 48.828125,
+          "key_mib": 7.32421875,
+          "total_mib": 56.15234375
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 1.1519289016723633,
+        "peak_mib": 4.342144966125488,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.83953857421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 1.0684661865234375
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        62.14195900247432,
+        57.370791997527704,
+        57.8835420019459,
+        57.49566599843092,
+        58.25512501178309,
+        57.09025001851842,
+        58.0844999931287
+      ],
+      "after_ms": [
+        29.011040984187275,
+        27.699041995219886,
+        28.733416984323412,
+        27.759958000387996,
+        28.61295800539665,
+        27.763624995714054,
+        28.556584002217278
+      ],
+      "before_median_ms": 57.8835420019459,
+      "after_median_ms": 28.556584002217278,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 56.26871585845947,
+        "peak_mib": 59.918747901916504,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 48.828125,
+          "key_mib": 7.32421875,
+          "total_mib": 56.15234375
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 1.1516408920288086,
+        "peak_mib": 4.4202680587768555,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.83953857421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 1.0684661865234375
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        589.5411249948665,
+        564.5527500018943,
+        567.5365419883747,
+        564.5921249815729,
+        576.2055410014,
+        556.484000000637,
+        565.1064169942401
+      ],
+      "after_ms": [
+        286.5970830025617,
+        274.4552090007346,
+        279.1232090094127,
+        273.3592499862425,
+        277.3498330207076,
+        269.889624993084,
+        276.6905839962419
+      ],
+      "before_median_ms": 565.1064169942401,
+      "after_median_ms": 276.6905839962419,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 562.3272571563721,
+        "peak_mib": 596.8837642669678,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 488.28125,
+          "key_mib": 73.2421875,
+          "total_mib": 561.5234375
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 11.452452659606934,
+        "peak_mib": 42.19431972503662,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 8.39263916015625,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 10.681503295898438
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_bs6x3_m28_n250",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        565.6874580017757,
+        556.2252920062747,
+        566.2564170197584,
+        562.9427090170793,
+        570.3904580150265,
+        559.8185829876456,
+        566.8568330002017
+      ],
+      "after_ms": [
+        279.07845901791006,
+        268.79324999754317,
+        278.24362501269206,
+        269.8407080024481,
+        278.32187499734573,
+        270.23462500073947,
+        278.08833299786784
+      ],
+      "before_median_ms": 565.6874580017757,
+      "after_median_ms": 278.08833299786784,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 562.3264083862305,
+        "peak_mib": 597.6480112075806,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 488.28125,
+          "key_mib": 73.2421875,
+          "total_mib": 561.5234375
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 11.452258110046387,
+        "peak_mib": 42.95913505554199,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 8.39263916015625,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 10.681503295898438
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.3615829811897129,
+        1.285582984564826,
+        1.3656670053023845,
+        1.2812500062864274,
+        1.3432090054266155,
+        1.282125012949109,
+        1.525291008874774
+      ],
+      "after_ms": [
+        0.6423330050893128,
+        0.6156669987831265,
+        0.6301669927779585,
+        0.5526249879039824,
+        0.6167500105220824,
+        0.5514580116141587,
+        0.6440829893108457
+      ],
+      "before_median_ms": 1.3432090054266155,
+      "after_median_ms": 0.6167500105220824,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.3835878372192383,
+        "peak_mib": 0.4172067642211914,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.2685546875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.341796875
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.015377998352050781,
+        "peak_mib": 0.046769142150878906,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0039825439453125,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.006317138671875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.2999160098843277,
+        1.3436249864753336,
+        1.3429580139927566,
+        1.3089579879306257,
+        1.4886250137351453,
+        1.3416250003501773,
+        1.3676670205313712
+      ],
+      "after_ms": [
+        0.6247080164030194,
+        0.5992920196149498,
+        0.6451249937526882,
+        0.5567919870372862,
+        0.7044579833745956,
+        0.5756250175181776,
+        0.6752499903086573
+      ],
+      "before_median_ms": 1.3429580139927566,
+      "after_median_ms": 0.6247080164030194,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.3837594985961914,
+        "peak_mib": 0.4190492630004883,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.2685546875,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.341796875
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.015549659729003906,
+        "peak_mib": 0.048564910888671875,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0039825439453125,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.006317138671875
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        4.288416006602347,
+        4.364000022178516,
+        4.539125016890466,
+        4.470375017262995,
+        4.557541018584743,
+        4.475291993003339,
+        4.540875001111999
+      ],
+      "after_ms": [
+        2.152458007913083,
+        2.0881669770460576,
+        2.2693749924656004,
+        2.068165980745107,
+        2.175499976146966,
+        2.0202080195304006,
+        2.1647920075338334
+      ],
+      "before_median_ms": 4.475291993003339,
+      "after_median_ms": 2.152458007913083,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 3.4665327072143555,
+        "peak_mib": 3.7688894271850586,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 2.685546875,
+          "key_mib": 0.732421875,
+          "total_mib": 3.41796875
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.0773162841796875,
+        "peak_mib": 0.35677242279052734,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0383148193359375,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.061248779296875
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        4.520625021541491,
+        4.356208024546504,
+        4.4890410208608955,
+        4.3365840101614594,
+        4.415875009726733,
+        4.39895800082013,
+        4.49879199732095
+      ],
+      "after_ms": [
+        2.2314590169116855,
+        2.0795419986825436,
+        2.230624988442287,
+        2.118667005561292,
+        2.1740829979535192,
+        2.066666027531028,
+        2.1941250015515834
+      ],
+      "before_median_ms": 4.415875009726733,
+      "after_median_ms": 2.1740829979535192,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 3.4666576385498047,
+        "peak_mib": 3.777578353881836,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 2.685546875,
+          "key_mib": 0.732421875,
+          "total_mib": 3.41796875
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.077301025390625,
+        "peak_mib": 0.36532115936279297,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0383148193359375,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.061248779296875
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        33.9864160050638,
+        34.514166007284075,
+        34.90904200589284,
+        34.2937080131378,
+        34.34770798776299,
+        33.972083998378366,
+        34.47479201713577
+      ],
+      "after_ms": [
+        17.005000001518056,
+        16.98404099442996,
+        17.08391698775813,
+        16.620875016087666,
+        16.87183399917558,
+        16.87925000442192,
+        17.0247080095578
+      ],
+      "before_median_ms": 34.34770798776299,
+      "after_median_ms": 16.98404099442996,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 34.29733657836914,
+        "peak_mib": 36.80084228515625,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 26.85546875,
+          "key_mib": 7.32421875,
+          "total_mib": 34.1796875
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6953439712524414,
+        "peak_mib": 2.9699554443359375,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3816375732421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.610565185546875
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        33.846542006358504,
+        34.05750001547858,
+        34.3494999979157,
+        34.1089169960469,
+        34.52383299008943,
+        34.38341699074954,
+        34.512875019572675
+      ],
+      "after_ms": [
+        17.297875019721687,
+        16.677166015142575,
+        19.516708998708054,
+        16.884124983334914,
+        17.245666997041553,
+        16.650083009153605,
+        17.118000017944723
+      ],
+      "before_median_ms": 34.3494999979157,
+      "after_median_ms": 17.118000017944723,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 34.297040939331055,
+        "peak_mib": 36.87894248962402,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 26.85546875,
+          "key_mib": 7.32421875,
+          "total_mib": 34.1796875
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6946744918823242,
+        "peak_mib": 3.047736167907715,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3816375732421875,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.610565185546875
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        324.9210419890005,
+        328.6008330178447,
+        325.77220801613294,
+        324.6676249837037,
+        329.5582499995362,
+        324.9605420278385,
+        349.8833749908954
+      ],
+      "after_ms": [
+        162.63833301491104,
+        159.6611659915652,
+        163.12925002421252,
+        159.86470898496918,
+        164.06687497510575,
+        160.9227079898119,
+        162.27266599889845
+      ],
+      "before_median_ms": 325.77220801613294,
+      "after_median_ms": 162.27266599889845,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 342.6009826660156,
+        "peak_mib": 366.4764232635498,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 268.5546875,
+          "key_mib": 73.2421875,
+          "total_mib": 341.796875
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.873845100402832,
+        "peak_mib": 28.46036148071289,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8148651123046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.103729248046875
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "ia_scaled_bs3x1_m9_n1000",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        331.7078340041917,
+        327.3094170144759,
+        328.8563329842873,
+        328.31837501726113,
+        330.8050000050571,
+        325.8397080062423,
+        328.7705830007326
+      ],
+      "after_ms": [
+        164.54670898383483,
+        160.98924999823794,
+        164.07833399716765,
+        160.89537501102313,
+        164.16454099817201,
+        161.37758301920258,
+        165.32087497762404
+      ],
+      "before_median_ms": 328.7705830007326,
+      "after_median_ms": 164.07833399716765,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 342.6015281677246,
+        "peak_mib": 367.24191665649414,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 268.5546875,
+          "key_mib": 73.2421875,
+          "total_mib": 341.796875
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.875138282775879,
+        "peak_mib": 29.226703643798828,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8148651123046875,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.103729248046875
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.2118339946027845,
+        1.1794999882113189,
+        1.2334579951129854,
+        1.2592079874593765,
+        1.2162910134065896,
+        1.1766660027205944,
+        1.238957978785038
+      ],
+      "after_ms": [
+        0.6382089923135936,
+        0.5767910042777658,
+        0.6144170183688402,
+        0.5487500166054815,
+        0.6152919959276915,
+        0.5729999975301325,
+        0.6124170031398535
+      ],
+      "before_median_ms": 1.2162910134065896,
+      "after_median_ms": 0.6124170031398535,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.2365255355834961,
+        "peak_mib": 0.2619457244873047,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.1220703125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.1953125
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.015574455261230469,
+        "peak_mib": 0.03856468200683594,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0038909912109375,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0062255859375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.2172080168966204,
+        1.2870409991592169,
+        1.2536249996628612,
+        1.2357920059002936,
+        1.280208001844585,
+        1.2032499944325536,
+        1.2472079833969474
+      ],
+      "after_ms": [
+        0.636707991361618,
+        0.5581669975072145,
+        0.620083010289818,
+        0.5557080148719251,
+        0.6766669976059347,
+        0.6247500132303685,
+        0.6477910210378468
+      ],
+      "before_median_ms": 1.2472079833969474,
+      "after_median_ms": 0.6247500132303685,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 0.23787307739257812,
+        "peak_mib": 0.26599884033203125,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.1220703125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.1953125
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.015520095825195312,
+        "peak_mib": 0.04136371612548828,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0038909912109375,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0062255859375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        2.6776670129038393,
+        2.8079999901819974,
+        2.6739159948192537,
+        2.6245840126648545,
+        2.6290419918950647,
+        2.5813330139499158,
+        2.687083004275337
+      ],
+      "after_ms": [
+        1.6026669763959944,
+        1.5037080156616867,
+        1.690667006187141,
+        1.6043750219978392,
+        1.6600419767200947,
+        1.5059580036904663,
+        1.6054170264396816
+      ],
+      "before_median_ms": 2.6739159948192537,
+      "after_median_ms": 1.6043750219978392,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 2.001204490661621,
+        "peak_mib": 2.219784736633301,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 1.220703125,
+          "key_mib": 0.732421875,
+          "total_mib": 1.953125
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.07737255096435547,
+        "peak_mib": 0.27294349670410156,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0382232666015625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0611572265625
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        2.662167011294514,
+        2.7953330136369914,
+        2.722582983551547,
+        2.6392090076114982,
+        2.6795830053742975,
+        2.562249981565401,
+        2.6513750199228525
+      ],
+      "after_ms": [
+        1.6625830030534416,
+        1.528542023152113,
+        1.6791250091046095,
+        1.6188749868888408,
+        1.6182910185307264,
+        1.494458003435284,
+        1.616791996639222
+      ],
+      "before_median_ms": 2.662167011294514,
+      "after_median_ms": 1.6182910185307264,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 2.002552032470703,
+        "peak_mib": 2.2307777404785156,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 1.220703125,
+          "key_mib": 0.732421875,
+          "total_mib": 1.953125
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.07614994049072266,
+        "peak_mib": 0.2814674377441406,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0382232666015625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0611572265625
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        16.364999988581985,
+        16.291959007503465,
+        16.49824998457916,
+        15.984209021553397,
+        16.85704101691954,
+        16.06733401422389,
+        16.433874989161268
+      ],
+      "after_ms": [
+        11.075291986344382,
+        10.703708016080782,
+        11.165417003212497,
+        10.887834010645747,
+        11.449499987065792,
+        11.081667005782947,
+        11.26920900424011
+      ],
+      "before_median_ms": 16.364999988581985,
+      "after_median_ms": 11.081667005782947,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 19.648274421691895,
+        "peak_mib": 21.64431858062744,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 12.20703125,
+          "key_mib": 7.32421875,
+          "total_mib": 19.53125
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6953067779541016,
+        "peak_mib": 2.435898780822754,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3815460205078125,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.6104736328125
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        16.088875010609627,
+        15.941374993417412,
+        16.61208301084116,
+        16.207499982556328,
+        16.49962499504909,
+        16.110875003505498,
+        16.562750010052696
+      ],
+      "after_ms": [
+        11.178583023138344,
+        10.954958008369431,
+        11.219375010114163,
+        10.732666996773332,
+        11.28679100656882,
+        10.933000012300909,
+        11.177875014254823
+      ],
+      "before_median_ms": 16.207499982556328,
+      "after_median_ms": 11.177875014254823,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 19.650696754455566,
+        "peak_mib": 21.725144386291504,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 12.20703125,
+          "key_mib": 7.32421875,
+          "total_mib": 19.53125
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6953458786010742,
+        "peak_mib": 2.5143489837646484,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3815460205078125,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.6104736328125
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        153.1148329959251,
+        151.43495798110962,
+        154.5305420004297,
+        155.33120799227618,
+        155.4684579896275,
+        150.74891701806337,
+        156.54162500868551
+      ],
+      "after_ms": [
+        108.99033298483118,
+        105.58974999003112,
+        109.99724999419414,
+        106.2931249907706,
+        108.87270799139515,
+        105.52187499706633,
+        108.32833297899924
+      ],
+      "before_median_ms": 154.5305420004297,
+      "after_median_ms": 108.32833297899924,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 196.11602973937988,
+        "peak_mib": 214.65090084075928,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 122.0703125,
+          "key_mib": 73.2421875,
+          "total_mib": 195.3125
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.8751630783081055,
+        "peak_mib": 23.12114143371582,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8147735595703125,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.1036376953125
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        150.62558397767134,
+        152.2006669838447,
+        153.99741698638536,
+        151.54558399808593,
+        153.6154589848593,
+        151.67074999772012,
+        154.40374999889173
+      ],
+      "after_ms": [
+        108.03320800187066,
+        107.20858300919645,
+        107.84929199144244,
+        105.97158301970921,
+        108.05558299762197,
+        105.4535000002943,
+        107.76554100448266
+      ],
+      "before_median_ms": 152.2006669838447,
+      "after_median_ms": 107.76554100448266,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 196.11564826965332,
+        "peak_mib": 215.4155216217041,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 122.0703125,
+          "key_mib": 73.2421875,
+          "total_mib": 195.3125
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.874921798706055,
+        "peak_mib": 23.886003494262695,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8147735595703125,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.1036376953125
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "quantile",
+      "m": 100,
+      "before_ms": [
+        1.2301669921725988,
+        1.2517499853856862,
+        1.2742910184897482,
+        1.195124990772456,
+        1.2481249868869781,
+        1.1822920059785247,
+        1.246917003300041
+      ],
+      "after_ms": [
+        0.690584012772888,
+        0.6695830088574439,
+        0.6334999925456941,
+        0.5500410043168813,
+        0.6195839960128069,
+        0.5575839895755053,
+        0.6236670014914125
+      ],
+      "before_median_ms": 1.246917003300041,
+      "after_median_ms": 0.6236670014914125,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 0.23891639709472656,
+        "peak_mib": 0.2642040252685547,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.1220703125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.1953125
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.014507293701171875,
+        "peak_mib": 0.0375518798828125,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0038909912109375,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0062255859375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "simulate",
+      "m": 100,
+      "before_ms": [
+        1.2035410036332905,
+        1.2102089822292328,
+        1.2417079997248948,
+        1.1904999846592546,
+        1.2583330099005252,
+        1.1807080009020865,
+        1.2460830039344728
+      ],
+      "after_ms": [
+        0.6447919877246022,
+        0.5538339901249856,
+        0.6337090162560344,
+        0.5599160213023424,
+        0.6381249986588955,
+        0.5615830013994128,
+        0.6259999936446548
+      ],
+      "before_median_ms": 1.2102089822292328,
+      "after_median_ms": 0.6259999936446548,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 0.23735904693603516,
+        "peak_mib": 0.2654848098754883,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 0.1220703125,
+          "key_mib": 0.0732421875,
+          "total_mib": 0.1953125
+        },
+        "output_mib": 0.000762939453125
+      },
+      "after": {
+        "retained_mib": 0.015192985534667969,
+        "peak_mib": 0.041083335876464844,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0038909912109375,
+          "key_mib": 0.0023345947265625,
+          "total_mib": 0.0062255859375
+        },
+        "output_mib": 0.000762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "quantile",
+      "m": 1000,
+      "before_ms": [
+        2.6064170233439654,
+        2.6146669988520443,
+        2.7531659870874137,
+        2.6291249960195273,
+        2.7133749972563237,
+        2.514041989343241,
+        2.6640419964678586
+      ],
+      "after_ms": [
+        1.6075000166893005,
+        1.4887919824104756,
+        1.66245800210163,
+        1.5326249995268881,
+        1.5772919869050384,
+        1.5107920044101775,
+        1.6273749934043735
+      ],
+      "before_median_ms": 2.6291249960195273,
+      "after_median_ms": 1.5772919869050384,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 2.0027074813842773,
+        "peak_mib": 2.2212018966674805,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 1.220703125,
+          "key_mib": 0.732421875,
+          "total_mib": 1.953125
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.07738018035888672,
+        "peak_mib": 0.27295875549316406,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0382232666015625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0611572265625
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "simulate",
+      "m": 1000,
+      "before_ms": [
+        2.59220800944604,
+        2.61875000433065,
+        2.6945830031763762,
+        2.6357909955549985,
+        2.7253750013187528,
+        2.610458992421627,
+        2.7032909856643528
+      ],
+      "after_ms": [
+        1.6332909872289747,
+        1.48004200309515,
+        1.62041699513793,
+        1.5862080035731196,
+        1.6014589928090572,
+        1.5050000220071524,
+        1.6056250024121255
+      ],
+      "before_median_ms": 2.6357909955549985,
+      "after_median_ms": 1.6014589928090572,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 2.0034866333007812,
+        "peak_mib": 2.2317123413085938,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 1.220703125,
+          "key_mib": 0.732421875,
+          "total_mib": 1.953125
+        },
+        "output_mib": 0.00762939453125
+      },
+      "after": {
+        "retained_mib": 0.07675743103027344,
+        "peak_mib": 0.2821216583251953,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.0382232666015625,
+          "key_mib": 0.0229339599609375,
+          "total_mib": 0.0611572265625
+        },
+        "output_mib": 0.00762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "quantile",
+      "m": 10000,
+      "before_ms": [
+        16.06991601875052,
+        16.004584002075717,
+        16.565541009185836,
+        16.33437498821877,
+        16.789416986284778,
+        16.208125016419217,
+        16.70425001066178
+      ],
+      "after_ms": [
+        11.239249986829236,
+        10.777375020552427,
+        11.249292001593858,
+        10.91104099759832,
+        11.324249993776903,
+        10.92400000197813,
+        11.454541003331542
+      ],
+      "before_median_ms": 16.33437498821877,
+      "after_median_ms": 11.239249986829236,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 19.650197982788086,
+        "peak_mib": 21.646296501159668,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 12.20703125,
+          "key_mib": 7.32421875,
+          "total_mib": 19.53125
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.6943330764770508,
+        "peak_mib": 2.4349327087402344,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3815460205078125,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.6104736328125
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "simulate",
+      "m": 10000,
+      "before_ms": [
+        16.187375003937632,
+        16.51099999435246,
+        16.63554200786166,
+        16.514624992851168,
+        16.73658299841918,
+        16.812125017168,
+        17.116000002715737
+      ],
+      "after_ms": [
+        11.368874984327704,
+        10.816374997375533,
+        11.38995899236761,
+        10.931333003100008,
+        11.400041985325515,
+        10.874291998334229,
+        11.46454201079905
+      ],
+      "before_median_ms": 16.63554200786166,
+      "after_median_ms": 11.368874984327704,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 19.650182723999023,
+        "peak_mib": 21.724677085876465,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 12.20703125,
+          "key_mib": 7.32421875,
+          "total_mib": 19.53125
+        },
+        "output_mib": 0.0762939453125
+      },
+      "after": {
+        "retained_mib": 0.694972038269043,
+        "peak_mib": 2.514021873474121,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 0.3815460205078125,
+          "key_mib": 0.2289276123046875,
+          "total_mib": 0.6104736328125
+        },
+        "output_mib": 0.0762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "quantile",
+      "m": 100000,
+      "before_ms": [
+        158.22066701366566,
+        153.2059580204077,
+        154.9091250053607,
+        152.00229198671877,
+        155.64683297998272,
+        151.8969169992488,
+        154.82408300158568
+      ],
+      "after_ms": [
+        112.46745797689073,
+        109.36000000219792,
+        109.93299999972805,
+        106.27858299994841,
+        110.66524998750538,
+        107.14679199736565,
+        109.50024999328889
+      ],
+      "before_median_ms": 154.82408300158568,
+      "after_median_ms": 109.50024999328889,
+      "bitwise_equal": true,
+      "warnings": [],
+      "before": {
+        "retained_mib": 196.11785984039307,
+        "peak_mib": 214.6526918411255,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 122.0703125,
+          "key_mib": 73.2421875,
+          "total_mib": 195.3125
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.875170707702637,
+        "peak_mib": 23.121156692504883,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8147735595703125,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.1036376953125
+        },
+        "output_mib": 0.762939453125
+      }
+    },
+    {
+      "case": "survreg_interacting_scaled",
+      "op": "simulate",
+      "m": 100000,
+      "before_ms": [
+        151.88200000557117,
+        184.93649997981265,
+        199.83308398514055,
+        164.3176250217948,
+        165.18574999645352,
+        159.99529100372456,
+        160.14416600228287
+      ],
+      "after_ms": [
+        109.23320901929401,
+        106.50133399758488,
+        119.88408298930153,
+        110.5884580174461,
+        113.29266699613072,
+        125.59529198915698,
+        122.95570800779387
+      ],
+      "before_median_ms": 164.3176250217948,
+      "after_median_ms": 113.29266699613072,
+      "bitwise_equal": true,
+      "warnings": [
+        [
+          "UserWarning",
+          "predict(what='quantile'): F\u207b\u00b9(p) \u2212 offset (divided by exp(0.5\u00b7x_s\u00b7\u03b3) on scaled models) exceeds the per-row bracket [h(a, x_i)+\u03b5, h(b, x_i)\u2212\u03b5] at one or more points; clipping for numerical stability.  Quantiles at these points are saturated at the basis endpoints, not the true asymptotic limit. Consider widening the y-basis support or restricting probs away from 0/1."
+        ]
+      ],
+      "before": {
+        "retained_mib": 196.11639595031738,
+        "peak_mib": 215.41626930236816,
+        "cache": {
+          "raw_entries": 64,
+          "assembled_entries": 32,
+          "array_mib": 122.0703125,
+          "key_mib": 73.2421875,
+          "total_mib": 195.3125
+        },
+        "output_mib": 0.762939453125
+      },
+      "after": {
+        "retained_mib": 6.87510871887207,
+        "peak_mib": 23.886143684387207,
+        "cache": {
+          "raw_entries": 6,
+          "assembled_entries": 3,
+          "array_mib": 3.8147735595703125,
+          "key_mib": 2.2888641357421875,
+          "total_mib": 6.1036376953125
+        },
+        "output_mib": 0.762939453125
+      }
+    }
+  ]
+}

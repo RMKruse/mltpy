@@ -1,0 +1,276 @@
+{
+ "case": "ia_R_normal_3x3",
+ "family": "interaction",
+ "n": 300,
+ "env": {
+  "python": "3.12.16",
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "mltpy": "0.4.0",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu": "Apple M5 Pro",
+  "ncpu": 15,
+  "blas": {
+   "name": "accelerate",
+   "version": "unknown",
+   "detection method": "system"
+  },
+  "thread_env": {
+   "OMP_NUM_THREADS": null,
+   "VECLIB_MAXIMUM_THREADS": null,
+   "OPENBLAS_NUM_THREADS": null
+  },
+  "loadavg": [
+   2.02392578125,
+   2.2529296875,
+   2.29345703125
+  ],
+  "git_head": "b9069681742c462f448500a7b287668a2b5a0413",
+  "git_dirty": false,
+  "restart_random_state": 0,
+  "_": ""
+ },
+ "rss_before_mib": 99.328125,
+ "maxrss_after_cold_mib": 99.328125,
+ "fresh_seconds": [
+  0.013402292010141537,
+  0.012710707989754155,
+  0.012623540998902172,
+  0.012711375020444393,
+  0.012778000003891066,
+  0.012797333009075373,
+  0.01250887499190867,
+  0.012646874994970858,
+  0.01246362499659881,
+  0.012539249990368262
+ ],
+ "fresh_status": [
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  },
+  {
+   "raw_converged": true,
+   "kkt_residual_stored": 6.6348610872069e-07,
+   "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+   "n_restarts": 0,
+   "n_outer_iter": 2,
+   "n_inner_iter": 40,
+   "log_likelihood": -260.8236332612188,
+   "warnings": []
+  }
+ ],
+ "n_params": 9,
+ "refit_seconds": [
+  0.012722249986836687,
+  0.01274362500407733,
+  0.012714458018308505,
+  0.01237804102129303,
+  0.012615375017048791
+ ],
+ "refit_status_last": {
+  "raw_converged": true,
+  "kkt_residual_stored": 6.6348610872069e-07,
+  "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+  "n_restarts": 0,
+  "n_outer_iter": 2,
+  "n_inner_iter": 40,
+  "log_likelihood": -260.8236332612188,
+  "warnings": []
+ },
+ "instrumented_seconds": 0.012583499978063628,
+ "phases": {
+  "seconds": {
+   "solver_attempts": 0.002770374994724989,
+   "polish_hessian": 0.004730499989818782,
+   "polish": 0.0048675829893909395,
+   "optimize_total": 0.007808833004673943,
+   "final_hessian": 0.004709375003585592,
+   "score_matrix": 4.541702219285071e-05
+  },
+  "calls": {
+   "solver_attempts": 1,
+   "polish_hessian": 1,
+   "polish": 1,
+   "optimize_total": 1,
+   "final_hessian": 1,
+   "score_matrix": 1
+  },
+  "objective_calls_by_phase": {
+   "solver_attempts": 49,
+   "polish": 3,
+   "optimize_total": 3
+  },
+  "ll_interaction_calls_by_phase": {
+   "polish_hessian": 180,
+   "final_hessian": 180
+  },
+  "solver_attempts": [
+   {
+    "seconds": 0.002770374994724989,
+    "converged": true,
+    "kkt": 6.6348610872069e-07,
+    "fun": 260.8236332612188,
+    "outer": 2,
+    "inner": 40,
+    "message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set)."
+   }
+  ],
+  "polish": [
+   {
+    "seconds": 0.0048675829893909395,
+    "accepted": true,
+    "nll_before": 260.8236332612188,
+    "nll_after": 260.8236332612188,
+    "max_abs_dtheta": 0.0
+   }
+  ]
+ },
+ "instrumented_status": {
+  "raw_converged": true,
+  "kkt_residual_stored": 6.6348610872069e-07,
+  "solver_message": "Converged: feasible and parameter change below tolerance (KKT residual 6.63e-07 floored on an active set).",
+  "n_restarts": 0,
+  "n_outer_iter": 2,
+  "n_inner_iter": 40,
+  "log_likelihood": -260.8236332612188,
+  "warnings": []
+ },
+ "validation": {
+  "final": {
+   "nll": 260.8236332612188,
+   "grad_inf": 6.6348610872069e-07,
+   "stationarity_inf": 6.6348610872069e-07,
+   "min_slack": 2.153611160935352,
+   "n_active": 0,
+   "stationarity_inf_per_obs": 2.2116203624023002e-09
+  },
+  "pre_polish": {
+   "nll": 260.8236332612188,
+   "grad_inf": 6.6348610872069e-07,
+   "stationarity_inf": 6.6348610872069e-07,
+   "min_slack": 2.153611160935352,
+   "n_active": 0,
+   "stationarity_inf_per_obs": 2.2116203624023002e-09
+  },
+  "slsqp": {
+   "seconds": 0.0013346660125534981,
+   "success": true,
+   "ll": -260.82363326121856,
+   "ll_auglag_minus_slsqp": -2.2737367544323206e-13,
+   "max_abs_dtheta": 7.156841768107824e-07
+  },
+  "hessian_fd_vs_gradfd": {
+   "seconds_gradfd": 0.0005913329950999469,
+   "max_abs_diff": 0.0004033088973880439,
+   "rel_diff": 2.637578124988383e-05,
+   "min_eig_fd": 0.22453736406478797,
+   "cond_fd": 163.36466110233258,
+   "max_rel_se_diff": 0.000397399594533665
+  },
+  "r_reference": {
+   "max_abs_dTheta_vs_R": 8.356649684349016e-05,
+   "ll_mltpy": -260.8236332612188,
+   "ll_R": -260.823633267136,
+   "abs_dll_vs_R": 5.917229373153532e-09,
+   "test_tolerance": "Theta rtol=atol=1e-4; ll rtol=1e-6"
+  }
+ },
+ "determinism_max_abs_dtheta_vs_fresh": 0.0,
+ "memory": {
+  "traced_peak_mib": 0.1865978240966797,
+  "retained_with_caches_mib": 0.0832204818725586,
+  "retained_model_only_mib": 0.031105995178222656,
+  "score_matrix_mib": 0.020599365234375,
+  "maxrss_mib_end": 99.328125
+ },
+ "cprofile_cumulative": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    0.017    0.017 /Users/entropy/.claude/jobs/4365f609/tmp/fitbench/harness.py:300(run_op)\n        1    0.000    0.000    0.017    0.017 /Users/entropy/Git/mltpy/src/mltpy/model.py:596(fit)\n        2    0.000    0.000    0.013    0.006 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3193(hessian)\n        2    0.000    0.000    0.013    0.006 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3141(_hessian_interaction_fd)\n      360    0.000    0.000    0.013    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:3161(nll)\n      360    0.002    0.000    0.012    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2652(_ll_interaction_none)\n        1    0.000    0.000    0.011    0.011 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:653(optimize)\n        1    0.000    0.000    0.011    0.011 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1022(_optimize_interaction)\n        1    0.000    0.000    0.011    0.011 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1128(_interaction_auglag)\n        3    0.000    0.000    0.010    0.003 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_minimize.py:54(minimize)\n      414    0.000    0.000    0.009    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1550(evaluate_with_derivative)\n      828    0.006    0.000    0.007    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1384(_kron_rows)\n        3    0.000    0.000    0.007    0.002 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_optimize.py:204(_prepare_scalar_function)\n        3    0.000    0.000    0.007    0.002 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py:218(__init__)\n        1    0.000    0.000    0.007    0.007 /Users/entropy/Git/mltpy/src/mltpy/optimizer.py:1314(_ncg_polish)\n        1    0.000    0.000    0.007    0.007 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_trustregion_ncg.py:11(_minimize_trust_ncg)\n        1    0.000    0.000    0.007    0.007 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_trustregion.py:118(_minimize_trust_region)\n        3    0.000    0.000    0.006    0.002 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py:57(__init__)\n\n",
+ "cprofile_tottime": "\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n      828    0.006    0.000    0.007    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1384(_kron_rows)\n      360    0.002    0.000    0.012    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2652(_ll_interaction_none)\n      935    0.001    0.000    0.001    0.000 {method 'get' of 'dict' objects}\n       53    0.000    0.000    0.002    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:2711(_ll_and_grad_interaction_none)\n      413    0.000    0.000    0.000    0.000 /Users/entropy/Git/mltpy/src/mltpy/likelihood.py:165(logpdf)\n      885    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.12/3.12.16/Frameworks/Python.framework/Versions/3.12/lib/python3.12/typing.py:175(_type_check)\n      414    0.000    0.000    0.000    0.000 /Users/entropy/Git/mltpy/.venv/lib/python3.12/site-packages/numpy/_core/_methods.py:96(_clip)\n      635    0.000    0.000    0.000    0.000 {method 'reduce' of 'numpy.ufunc' objects}\n      828    0.000    0.000    0.001    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:329(evaluate_with_derivative)\n      414    0.000    0.000    0.009    0.000 /Users/entropy/Git/mltpy/src/mltpy/basis.py:1550(evaluate_with_derivative)\n\n"
+}

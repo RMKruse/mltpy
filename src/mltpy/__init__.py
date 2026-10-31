@@ -2,15 +2,20 @@
 
 from mltpy._auglag import AugLagOptions, AugLagResult
 from mltpy.basis import (
+    BasisLike,
+    BernsteinBasis,
     InteractionBasis,
     InterceptBasis,
     LegendreBasis,
     LogBasis,
+    LogBernsteinBasis,
     OneHotBasis,
     OrdinalBasis,
     PolynomialBasis,
+    XBasisLike,
 )
 from mltpy.likelihood import (
+    BaseDistribution,
     InfeasibleParameterError,
     hessian,
     log_likelihood,
@@ -26,7 +31,7 @@ from mltpy.model import (
     WaldTestResult,
     anova,
 )
-from mltpy.optimizer import OptimizerConfig
+from mltpy.optimizer import OptimizationResult, OptimizerConfig
 from mltpy.tram import BoxCox, Colr, Coxph, Lehmann, Lm, Polr, Survreg
 from mltpy.variables import CensoredData, CensoringType, OrderedVariable
 
@@ -53,6 +58,7 @@ __all__ = [
     "negative_log_likelihood",
     "hessian",
     "score_matrix",
+    "BaseDistribution",
     # Exceptions / warnings
     "NotFittedError",
     "ConvergenceWarning",
@@ -61,6 +67,8 @@ __all__ = [
     "CensoredData",
     "CensoringType",
     "OrderedVariable",
+    "BernsteinBasis",
+    "LogBernsteinBasis",
     "OrdinalBasis",
     "OneHotBasis",
     "PolynomialBasis",
@@ -68,8 +76,12 @@ __all__ = [
     "LogBasis",
     "InterceptBasis",
     "InteractionBasis",
+    # Basis structural contracts
+    "BasisLike",
+    "XBasisLike",
     # Config
     "OptimizerConfig",
+    "OptimizationResult",
     "AugLagOptions",
     "AugLagResult",
     "__version__",

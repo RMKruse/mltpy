@@ -1049,6 +1049,15 @@ def main() -> None:
         action="store_true",
         help="Show per-component delta details for failing cases",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path(__file__).parent / "results",
+        help=(
+            "Directory for validation_report.{md,json} (default: "
+            "validation/results, the committed full-run report)"
+        ),
+    )
     args = parser.parse_args()
 
     ref_dir = Path(__file__).parent / "references"
@@ -1078,7 +1087,7 @@ def main() -> None:
         sys.exit(2)
 
     print_report(results)
-    save_report(results, Path(__file__).parent / "results")
+    save_report(results, args.out_dir)
 
     unexpected_failures = [
         r for r in results if not r.passed and not r.expected_failure

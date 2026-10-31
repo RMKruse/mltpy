@@ -23,7 +23,6 @@ import pathlib
 import numpy as np
 import pytest
 
-from mltpy.basis import BernsteinBasis
 from mltpy.tram import Coxph
 from mltpy.variables import CensoredData
 
@@ -260,16 +259,6 @@ def test_coxph_survival_requires_X_scale(
         fitted_coxph.survival(t_grid, X=x_d_new)
 
 
-def test_coxph_scaling_with_interacting_rejected(
-    coxph_scaling_ref: dict,
-) -> None:
-    """``Coxph(scaling=..., interacting=...)`` is rejected (ADR 0002 Dec. 2)."""
-    p = coxph_scaling_ref["p"]
-    interacting = BernsteinBasis(order=2, support=(-3.0, 3.0))
-    with pytest.raises(ValueError, match="scaling=.*interacting="):
-        Coxph(
-            support=coxph_scaling_ref["support"],
-            order=p - 1,
-            scaling=coxph_scaling_ref["x_s"],
-            interacting=interacting,
-        )
+# ``Coxph(scaling=..., interacting=...)`` was rejected here until issue #106
+# lifted the guard; the combined path is covered by
+# tests/test_tram_coxph_interacting_scaling.py.
