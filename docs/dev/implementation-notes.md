@@ -164,8 +164,20 @@ at fit.
 ## `base_distribution="exponential"` support rule (ADR 0005)
 
 The rule is `h(lower | x_i) ≥ −offset_i` for every training row. ADR 0005 and its
-amendments (#113–#163) are the record; the notes below are a quick map of where
+amendments (#113–#164) are the record; the notes below are a quick map of where
 the code enforces the rule on each path.
+
+### Interval rows below the support (#164)
+
+A both-finite interval row uses R's `pexp`, `F(h) = 0` for `h ≤ 0`:
+`log P = log F(h_u)` when `h_l < 0 < h_u`, and `−inf` when `h_u ≤ 0`.
+`_log_diff_ndtr` applies the value, and `_pair_density_weights` zeroes an
+endpoint's Mills weight below `−_EXPON_SUPPORT_TOL`. Both helpers serve every
+both-finite block (likelihood, gradient, Hessian, scores, truncation), so no
+kernel changes. Within `1e-7` of the boundary the weight keeps its
+feasible-side value. Without that, SLSQP iterates sitting on an active support
+row to round-off saw the kink at `h_l = 0` and stopped early. Exact rows,
+right-censored rows and `DistOps` keep the `−h` extension.
 
 ### Shift basis, no scaling (#160)
 

@@ -32,6 +32,7 @@ from scipy.stats import chi2, norm
 
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.likelihood import (
+    _EXPON_SUPPORT_TOL,
     _H_CLIP,
     BaseDistribution,
     DistOps,
@@ -157,13 +158,13 @@ _SIMULATE_U_EPS = 1e-10
 # `what` values whose formula involves h'(y) and therefore require hp > 0.
 _HP_REQUIRING_WHAT = frozenset({"density", "logdensity", "hazard", "loghazard"})
 
-# Exponential link (ADR 0005): predict() flags rows with h(a|x) < −tol.  The
-# training support rows θ_b[0] + x_i·β ≥ 0 are only met to the solver's
-# feasibility tolerance (AugLagOptions.feas_tol = 1e-7), so a strict `< 0`
-# test fires on round-off at in-hull x when every row is active.  On the
+# Exponential link (ADR 0005): predict() flags rows with h(a|x) < −tol, with
+# tol = likelihood._EXPON_SUPPORT_TOL (shared with the interval-row weights,
+# #164).  The training support rows θ_b[0] + x_i·β ≥ 0 are only met to the
+# solver's feasibility tolerance (AugLagOptions.feas_tol = 1e-7), so a strict
+# `< 0` test fires on round-off at in-hull x when every row is active.  On the
 # unit-rate exponential scale F(a|x) = 1 − e^{−h(a|x)} ≈ h(a|x) near 0, so the
 # negative CDF mass left unflagged is below 1e-7.
-_EXPON_SUPPORT_TOL = 1e-7
 
 # Maximum number of row indices listed in the exponential-support warning.
 _MAX_WARN_ROWS = 10

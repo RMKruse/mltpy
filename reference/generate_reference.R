@@ -992,6 +992,115 @@ cat(sprintf("Exponential + shift + scaling + offset: n=%d, ll=%.10f, theta = %s\
             n_ss, ll_ss, paste(sprintf("%.8f", theta_ss), collapse = ", ")))
 
 # ---------------------------------------------------------------------------
+# exponential + shift + scaling, interval-censored, outside the support
+# (issue #164)
+#
+# Model: todistr = "Exponential", order-4 Bernstein in y on (0, 1.2), one
+# shift term x_d (mlt's positive sign) and one scaling term x_s:
+#   h(y | x_i) = a(y)'theta_b * exp(0.5 * x_s,i * gamma) + x_d,i * beta.
+# The raw coef order c(theta_b (5), sft_x_d, scl_x_s) is mltpy's
+# [theta_b | beta | gamma].  Rows are interval-censored at the common
+# inspection times 0.25, 0.5, 0.75, 1 (first interval (0, 0.25]; last one
+# open, (1, Inf)).  theta is NOT a fit: theta_b[0] < 0 puts h(y | x_i) below
+# the exponential support for some rows, so the both-finite rows fall into
+# three classes, each of which must occur:
+#   * h_l >= 0:          log P = log(pexp(h_u) - pexp(h_l));
+#   * h_l < 0 < h_u:     log P = log pexp(h_u), since pexp(h_l) = 0;
+#   * h_u <= 0:          log P = -Inf.
+# That is R's pexp semantics, F(h) = 0 for h <= 0, which mltpy adopts for
+# both-finite interval rows (ADR 0005, #164 amendment): mlt scores the row as
+# .log(pexp(h_u) - pexp(h_l)) and its score uses dexp, which is 0 below the
+# support.  The open rows (1, Inf) keep h > 0, where mltpy's log S = -h and
+# R's pexp(lower.tail = FALSE) agree.  Writes:
+#   mlt_exponential_interval_out_lower.txt   — lower interval ends
+#   mlt_exponential_interval_out_upper.txt   — upper interval ends (Inf = open)
+#   mlt_exponential_interval_out_xd.txt      — shift covariate
+#   mlt_exponential_interval_out_xs.txt      — scaling covariate
+#   mlt_exponential_interval_out_support.txt — Bernstein support c(0, 1.2)
+#   mlt_exponential_interval_out_theta.txt   — c(theta_b (5), beta, gamma)
+#   mlt_exponential_interval_out_logliki.txt — per-row loglik (-Inf allowed)
+#   mlt_exponential_interval_out_scorei.txt  — per-row score of the rows with
+#       a finite loglik, one row per line (n_finite x 7)
+# ---------------------------------------------------------------------------
+
+set.seed(164)
+n_io    <- 60L
+xd_io   <- runif(n_io, 0, 1)
+xs_io   <- rnorm(n_io)
+grid_io <- c(0.25, 0.5, 0.75, 1)
+k_io    <- sample(0:4, n_io, replace = TRUE)
+lo_io   <- c(0, grid_io)[k_io + 1L]
+up_io   <- c(grid_io, Inf)[k_io + 1L]
+sup_io  <- c(0, 1.2)
+d_io    <- data.frame(y = Surv(lo_io, up_io, type = "interval2"),
+                      x_d = xd_io, x_s = xs_io)
+
+b_io   <- Bernstein_basis(numeric_var("y", support = sup_io,
+                                      bounds = c(0, Inf)),
+                          order = 4, ui = "increasing")
+ctm_io <- ctm(b_io, shifting = ~ x_d, scaling = ~ x_s, data = d_io,
+              todistr = "Exponential")
+mlt_io <- mlt(ctm_io, data = d_io, dofit = FALSE)
+theta_io <- c(-0.8, -0.4, 0.3, 0.9, 1.6, 0.6, 0.4)
+names(theta_io) <- names(coef(ctm_io))
+stopifnot(identical(names(theta_io),
+                    c(paste0("Bs", 1:5, "(y)"), "sft_x_d", "scl_x_s")))
+
+# Classify the rows with h written out (independent of mlt's internals).
+h_io <- function(y) {
+  B <- model.matrix(b_io, data = data.frame(y = y))
+  drop(B %*% theta_io[1:5]) * exp(0.5 * xs_io * theta_io[7]) +
+    xd_io * theta_io[6]
+}
+fin_io <- is.finite(up_io)
+hl_io  <- h_io(lo_io)
+hu_io  <- h_io(ifelse(fin_io, up_io, sup_io[2]))
+cls_in    <- fin_io & hl_io >= 0
+cls_strad <- fin_io & hl_io < 0 & hu_io > 0
+cls_below <- fin_io & hu_io <= 0
+stopifnot(sum(cls_in) >= 3, sum(cls_strad) >= 3, sum(cls_below) >= 3,
+          all(hl_io[!fin_io] > 0))
+
+ll_io <- mlt_io$logliki(theta_io, weights = rep(1, n_io))
+# Hand-written pexp semantics agree with mlt's own logliki.
+ll_hand_io <- ifelse(fin_io,
+                     log(pmax(0, pexp(pmax(hu_io, 0)) - pexp(pmax(hl_io, 0)))),
+                     pexp(hl_io, lower.tail = FALSE, log.p = TRUE))
+stopifnot(isTRUE(all.equal(ll_io, ll_hand_io, tolerance = 1e-13)),
+          all(ll_io[cls_below] == -Inf),
+          all(is.finite(ll_io[!cls_below])),
+          isTRUE(all.equal(ll_io[cls_strad],
+                           pexp(hu_io[cls_strad], log.p = TRUE),
+                           tolerance = 1e-13)))
+# mlt's score floors P at eps^(1/3); keep every finite row well above it so
+# the R score is the exact derivative.
+stopifnot(min(exp(ll_io[!cls_below])) > 1e-3)
+sc_io <- mlt_io$scorei(theta_io, weights = rep(1, n_io))[!cls_below, ,
+                                                         drop = FALSE]
+stopifnot(all(is.finite(sc_io)), ncol(sc_io) == 7L)
+
+out_io <- function(x, name)
+  writeLines(format(x, digits = 15),
+             con = file.path(out_dir, paste0("mlt_exponential_interval_out_",
+                                             name, ".txt")))
+out_io(lo_io, "lower")
+out_io(up_io, "upper")
+out_io(xd_io, "xd")
+out_io(xs_io, "xs")
+out_io(sup_io, "support")
+out_io(unname(theta_io), "theta")
+out_io(ll_io, "logliki")
+writeLines(apply(sc_io, 1L, function(r) paste(format(r, digits = 15),
+                                              collapse = " ")),
+           con = file.path(out_dir, "mlt_exponential_interval_out_scorei.txt"))
+
+cat(sprintf(paste0(
+  "Exponential interval outside the support: n=%d (in %d, straddling %d, ",
+  "below %d, open %d), finite-row loglik %.10f\n"),
+  n_io, sum(cls_in), sum(cls_strad), sum(cls_below), sum(!fin_io),
+  sum(ll_io[!cls_below])))
+
+# ---------------------------------------------------------------------------
 # Lm (normal linear regression as a CTM) reference
 #
 # tram::Lm with order=1 Bernstein + normal base is equivalent to classical

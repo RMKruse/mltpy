@@ -211,8 +211,8 @@ class DistOps:
             # the support row θ_b[0] ≥ 0 is active); h < 0 lies outside the
             # support and gives NaN.  On a left-censored or (−∞, t] row the
             # NaN reaches ℓ and is raised as InfeasibleParameterError; on a
-            # both-finite interval row _log_diff_ndtr maps it to a finite
-            # value (see there).  predict() flags h(a|x) < 0 with its own
+            # both-finite interval row _log_diff_ndtr applies R's pexp value
+            # instead (#164).  predict() flags h(a|x) < 0 with its own
             # warning.  numpy's notices for both are noise (#163).
             with np.errstate(divide="ignore", invalid="ignore"):
                 return cast(NDArray[np.float64], np.log(-expm1(-h)))
@@ -390,6 +390,14 @@ def _check_finite_result(result: NDArray[np.float64], what: str) -> None:
 # Clipping range for h before distribution calls.
 _H_CLIP = 30.0
 
+# Exponential link (ADR 0005): the support rows h(a|x_i) ≥ 0 hold only to the
+# solvers' feasibility tolerance (AugLagOptions.feas_tol = 1e-7; SLSQP and
+# trust-constr end within ~1e-9 of an active row, on either side).  Points with
+# h ≥ −tol count as on the support: predict() flags only h(a|x) < −tol, and
+# _pair_density_weights gives an interval endpoint there the feasible-side
+# density f(h) = e^{−h} rather than dexp's 0 below the support (#164).
+_EXPON_SUPPORT_TOL = 1e-7
+
 # Maximum exponent that np.exp can handle without overflow.
 _LOG_FLOAT_MAX: float = float(np.log(np.finfo(np.float64).max))
 
@@ -445,9 +453,10 @@ def _log_diff_ndtr(
     Returns
     -------
     NDArray[np.float64]
-        Array of log(F(b) - F(a)) values, same shape as inputs.  A NaN
-        ``log F(a)`` (exponential, ``a < 0``) is *not* propagated: it takes
-        the narrow branch and yields a finite value (see the inline comment).
+        Array of log(F(b) - F(a)) values, same shape as inputs.  Under the
+        exponential link ``F`` is R's ``pexp``, ``F(h) = 0`` for ``h ≤ 0``:
+        ``a < 0 < b`` gives ``log F(b)`` and ``b ≤ 0`` gives ``−inf``
+        (ADR 0005, #164 amendment).
 
     Notes
     -----
@@ -478,12 +487,8 @@ def _log_diff_ndtr(
     # NaN fails the `wide` test below, so both take the narrow branch:
     # - F(b) = 0 (a = b = 0 at the support end): −inf − (−inf); the narrow
     #   branch returns the exact log P = −inf.
-    # - log F(a) NaN (a < 0, below the support): the narrow branch returns
-    #   f(mid)·(b − a) under the extension log f = −h, which is finite and
-    #   can exceed 0.  Only SLSQP / trust-constr trial points reach this; the
-    #   support row keeps accepted iterates at h ≥ 0.  Propagating the NaN
-    #   (→ InfeasibleParameterError → penalty) instead left trust-constr at
-    #   its start with converged=True (ADR 0005, #163 amendment).
+    # - log F(a) NaN (a < 0, below the support): overwritten with R's pexp
+    #   value at the end (#164).
     with np.errstate(invalid="ignore"):
         ratio = log_Fa - log_Fb
 
@@ -503,10 +508,17 @@ def _log_diff_ndtr(
 
     # Use fallback when ratio > _LOG_DIFF_NDTR_NARROW_THRESHOLD  (F(a)/F(b)
     # within 1e-6 of 1 — see constant definition for the rationale).
-    return cast(
-        NDArray[np.float64],
-        np.where(ratio < _LOG_DIFF_NDTR_NARROW_THRESHOLD, wide, narrow),
-    )
+    out = np.where(ratio < _LOG_DIFF_NDTR_NARROW_THRESHOLD, wide, narrow)
+
+    if dist.kind == "exponential":
+        # R's pexp semantics below the support, F(h) = 0 for h ≤ 0 (ADR 0005,
+        # #164 amendment): log P = log F(b) if a < 0 < b, −inf if b ≤ 0.
+        # Continuous at a = 0, where the branches above already give
+        # log F(b).  A NaN b stays NaN (log F(NaN)).
+        below = a < 0.0
+        if np.any(below):
+            out = np.where(below, np.where(b <= 0.0, -np.inf, log_Fb), out)
+    return cast(NDArray[np.float64], out)
 
 
 def _pair_density_weights(
@@ -529,12 +541,29 @@ def _pair_density_weights(
     at :data:`_LOG_FLOAT_MAX`, preserving the (large but finite) magnitude;
     the only remaining NaN source is ``-inf - -inf`` from a degenerate
     point-mass interval, where zero is the correct contribution.
+
+    Exponential: the weights use R's ``dexp``, which is 0 below the support,
+    matching the ``pexp`` value of :func:`_log_diff_ndtr` (ADR 0005, #164
+    amendment).  An endpoint with ``h < −tol`` gets weight 0, so a row with
+    ``h_l < −tol`` and ``h_u > 0`` has the score of ``log F(h_u)``.  For
+    ``h ≥ −tol`` (``tol =`` :data:`_EXPON_SUPPORT_TOL`) the weight keeps
+    ``f(h) = e^{−h}``, the derivative from the feasible side
+    (``dexp(0) = 1`` at the boundary itself).  ``log P`` has a kink at
+    ``h_l = 0``, exactly where an active support row holds a fit, and fits
+    meet that row only to the feasibility tolerance.  The band keeps the
+    gradient seen by the solvers, and the score / Hessian at a fitted θ,
+    on the feasible side.  Inside it the weight is the one-sided derivative
+    at ``h_l = 0``, not the derivative of the (flat) value.  The exact-row
+    ``logpdf`` keeps ``log f = −h`` on the whole line (#114).
     """
     with np.errstate(invalid="ignore"):
         log_w_hi = dist.logpdf(h_hi) - log_p
         log_w_lo = dist.logpdf(h_lo) - log_p
     w_hi = np.exp(np.minimum(log_w_hi, _LOG_FLOAT_MAX))
     w_lo = np.exp(np.minimum(log_w_lo, _LOG_FLOAT_MAX))
+    if dist.kind == "exponential":
+        w_hi = np.where(h_hi < -_EXPON_SUPPORT_TOL, 0.0, w_hi)
+        w_lo = np.where(h_lo < -_EXPON_SUPPORT_TOL, 0.0, w_lo)
     return (
         np.nan_to_num(w_hi, nan=0.0),
         np.nan_to_num(w_lo, nan=0.0),

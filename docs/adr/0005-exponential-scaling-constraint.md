@@ -20,7 +20,7 @@ base distribution that needs a **support constraint** on top of the Bernstein
 monotonicity rows `D θ_b ≥ 0`.
 
 Notation (shift basis; the unscaled `InteractionBasis` path is covered by the
-[#158 amendment](#amendment-2026-11-01-158--unscaled-interactionbasis-path)):
+#158 amendment below):
 
 - `[a, b]`: the Bernstein support of the response basis. Only the first
   Bernstein polynomial is non-zero at `a`, and it equals 1 there, so
@@ -281,7 +281,7 @@ feasible.
 enforce exactly `h(a|x_i) ≥ 0` with `h` as the likelihood evaluates it. At
 the time, the shift path's `nonneg_lower` rows `θ_b[0] + x_d,i · β ≥ 0` did not
 include the offset; that was left out of scope for #158 and closed by the
-[#160 amendment](#amendment-2026-11-01-160--offset-on-the-shift-path) below.
+#160 amendment below.
 
 **Rejected — the per-column variant `Θ[0, j] ≥ 0` (`q` rows).** Because
 `h(a|x) = Σ_j Θ[0, j] b_j(x)` is a convex combination of `Θ[0, :]`, these rows
@@ -522,7 +522,8 @@ NaN ratio to its narrow branch, `log f(mid) + log(u − l)` under the extension
 exponential in `γ`: `h` is clipped to `±30` and `mid` is linear in the
 violated endpoint, so the NLL still falls at most linearly in a violated
 `g_i`. Since #163 the objective also suppresses numpy's notices for this
-case. See the #163 amendment below.)*
+case. See the #163 amendment below. #164: the row now scores R's `pexp`
+value, `log F(h_u) ≤ 0` or `−inf`, see the #164 amendment.)*
 
 - **Rejected — a box on `θ_b[0]` as in #114.** With a shift block `θ_b[0]`
   may legitimately be negative (`x_d · β + offset > 0`), so `θ_b[0] ≥ 0` would
@@ -668,11 +669,10 @@ matches auglag's logLik within `2·10⁻⁹` relative.
   row. trust-constr then stayed at its start, `θ = [0, ¼, ½, ¾, 1 | γ = 0]`,
   on all three `q = 0.5` designs and reported `converged=True` 8–11 logLik
   units below the optimum. SLSQP moved by at most `1.3·10⁻⁷` in logLik.
-- **Deferred — R's `pexp` semantics, `F(h) = 0` for `h ≤ 0`.** Then
-  `log P = log F(h_u)` whenever `h_l ≤ 0`, which is continuous at the boundary
-  and rewards nothing outside it. It is a new extension, though, and needs a
-  matching gradient (zero lower-endpoint weight below the support), so it
-  needs its own decision.
+- **R's `pexp` semantics, `F(h) = 0` for `h ≤ 0`** (deferred here) is now
+  in place: `log P = log F(h_u)` whenever `h_l < 0 < h_u`, and `−inf` when
+  `h_u ≤ 0`. See the #164 amendment below. The finite, too-large
+  narrow-branch value described above is gone.
 
 `TestTypeICensoring::test_interval_inspection_grid` now requires SLSQP and
 trust-constr each to match auglag's logLik (`rtol = 1e-6`). The previous
@@ -800,6 +800,139 @@ shift + offset fit fails its first SLSQP and trust-constr attempt on the same
 data as well (iteration limit). Scaled normal, logistic and minimum-extreme-
 value fits converge first time. Silencing the overflow means touching every
 scaled likelihood kernel, so it is left to a follow-up.
+
+---
+
+## Amendment (2026-11-01, [#164](https://github.com/RMKruse/mltpy/issues/164)) — Interval Rows Below the Support: R's `pexp`
+
+**Decision.** A both-finite interval row `(l, u]` under the exponential link
+uses R's `pexp`, `F(h) = 0` for `h ≤ 0`. With `h_l = h(l|x_i)` and
+`h_u = h(u|x_i)`:
+
+    log P = log(F(h_u) − F(h_l))     h_l ≥ 0
+    log P = log F(h_u)               h_l < 0 < h_u
+    log P = −inf                     h_u ≤ 0
+
+This is mlt's own value, `.log(pexp(h_u) − pexp(h_l))`. It is continuous at
+`h_l = 0`, since `F(0) = 0`. It never exceeds `log F(h_u) ≤ 0`, so no row is
+rewarded outside the support. This replaces the #163 amendment's narrow-branch
+value.
+
+**Scope: the two shared helpers only.** `_log_diff_ndtr` (the value) and
+`_pair_density_weights` (the Mills weights) serve every both-finite block: the
+interval likelihood, gradient, Hessian, score matrix and intercept score, and
+the truncation correction. Nothing else changes.
+
+- **Rejected — `log F(h) = −inf` for `h ≤ 0` in `DistOps.logcdf`.**
+  Left-censored and `(−∞, t]` rows would go from NaN to `−inf`, but both
+  already raise `InfeasibleParameterError`, so fits gain nothing.
+  `predict(what="logdistribution" | "odds" | "logodds")` at `h < 0` would go
+  from NaN to `−inf` / `0`, while `cdf`, `logpdf` and `logsf` keep the `−h`
+  extension. That would put half of `pexp` into the public surface, and
+  `predict` already flags `h(a|x) < 0` (#157).
+- **Not changed: exact rows and right-open rows.** Exact rows keep
+  `log f = −h` on the whole line (#114). Right-censored rows and open
+  intervals `(t, ∞)` keep `log S = −h`, positive for `h < 0`. That is the
+  extension the #114 / #115 / #161 amendments bound (box, increment
+  coordinates, PHR). Mixed exact + interval data simply adds the two terms;
+  the tests check it.
+
+**Gradient.** Below the support `∂ log P / ∂h_l = 0`, and `f` is R's `dexp`.
+`_pair_density_weights` sets an endpoint's weight `f(h)/P` to 0 when
+`h < −tol`. With `P = F(h_u)` the upper weight `f(h_u)/F(h_u)` is the
+derivative of `log F(h_u)`. Every lower-endpoint term of the Hessian (`a`,
+`b`) carries a factor `w_lo`, and `c = ψ(h_u) w_hi − w_hi²` is the second
+derivative of `log F(h_u)`, so the Hessian needs no change of its own.
+
+**The kink and the support-tolerance band.** `log P` has a kink at
+`h_l = 0`. The right derivative is `−f(0)/P = −1/P` (`dexp(0) = 1`, as in R)
+and the left derivative is 0. No extension avoids it: C¹ at 0 needs
+`F'(0⁻) = 1`, so `F < 0` just below 0 and `P > F(h_u)`, which is a reward.
+On the #161 inspection grid the kink sits exactly on the active support row
+of the `(0, t_1]` rows. SLSQP meets that row only to round-off, with `θ_b[0]`
+between about `−5·10⁻¹⁰` and `+5·10⁻¹⁰`. With a zero weight for every
+`h_l < 0`, it saw `∂(−ℓ)/∂θ_b[0]` jump by `Σ_i f_i / F(h_u,i)` between
+neighbouring iterates. It then stopped early with `converged=True` on 3 of the
+9 designs: seed 0, `q = 0.8` at −234.7276 against −234.7124; seed 1, `q = 0.8`
+at −237.968 against −234.547; seed 1, `q = 0.5` 2·10⁻⁶ relative short. The
+score and Hessian at such a fit would also drop every lower endpoint.
+
+**Decision: an endpoint with `−tol ≤ h < 0` keeps the feasible-side weight
+`e^{−h}/P`.** Here `tol = _EXPON_SUPPORT_TOL = 1e-7`, the solvers' feasibility
+tolerance and the `predict` threshold of #157, now a single constant in
+`likelihood.py` that `model.py` imports. The value stays exactly `pexp`.
+Inside the band the weight is the one-sided derivative at `h_l = 0`, not the
+derivative of the (flat) value. That is the only place where value and
+gradient disagree, and it holds only at points that count as on the support.
+With the band, every solver matches auglag on all 9 designs.
+
+- **Rejected — no band.** See above.
+- **Rejected — pass `θ_b[0] ≥ 0` to SLSQP as a bound.** This covers only the
+  scale-only row. The unscaled per-row support rows and the #115 nonlinear
+  rows are also met only to round-off.
+- **Rejected — a smooth blend below 0.** It rewards the infeasible side,
+  which is what #164 removes.
+
+**What changed numerically.**
+
+- **In the support** (`h ≥ 0` at both endpoints): byte-identical by
+  construction, because both helpers touch only `h < 0` or `h < −tol`.
+- **auglag, scale-only:** byte-identical. The box keeps its inner iterates at
+  `θ_b[0] ≥ 0`. All 9 inspection-grid designs give the same θ and logLik to 17
+  significant digits. The R fixtures (exact data, or non-exponential links)
+  are untouched.
+- **SLSQP and trust-constr:** their trial points do reach `h_l < 0`, so the
+  trajectories differ. Every solver matches auglag at `rtol = 1e-6` on all 9
+  designs (`test_interval_inspection_grid`), and none stalls at its start.
+  trust-constr on seed 1, `q = 0.5` now emits scipy's `delta_grad == 0.0`
+  `UserWarning`, caused by ulp-sized steps at the optimum. The fit is
+  unaffected.
+- **The #163 evidence point** (seed 0, `q = 0.8`,
+  `θ = [θ_b[0], ½, 1, 1.5, 2 | γ = 0.3]`): at `θ_b[0] = −0.5` ℓ is now
+  −262.83, below −243.66 at `θ_b[0] = 0` (it was −194.0). At `θ_b[0] = −10⁻⁶`
+  it agrees with `θ_b[0] = 0` to `10⁻⁶` (it was −243.8).
+
+**#115 path.** auglag's nonlinear support rows do not box `θ_b[0]`, so its
+inner iterates reach `h_l < 0`. Every both-finite row now has `log P ≤ 0`
+there, so the PHR subproblem stays bounded. The
+`test_exponential_scaling_shift.py` tests (with offset) pass unchanged. Fits on
+this path are not byte-identical, because inner iterates evaluate below the
+support. On 6 simulated interval designs with an offset (the inspection grid
+plus a shift covariate), auglag's logLik moved by at most 10⁻⁹ relative and
+still matches SLSQP / trust-constr.
+
+*Finding, not changed here.* Without an offset, and with interval rows whose
+lower end is the support end `a`, every support row binds at
+`θ_b[0] = β = 0`. On 6 simulated designs auglag then ends just outside the
+rows with `converged=False`, at a logLik up to 0.4 above the trust-constr /
+SLSQP optimum. `v0.6.0` failed on the same designs: 4 of 6 ended with
+`converged=False`, and one ended 14.6 logLik units above the optimum on the
+Taylor reward. Its other two reported `converged=True` but stopped 1.5·10⁻⁶
+and 2.3·10⁻⁶ relative short, outside `rtol = 1e-6`, so none of the 6 was a
+usable fit before or after. Exact and right-censored data on the same designs converge.
+The kink of every `(0, t_1]` row coincides with its support row, and PHR's
+inner L-BFGS-B crosses it; the scale-only box does not. This is left to a
+follow-up.
+
+**Validation.** `tests/test_exponential_interval_support.py`:
+
+- **R parity** with `reference/mlt_exponential_interval_out_*`
+  (`reference/generate_reference.R`). This is an unfitted
+  `mlt(ctm(Bernstein, shifting = ~x_d, scaling = ~x_s,
+  todistr = "Exponential"))` at a θ with `θ_b[0] < 0`. It has 32 in-support,
+  10 straddling and 9 below-support interval rows, plus 9 open rows. Per row,
+  mlt's `logliki` (`−Inf` rows included) and `scorei` match at
+  `rtol = 1e-6, atol = 1e-10`; the gradient matches the sum of the score rows.
+- **Central differences:** gradient and Hessian on both sides of `h_l = 0`
+  (`θ_b[0] ∈ {−0.5, −0.3, −10⁻⁴, 10⁻⁴, 0.3}`), on the R fixture rows, on
+  mixed exact + interval data, and through the truncation correction.
+- **Tolerance band:** gradient, scores and Hessian at `θ_b[0] = ∓10⁻¹⁰` agree.
+- **Values:** the #163 evidence point matches the written-out `pexp`
+  likelihood.
+
+`TestNoSpuriousRuntimeWarnings::test_outside_support_interval_is_finite_and_quiet`
+now checks the `pexp` value. It also checks that ℓ is below its value at the
+feasible `θ_b[0] = 0`.
 
 ---
 

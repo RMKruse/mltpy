@@ -1807,9 +1807,12 @@ def _increment_auglag(
 
     def obj_d(d: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
         # PHR inner trial points may leave the support (h(c|x_i) < 0 on a
-        # left-/interval-censored row makes log F NaN).  The likelihood turns
+        # left-censored or (−∞, c] row makes log F NaN).  The likelihood turns
         # that NaN into InfeasibleParameterError and ``obj`` into the
         # infeasibility penalty, so numpy's "invalid value" notice is noise.
+        # A both-finite interval row scores R's pexp value instead, log F(h_u)
+        # or −inf, which is at most 0 and so keeps the subproblem bounded
+        # (ADR 0005, #164 amendment).
         with np.errstate(invalid="ignore"):
             f, grad = obj(T_inv @ d)
         return float(f), np.asarray(T_inv.T @ np.asarray(grad), dtype=np.float64)

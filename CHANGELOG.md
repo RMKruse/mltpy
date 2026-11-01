@@ -126,6 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `base_distribution="exponential"`: a both-finite interval row whose lower
+  endpoint lies below the support (`h(l|x) < 0`) now scores R's `pexp` value.
+  It is `log F(h(u|x))`, or `−inf` once `h(u|x) ≤ 0`, matching mlt's
+  `logliki` / `scorei`. Before, it got a finite value that was too large and
+  could exceed 0: on the #163 design ℓ was −194.0 at an infeasible SLSQP trial
+  point, against −243.7 at the nearby feasible one. The value is continuous at
+  the support boundary. The lower-endpoint score weight is 0 below the
+  support. Within the 1e-7 support tolerance it keeps its feasible-side value,
+  so solvers that meet the support row only to round-off still see a
+  consistent gradient. Fits that never evaluate below the support, including
+  every scale-only auglag fit and every R fixture, are byte-identical.
+  (ADR 0005, #164 amendment) (#164)
 - Censored fits with `base_distribution="exponential"` and `scaling=` no
   longer emit spurious numpy `RuntimeWarning`s. Before the fix, every
   interval-censored fit warned on all three solvers, including when the NLL

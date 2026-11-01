@@ -1058,20 +1058,43 @@ class TestNoSpuriousRuntimeWarnings:
 
     @pytest.mark.parametrize("gradient", [False, True])
     def test_outside_support_interval_is_finite_and_quiet(self, gradient: bool) -> None:
-        """An out-of-support both-finite interval row gives a finite ℓ, quietly.
+        """An out-of-support both-finite interval row scores R's ``pexp``.
 
-        ``h(0|x_i) < 0`` makes ``log F(h_lo)`` NaN on the rows ``(0, t]``.
-        ``_log_diff_ndtr`` routes the NaN ratio to its narrow Taylor branch,
-        so ℓ is finite (and too large) here rather than raising.  That is
-        deliberate (ADR 0005, #163 amendment): only SLSQP / trust-constr trial
-        points get here, the support row keeps every accepted iterate at
-        ``h ≥ 0``, and raising instead left trust-constr at its start.
+        ``h(0|x_i) < 0`` on the rows ``(0, t]``, where ``F(h) = 0`` for
+        ``h ≤ 0`` gives ``log P = log F(h(t|x_i))`` (ADR 0005, #164
+        amendment).  ℓ stays finite, so SLSQP / trust-constr trial points are
+        not turned into the penalty (which left trust-constr at its start,
+        #163), and no row is rewarded: ℓ is below its value at the nearby
+        feasible ``θ_b[0] = 0``.  Before #164 the narrow Taylor branch gave
+        −194.0 here, against −243.7 at ``θ_b[0] = 0``.
         """
         out = _nll_erroring_on_runtime_warnings(
             _THETA_OUTSIDE_SUPPORT, CensoringType.INTERVAL, gradient=gradient
         )
         nll = out[0] if isinstance(out, tuple) else out
-        assert np.isfinite(nll)
+        if gradient:
+            assert isinstance(out, tuple)
+            assert np.all(np.isfinite(out[1]))
+
+        cd, x_s, support = _censored_design(CensoringType.INTERVAL)
+        basis = BernsteinBasis(order=_ORDER, support=support)
+        theta_b, gamma = _THETA_OUTSIDE_SUPPORT[:_P], _THETA_OUTSIDE_SUPPORT[_P]
+        f = np.exp(0.5 * x_s[:, 0] * gamma)
+        both = np.isfinite(cd.upper)
+        h_lo = basis.evaluate(cd.lower) @ theta_b * f
+        h_hi = basis.evaluate(np.where(both, cd.upper, support[1])) @ theta_b * f
+        assert np.any(h_lo < 0.0) and np.all(h_hi[both] > 0.0)
+        log_p = np.where(
+            both,
+            np.log(np.exp(-np.maximum(h_lo, 0.0)) - np.exp(-np.maximum(h_hi, 0.0))),
+            -h_lo,  # open rows (t_4, ∞): log S = −h
+        )
+        np.testing.assert_allclose(-nll, log_p.sum(), rtol=1e-12)
+        nll_feasible = _nll_erroring_on_runtime_warnings(
+            _THETA_ACTIVE_SUPPORT, CensoringType.INTERVAL, gradient=False
+        )
+        assert isinstance(nll_feasible, float)
+        assert nll > nll_feasible
 
     @pytest.mark.parametrize(
         ("a", "b", "expected"),
