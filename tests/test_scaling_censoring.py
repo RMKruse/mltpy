@@ -27,7 +27,8 @@ import pytest
 
 from mltpy import MLT
 from mltpy.basis import BernsteinBasis
-from mltpy.likelihood import negative_log_likelihood
+from mltpy.likelihood import _H_CLIP, log_likelihood, negative_log_likelihood
+from mltpy.optimizer import OptimizerConfig
 from mltpy.variables import CensoredData, CensoringType
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
@@ -312,3 +313,161 @@ def test_boxcox_interval_scaled_matches_R(boxcox_interval_ref: dict) -> None:
         rtol=1e-6,
         atol=1e-7,
     )
+
+
+# ---------------------------------------------------------------------------
+# Fixed-time right censoring, ctm(shifting = ~x_d, scaling = ~x_s) — #162
+#
+# The design is issue #162's repro: every response above the 80 % quantile c
+# is censored at c.  ``<dist>`` fixtures are R's fit of the correctly
+# specified data, Surv(y, event).  ``flipped_<dist>`` fixtures are R's fit
+# with the event flag flipped, which is what the issue's repro fitted: it
+# passed ``event`` as the *censored* argument of
+# :meth:`CensoredData.right_censored`.  That leaves 30 exact rows tied at
+# y = c and an unbounded likelihood; R stops at a positive logLik with
+# convergence 0, and its θ puts the censored rows' h far beyond ±_H_CLIP.
+# ctm's shifting term enters as + x_d·β, so β is sign-aligned (no flip).
+# ---------------------------------------------------------------------------
+
+_FIXED_TIME_FITS = ("normal", "logistic", "flipped_normal", "flipped_logistic")
+
+
+@pytest.fixture(scope="module")
+def fixed_time_ref() -> dict:
+    inputs = ("y", "event", "x_d", "x_s", "support")
+    outputs = tuple(f"{s}_{k}" for s in _FIXED_TIME_FITS for k in ("theta", "loglik"))
+    _maybe_skip([f"scaling_fixed_time_{stem}.txt" for stem in inputs + outputs])
+    support = _load("scaling_fixed_time_support.txt")
+    return {
+        "y": _load("scaling_fixed_time_y.txt"),
+        "event": _load("scaling_fixed_time_event.txt").astype(bool),
+        "x_d": _load("scaling_fixed_time_x_d.txt").reshape(-1, 1),
+        "x_s": _load("scaling_fixed_time_x_s.txt").reshape(-1, 1),
+        "support": (float(support[0]), float(support[1])),
+        "theta": {
+            s: _load(f"scaling_fixed_time_{s}_theta.txt") for s in _FIXED_TIME_FITS
+        },
+        "loglik": {
+            s: float(_load(f"scaling_fixed_time_{s}_loglik.txt"))
+            for s in _FIXED_TIME_FITS
+        },
+    }
+
+
+def _fixed_time_censored(ref: dict, fit: str) -> np.ndarray:
+    """Per-row *censored* flag for fixture ``fit`` (the flipped fits use event)."""
+    return ref["event"] if fit.startswith("flipped_") else ~ref["event"]
+
+
+def _fixed_time_h(ref: dict, theta: np.ndarray) -> np.ndarray:
+    """Unclipped h(y_i | x_i) = h_0(y_i)·exp(0.5·x_s,i·γ) + x_d,i·β."""
+    basis = BernsteinBasis(order=4, support=ref["support"])
+    f = np.exp(0.5 * ref["x_s"][:, 0] * theta[6])
+    return (basis.evaluate(ref["y"]) @ theta[:5]) * f + ref["x_d"][:, 0] * theta[5]
+
+
+@pytest.mark.parametrize("solver", ["auglag", "trust-constr"])
+@pytest.mark.parametrize("dist", ["normal", "logistic"])
+def test_fixed_time_right_scaled_fit_matches_R(
+    fixed_time_ref: dict, dist: str, solver: str
+) -> None:
+    """The issue #162 design, correctly specified, fits R's optimum.
+
+    The fitted h stays well inside ±_H_CLIP, so the clip plays no part.
+    """
+    ref = fixed_time_ref
+    cd = CensoredData.right_censored(ref["y"], _fixed_time_censored(ref, dist))
+    model = MLT(
+        order=4,
+        support=ref["support"],
+        censoring=CensoringType.RIGHT,
+        base_distribution=dist,
+        scaling=ref["x_s"],
+        optimizer_config=OptimizerConfig(solver=solver),
+    )
+    model.fit(cd, X=ref["x_d"])
+
+    assert model.result_.converged
+    np.testing.assert_allclose(
+        model.result_.log_likelihood, ref["loglik"][dist], rtol=1e-6, atol=1e-10
+    )
+    np.testing.assert_allclose(model.theta_, ref["theta"][dist], rtol=1e-4, atol=1e-4)
+    assert np.abs(_fixed_time_h(ref, model.theta_)).max() < _H_CLIP / 5
+
+
+@pytest.mark.parametrize("fit", _FIXED_TIME_FITS)
+def test_fixed_time_loglik_at_R_theta_matches_R(fixed_time_ref: dict, fit: str) -> None:
+    """mltpy's ℓ at R's θ equals R's logLik, which R computes without a clip.
+
+    On the flipped fits the censored rows' h lies far beyond ±_H_CLIP, so this
+    checks that the clip does not change ℓ there; the exact rows stay inside.
+    """
+    ref = fixed_time_ref
+    theta = ref["theta"][fit]
+    censored = _fixed_time_censored(ref, fit)
+    ll = log_likelihood(
+        theta,
+        BernsteinBasis(order=4, support=ref["support"]),
+        CensoredData.right_censored(ref["y"], censored),
+        X=ref["x_d"],
+        censoring=CensoringType.RIGHT,
+        base_distribution=fit.removeprefix("flipped_"),  # type: ignore[arg-type]
+        scaling=ref["x_s"],
+    )
+    np.testing.assert_allclose(ll, ref["loglik"][fit], rtol=1e-6, atol=1e-10)
+
+    h = _fixed_time_h(ref, theta)
+    assert np.abs(h[~censored]).max() < _H_CLIP
+    if fit.startswith("flipped_"):
+        assert np.abs(h[censored]).max() > _H_CLIP
+
+
+@pytest.mark.parametrize("fit", ["flipped_normal", "flipped_logistic"])
+def test_fixed_time_gradient_matches_fd_beyond_clip(
+    fixed_time_ref: dict, fit: str
+) -> None:
+    """∂(−ℓ)/∂θ is the gradient of the evaluated ℓ where censored h is clipped.
+
+    Central differences with a step of 1e-8 relative to |θ_j|.  R's flipped
+    θ has scaling factors f up to e^10, so ∂h/∂θ_b ≈ B·f on the tied exact
+    rows is ~1e4 and the third derivative of ℓ is large: on the logistic fit
+    a 1e-7 step leaves a 7e-3 relative truncation error in ∂/∂θ_b[4], which
+    shrinks towards the analytical value as the step falls (1e-8: 5e-5).
+    """
+    ref = fixed_time_ref
+    theta = ref["theta"][fit].copy()
+    basis = BernsteinBasis(order=4, support=ref["support"])
+    cd = CensoredData.right_censored(ref["y"], _fixed_time_censored(ref, fit))
+    dist = fit.removeprefix("flipped_")
+
+    def nll(t: np.ndarray) -> float:
+        return float(
+            negative_log_likelihood(
+                t,
+                basis,
+                cd,
+                X=ref["x_d"],
+                censoring=CensoringType.RIGHT,
+                base_distribution=dist,  # type: ignore[arg-type]
+                scaling=ref["x_s"],
+            )
+        )
+
+    _, grad = negative_log_likelihood(
+        theta,
+        basis,
+        cd,
+        X=ref["x_d"],
+        censoring=CensoringType.RIGHT,
+        gradient=True,
+        base_distribution=dist,  # type: ignore[arg-type]
+        scaling=ref["x_s"],
+    )
+    grad_fd = np.empty_like(theta)
+    for j in range(theta.size):
+        step = 1e-8 * max(1.0, abs(theta[j]))
+        tp, tm = theta.copy(), theta.copy()
+        tp[j] += step
+        tm[j] -= step
+        grad_fd[j] = (nll(tp) - nll(tm)) / (2.0 * step)
+    np.testing.assert_allclose(grad, grad_fd, rtol=1e-4, atol=1e-5)

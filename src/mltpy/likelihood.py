@@ -76,7 +76,11 @@ INTERVAL (interval-censored [l_i, u_i]):
 
 Numerical stability
 -------------------
-- All h values are clipped to [-30, 30] before distribution calls.
+- All h values are clipped to [-30, 30] before distribution calls.  R ``mlt``
+  does not clip.  The clip leaves ℓ unchanged where a term is flat past ±30
+  (``log S(h)`` for h < −30, ``log F(h)`` for h > 30).  For an exact row past
+  ±30, or a censored row on the falling side, the value is frozen while
+  ``log h'`` and the score are not (ADR 0005, #162 amendment).
 - log CDF for normal is computed via scipy.special.log_ndtr, not log(cdf(...)).
 - log(1 − F) is computed via dist.logsf, not log(1 − cdf(...)).
 - log(F(b) − F(a)) uses a logsumexp trick with a Taylor fallback for

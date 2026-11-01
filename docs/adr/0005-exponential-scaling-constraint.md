@@ -605,7 +605,9 @@ folded into `mu_ineq`, as on the #115 path.
   paths would give up byte-identical R-parity fits for no gain. The large
   positive logLik that shift + scale normal/logistic fits reach on the #161
   design is a separate clipping artefact (`h` clipped at `±30`, `log h'` not),
-  tracked in [#162](https://github.com/RMKruse/mltpy/issues/162).
+  tracked in [#162](https://github.com/RMKruse/mltpy/issues/162). *(#162: not
+  a clipping artefact; the clip leaves ℓ unchanged there, see the #162
+  amendment.)*
 
 **What changed numerically.** Only scale-only, zero-offset exponential auglag
 fits. On the exact-data R fixture `mlt_exponential_scaling_*` the fit moves
@@ -627,8 +629,9 @@ increment coordinates and is byte-identical.
   is checked for convergence, feasibility and logLik not above the scipy
   optimum, but not for parity: its optimum sits in the `±30` clip regime of
   #162 (`θ_b[4] ≈ 5·10³`), where the three solvers agree only on the clipped
-  objective. 14 of these 16 tests fail on `v0.6.0`; the left mirror passes
-  for seeds 0 and 1.
+  objective. *(#162: the clipped objective equals the likelihood at that
+  optimum, see the #162 amendment.)* 14 of these 16 tests fail on `v0.6.0`;
+  the left mirror passes for seeds 0 and 1.
 - `TestTypeICensoring` covers administrative censoring at a common time
   (right, left), a fixed inspection grid with an open last interval
   (interval), and right censoring on the fixture data, all under the same
@@ -673,6 +676,53 @@ matches auglag's logLik within `2·10⁻⁹` relative.
 trust-constr each to match auglag's logLik (`rtol = 1e-6`). The previous
 check, "auglag matches the best converged reference", let the trust-constr
 stall through.
+
+## Amendment (2026-11-01, [#162](https://github.com/RMKruse/mltpy/issues/162)) — The `±30` Clip Did Not Cause the Positive logLiks
+
+The #161 amendment attributes two observations to the clip of `h` at
+`±_H_CLIP = 30`: the large positive logLik of shift + scale normal / logistic
+fits on the #161 design, and the left-censored mirror's optimum at
+`θ_b[4] ≈ 5·10³`. Both attributions are wrong. In each case the clip leaves ℓ
+unchanged, and the cause is a tie of every exact observation at one value.
+No code changes; the clip semantics stand.
+
+**Normal / logistic.** The #162 repro passed the event indicator as the
+`censored` argument of `CensoredData.right_censored`. The model it fitted
+has 120 right-censored rows below `c` and 30 exact rows tied at `y = c`.
+That likelihood is unbounded: with `h_0(c) ≈ 0` and `h_0'(c) = K`, the exact
+rows gain `30·log K` while the censored rows' `h → −∞` costs nothing
+(`log S → 0`). R `mlt` 1.8.4, which does not clip `h`, fits the same flipped
+data to logLik `+73.7` (normal) and `+118.5` (logistic) with
+`convergence = 0`. At R's θ, censored rows pass the clip (one row at
+`|h| = 50` for normal, 40 rows up to `2.5·10⁵` for logistic), and mltpy's
+clipped ℓ still equals R's unclipped logLik to `3·10⁻¹⁴` relative. Those
+rows sit at `h < −30`, where `log S(h)` is flat, and no exact row comes near
+the clip (`max |h| < 1.2`). The issue's "true
+logLik `−2.9·10²⁰`" scored θ against the un-flipped flag. Correctly
+specified, the design fits R (`−63.4154` normal, `−65.8135` logistic) on
+every solver, with `max |h| < 3.5`.
+
+**Exponential left mirror.** `left_censored(np.maximum(y, c), y >= c)` also
+ties all 75 exact rows at `c`. At the optimum, the clipped and unclipped ℓ
+agree to every printed digit, the exact rows' `h` stays below `1.2`, and only
+left-censored rows exceed `+30`, where `log F(h) ≈ 0`. This optimum is
+finite: `h ≥ 0` (Decision 1) keeps every `θ_b[k] ≥ 0`, which bounds
+`h_0'(c) / h_0(c)`, and all three solvers agree.
+
+**What the clip can still do.** The value and the gradient disagree past the
+clip in two cases: an exact row with `|h| > 30`, where the value is frozen
+but `log h'` and the score are not; and a censored row on the falling side of
+its log-probability, i.e. `log S(h)` with `h > 30` or `log F(h)` with
+`h < −30`. Neither occurs at any point examined for #162 (the eight fixed-time
+fits and R θs above, and the three left-mirror seeds on all three solvers).
+Changing the clip needs its own decision.
+
+**Validation.** `tests/test_scaling_censoring.py`, fixtures
+`reference/scaling_fixed_time_*`: R parity of the correctly specified fits
+(normal and logistic, auglag and trust-constr); ℓ at R's θ against R's logLik
+on all four fits, flipped ones included, with the flipped θ asserted to
+put censored `|h|` above 30; and the analytical gradient against central
+differences at the flipped θ.
 
 ---
 

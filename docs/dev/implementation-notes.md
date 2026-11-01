@@ -132,6 +132,13 @@ it.
   `docs/examples/07_stratified_heteroskedastic.ipynb` (with `InteractionBasis`:
   LR test on γ, `Theta_` / `gamma_`, prediction with `X_scale_new`, R `stram`
   parity).
+- **Positive logLik on censored scaled fits (#162):** check the data first.
+  `CensoredData.right_censored(y, censored)` and `left_censored` take a
+  *censored* flag, the opposite of R `Surv(y, event)`. Passing the event
+  indicator ties every exact row at the censoring time, and the likelihood
+  becomes unbounded; R fits that data to a positive logLik too. The `±30` clip
+  on `h` was ruled out as the cause (ADR 0005, #162 amendment; fixtures
+  `reference/scaling_fixed_time_*`).
 
 ### Scaling with `InteractionBasis` (issue #103, ADR 0003)
 

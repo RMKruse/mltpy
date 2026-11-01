@@ -1818,6 +1818,66 @@ writeLines(format(ll_cxs, digits = 15),
 cat(sprintf("scaling Coxph right-censored ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
             n_cxs, length(theta_cxs), ll_cxs))
 
+# ---- scaling_fixed_time (ctm shift + scale, fixed-time RIGHT censoring) ---
+#
+# Issue #162.  The design is the issue's numpy repro, read from committed
+# inputs because it is drawn with numpy's RNG:
+#
+#   rng = np.random.default_rng(0); n = 150
+#   x_s = rng.normal(size=(n, 1))
+#   y   = rng.exponential(size=n) / (2 * np.exp(0.5 * 0.6 * x_s[:, 0]))
+#   x_d = np.random.default_rng(50).uniform(size=(n, 1))
+#   c   = np.quantile(y, 0.8); event = y <= c; y = np.minimum(y, c)
+#
+# Inputs:  scaling_fixed_time_{y,event,x_d,x_s}.txt  (event: 1 = observed)
+# Outputs: scaling_fixed_time_support.txt            — "0 1.01·max(y)"
+#          scaling_fixed_time_<dist>_{theta,loglik}.txt
+#              — the correctly specified fit, Surv(y, event)
+#          scaling_fixed_time_flipped_<dist>_{theta,loglik}.txt
+#              — the fit with the event flag flipped, Surv(y, !event).  The
+#                issue's repro passed `event` as mltpy's *censored* flag, so
+#                this is the model it actually fitted: the 30 exact rows tie
+#                at y = c and the likelihood is unbounded (h'(c) → ∞ while the
+#                censored rows' h → −∞).  R stops at a large positive logLik
+#                with convergence 0; its θ puts censored h far beyond mltpy's
+#                ±30 clip, so the logLik there checks that the clip is inert.
+# θ is coef(fit) = [θ_b (5) | β | γ]; ctm's shifting term enters as + x_d·β,
+# sign-aligned with mltpy (no flip).  <dist> ∈ {normal, logistic}.
+.fixed_time_path <- function(stem) {
+  file.path(out_dir, sprintf("scaling_fixed_time_%s.txt", stem))
+}
+y_ft     <- scan(.fixed_time_path("y"), quiet = TRUE)
+event_ft <- scan(.fixed_time_path("event"), quiet = TRUE) == 1
+x_d_ft   <- scan(.fixed_time_path("x_d"), quiet = TRUE)
+x_s_ft   <- scan(.fixed_time_path("x_s"), quiet = TRUE)
+stopifnot(length(y_ft) == 150L, sum(event_ft) == 120L)
+support_ft <- c(0, 1.01 * max(y_ft))
+writeLines(paste(format(support_ft[1], digits = 17),
+                 format(support_ft[2], digits = 17)),
+           con = .fixed_time_path("support"))
+b_ft <- Bernstein_basis(numeric_var("y", support = support_ft,
+                                    bounds = c(0, Inf)),
+                        order = 4, ui = "increasing")
+for (dist_ft in c("Normal", "Logistic")) {
+  ctm_ft <- ctm(b_ft, shifting = ~ x_d, scaling = ~ x_s,
+                data = data.frame(y = y_ft, x_d = x_d_ft, x_s = x_s_ft),
+                todistr = dist_ft)
+  for (flipped_ft in c(FALSE, TRUE)) {
+    ev_ft <- if (flipped_ft) !event_ft else event_ft
+    fit_ft <- mlt(ctm_ft, data = data.frame(y = Surv(y_ft, ev_ft),
+                                            x_d = x_d_ft, x_s = x_s_ft))
+    stopifnot(fit_ft$convergence == 0)
+    stem_ft <- paste0(if (flipped_ft) "flipped_" else "", tolower(dist_ft))
+    ll_ft <- as.numeric(logLik(fit_ft))
+    writeLines(format(coef(fit_ft), digits = 17),
+               con = .fixed_time_path(paste0(stem_ft, "_theta")))
+    writeLines(format(ll_ft, digits = 17),
+               con = .fixed_time_path(paste0(stem_ft, "_loglik")))
+    cat(sprintf("scaling fixed-time right-censored ref %-17s ll=%.6f\n",
+                stem_ft, ll_ft))
+  }
+}
+
 # ---- scaling_colr (Colr + scale=~x_s, exact, logistic) -------------------
 set.seed(711)
 n_co <- 150

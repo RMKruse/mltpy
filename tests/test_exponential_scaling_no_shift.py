@@ -770,11 +770,12 @@ class TestCensoredOnlyRegion:
     def test_left_censored_above_exact_does_not_diverge(self, seed: int) -> None:
         """Left-censored mirror: rows above ``c`` censored at their own times.
 
-        Seed 2 diverged on ``v0.6.0`` (logLik 537 against 125).  The optimum
-        sits in the ``±30`` clip regime of #162 (``θ_b[4]`` in the
-        thousands), where the clipped objective is not the model's
-        likelihood, so parity is not asserted.  What is asserted: auglag
-        converges to a feasible point and does not exceed the scipy optimum.
+        Seed 2 diverged on ``v0.6.0`` (logLik 537 against 125).  Every exact
+        row is tied at ``c``, so the optimum has ``θ_b[4]`` in the thousands;
+        the left-censored rows' ``h`` passes ``+30`` there, but only where
+        ``log F(h) ≈ 0``, so the clipped objective equals the likelihood
+        (ADR 0005, #162 amendment).  What is asserted: auglag converges to a
+        feasible point and does not exceed the scipy optimum.
         """
         y, x_s = _simulated(seed)
         c = float(np.quantile(y, 0.5))
