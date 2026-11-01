@@ -1703,12 +1703,14 @@ def _ncg_polish(
 def _increment_auglag(
     obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
     cm: ConstraintMatrices,
-    support_nl: ScaledSupportConstraint,
+    support_nl: ScaledSupportConstraint | None,
     n_params: int,
     total_params: int,
     options: AugLagOptions,
+    *,
+    intercept_lower: float = -np.inf,
 ) -> Callable[[NDArray[np.float64]], AugLagResult]:
-    """auglag runner for the nonlinear scaled support block (issue #115).
+    """auglag runner for the scaled exponential paths (issues #115, #161).
 
     Solves in the increment coordinates
 
@@ -1723,16 +1725,23 @@ def _increment_auglag(
     obj:
         NLL objective in θ, returning ``(nll, ∇nll)``.
     cm:
-        Constraint matrices in θ (monotonicity rows, equality rows) with
+        Constraint matrices in θ (monotonicity rows, equality rows, and on
+        the scale-only path the collapsed support row) with
         ``nonlinear_ineq = support_nl``.
     support_nl:
-        The scaled support block ``θ ↦ (g(θ), J(θ))``.
+        The scaled support block ``θ ↦ (g(θ), J(θ))`` (shift block or
+        non-zero offset, #115), or ``None`` on the scale-only path (#114),
+        where the support rule is the single linear row ``θ_b[0] ≥ b``.
     n_params:
         Number of Bernstein coefficients ``p``.
     total_params:
         Length of ``θ = [θ_b | β | γ]``.
     options:
         auglag options.
+    intercept_lower:
+        Lower bound on ``δ_0 = θ_b[0]``: the right-hand side ``b`` of the
+        collapsed support row on the scale-only path (#114), ``−inf`` (no
+        bound) when the support rows are the nonlinear block.
 
     Returns
     -------
@@ -1740,8 +1749,8 @@ def _increment_auglag(
         ``θ₀ ↦ AugLagResult`` with ``theta`` mapped back to θ.  Multipliers
         refer to the same constraint functions (``A_ineq`` rows, then the
         support rows; equality rows; ``nu_lower[k]`` is the bound
-        ``δ_k ≥ 0``, i.e. monotonicity row ``k − 1``), so they need no
-        transformation.
+        ``δ_k ≥ 0``, i.e. monotonicity row ``k − 1``, and ``nu_lower[0]`` the
+        bound ``θ_b[0] ≥ intercept_lower``), so they need no transformation.
 
     Notes
     -----
@@ -1752,10 +1761,14 @@ def _increment_auglag(
     ``y``).  A violated monotonicity row lets ``h_0(y) < θ_b[0]`` and, through
     ``f_i = exp(0.5·x_s,i·γ)``, the NLL fall exponentially in ``γ``, which
     a penalty quadratic in ``Dθ_b`` cannot bound — the #114 mechanism, here
-    observed on right-censored data.  Keeping ``D θ_b ≥ 0`` as hard bounds
-    leaves every remaining violation linear in ``g_i`` against a quadratic
-    penalty.  ``T`` is unit lower-triangular on the ``θ_b`` block, so the
-    reparametrisation is exact and the fitted model is unchanged.
+    entering through the monotonicity rows on censored data.  A censored
+    row has no ``−log h'`` term to push back, so the effect shows wherever
+    no exact observation sits above the censoring time (Type-I censoring,
+    #161).  Keeping ``D θ_b ≥ 0`` (and, on the scale-only path,
+    ``θ_b[0] ≥ b``) as hard bounds leaves every remaining violation linear
+    in ``g_i`` against a quadratic penalty.  ``T`` is unit lower-triangular
+    on the ``θ_b`` block, so the reparametrisation is exact and the fitted
+    model is unchanged.
     """
     # T: θ ↦ δ (first differences on θ_b); T_inv: cumulative sums on δ_b.
     T = np.eye(total_params, dtype=np.float64)
@@ -1763,6 +1776,7 @@ def _increment_auglag(
     T_inv = np.eye(total_params, dtype=np.float64)
     T_inv[:n_params, :n_params] = np.tril(np.ones((n_params, n_params)))
     lb = np.full(total_params, -np.inf)
+    lb[0] = intercept_lower
     lb[1:n_params] = 0.0
     box = (lb, np.full(total_params, np.inf))
     A_d = cm.A_ineq @ T_inv
@@ -1777,11 +1791,24 @@ def _increment_auglag(
             f, grad = obj(T_inv @ d)
         return float(f), np.asarray(T_inv.T @ np.asarray(grad), dtype=np.float64)
 
-    def support_d(
-        d: NDArray[np.float64],
-    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        values, jac = support_nl(T_inv @ d)
-        return values, jac @ T_inv
+    # Scale-only path (#114): no nonlinear block; θ_b[0] ≥ b is the δ_0 bound.
+    support_d: (
+        Callable[
+            [NDArray[np.float64]],
+            tuple[NDArray[np.float64], NDArray[np.float64]],
+        ]
+        | None
+    ) = None
+    if support_nl is not None:
+        nl = support_nl
+
+        def _support_d(
+            d: NDArray[np.float64],
+        ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+            values, jac = nl(T_inv @ d)
+            return values, jac @ T_inv
+
+        support_d = _support_d
 
     def run(t: NDArray[np.float64]) -> AugLagResult:
         res = auglag_minimize(
@@ -1875,17 +1902,16 @@ def _optimize_auglag(
         )
     # Issue #114 — scaled exponential path without a shift block and with a
     # zero offset (the other cases are the nonlinear block above).  The
-    # support rule has collapsed to the single
-    # row θ_b[0] ≥ 0, the last row of A_ineq, but the smooth extension
-    # log f(h) = −h makes the objective unbounded below once it is violated:
-    # with θ_b[0] = −t, the NLL falls like −t·Σ_i exp(0.5·x_s,i·γ),
-    # exponentially in γ, against a PHR penalty quadratic in t, so the PHR
-    # subproblem over ℝⁿ has no minimiser.  The row is a pure bound, so it is
-    # also passed to the inner solve as the box θ_b[0] ≥ 0 (box-constrained
-    # AL, auglag_minimize Notes); the row stays in A_ineq for reporting and
-    # its multiplier is the bound multiplier ν_lo[0] (folded in below).
-    support_box: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
+    # support rule has collapsed to the single row θ_b[0] ≥ 0, the last row
+    # of A_ineq, but the smooth extension log f(h) = −h makes the objective
+    # unbounded below once it is violated: with θ_b[0] = −t, the NLL falls
+    # like −t·Σ_i exp(0.5·x_s,i·γ), exponentially in γ, against a PHR penalty
+    # quadratic in t, so the PHR subproblem over ℝⁿ has no minimiser.  The
+    # row is a pure bound, so it becomes the bound on δ_0 = θ_b[0] of the
+    # increment-coordinate solve below; the row stays in A_ineq for reporting
+    # and its multiplier is the bound multiplier ν_lo[0] (folded in below).
     support_row: int | None = None
+    intercept_lower = -np.inf
     if nonneg_lower and scaling is not None and support_nl is None:
         support_row = cm.A_ineq.shape[0] - 1
         e0 = np.zeros(total_params, dtype=np.float64)
@@ -1896,9 +1922,7 @@ def _optimize_auglag(
                 "as the last inequality row on the scaled path; got "
                 f"{cm.A_ineq[support_row].tolist()}."
             )
-        lb = np.full(total_params, -np.inf)
-        lb[0] = cm.b_ineq[support_row]
-        support_box = (lb, np.full(total_params, np.inf))
+        intercept_lower = float(cm.b_ineq[support_row])
     true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
 
     # auglag always needs gradients for the L-BFGS-B inner solver
@@ -1928,13 +1952,25 @@ def _optimize_auglag(
             C_eq=cm.C_eq,
             d_eq=cm.d_eq,
             options=auglag_opts,
-            bounds=support_box,
         )
 
+    # Every scaled exponential fit (#114 scale-only, #115 shift / offset)
+    # solves in increment coordinates, where D θ_b ≥ 0 is a hard box in each
+    # inner solve.  As a PHR row only, a violated monotonicity row lets
+    # censored rows (no −log h' term) drive the NLL down exponentially in γ
+    # (issue #161, _increment_auglag Notes).  Every other fit keeps the
+    # θ-coordinate solve unchanged.
+    increments = nonneg_lower and scaling is not None
     run_auglag: Callable[[NDArray[np.float64]], AugLagResult] = run_linear
-    if support_nl is not None:
+    if increments:
         run_auglag = _increment_auglag(
-            obj, cm, support_nl, n_params, total_params, auglag_opts
+            obj,
+            cm,
+            support_nl,
+            n_params,
+            total_params,
+            auglag_opts,
+            intercept_lower=intercept_lower,
         )
 
     best_auglag_result, best_nll, n_restarts_used = _restart_loop(
@@ -1965,18 +2001,17 @@ def _optimize_auglag(
     # equality constraints — the unconstrained trust-ncg would violate lower/upper
     # boundary pins if cm.C_eq has rows).
     mu_ineq = best_auglag_result.mu_ineq
-    if support_row is not None:
-        # The boxed row never goes infeasible, so its PHR multiplier stays 0;
-        # its force is the bound multiplier on θ_b[0].
-        mu_ineq = mu_ineq.copy()
-        mu_ineq[support_row] += best_auglag_result.nu_lower[0]
-    if support_nl is not None:
+    if increments:
         # Increment coordinates (_increment_auglag): monotonicity row k is the
         # bound δ_{k+1} ≥ 0, whose multiplier is ν_lo[k+1]; the PHR copy of
         # the row (the first n_params − 1 rows of A_ineq) never goes
         # infeasible and keeps a zero multiplier.
         mu_ineq = mu_ineq.copy()
         mu_ineq[: n_params - 1] += best_auglag_result.nu_lower[1:n_params]
+    if support_row is not None:
+        # Likewise the boxed support row θ_b[0] ≥ b: its force is the bound
+        # multiplier on δ_0 = θ_b[0].
+        mu_ineq[support_row] += best_auglag_result.nu_lower[0]
     final_theta = best_auglag_result.theta
     final_nll = best_nll
     if config.polish and cm.C_eq.shape[0] == 0 and np.all(mu_ineq < 1e-6):

@@ -7,8 +7,10 @@ term and no shift block (``q_d = 0``)::
     h(a|x_i) = θ_b[0] · f_i,    f_i = exp(0.5 · x_s,i · γ) > 0,
 
 so the rule collapses to the single linear row ``θ_b[0] ≥ 0`` (ADR 0005
-Decision 2, simplification 1) and the existing linear solver paths fit the
-model unchanged.  A shift block (or a non-zero offset) makes the row
+Decision 2, simplification 1).  SLSQP and trust-constr fit it as a linear
+row; auglag solves in increment coordinates where ``θ_b[0] ≥ 0`` and
+``D θ_b ≥ 0`` are hard bounds of every inner solve (issue #161; ADR 0005
+#114 / #161 amendments).  A shift block (or a non-zero offset) makes the row
 non-linear in ``γ``: auglag fits it through its nonlinear inequality block
 (issue #115, ``tests/test_exponential_scaling_shift.py``), while SLSQP and
 trust-constr still raise ``NotImplementedError`` (issue #116).
@@ -36,7 +38,7 @@ from scipy.optimize import LinearConstraint
 from mltpy import MLT
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import build_constraint_matrices, build_constraints
-from mltpy.likelihood import log_likelihood
+from mltpy.likelihood import log_likelihood, negative_log_likelihood
 from mltpy.model import ConditionalTransformationModel
 from mltpy.optimizer import OptimizerConfig, optimize
 from mltpy.variables import CensoredData, CensoringType
@@ -591,3 +593,204 @@ class TestCensoredAndEdgeCases:
         assert model.theta_[0] >= -_FEAS_TOL
         # Same model, reparametrised: γ' = γ / 10 at the same optimum.
         np.testing.assert_allclose(model.result_.log_likelihood, ref["ll"], rtol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Censored rows with no exact row to hold h_0 monotone (issue #161)
+# ---------------------------------------------------------------------------
+
+_CENSORED_SOLVERS = ("auglag", "trust-constr", "slsqp")
+
+
+def _fit_censored(
+    cd: CensoredData,
+    x_s: NDArray[np.float64],
+    support: tuple[float, float],
+    censoring: CensoringType,
+) -> dict[str, MLT]:
+    """Fit the scale-only exponential model with every solver."""
+    fits = {}
+    for solver in _CENSORED_SOLVERS:
+        model = MLT(
+            order=_ORDER,
+            support=support,
+            censoring=censoring,
+            base_distribution="exponential",
+            scaling=x_s,
+            optimizer_config=OptimizerConfig(solver=solver, random_state=0),
+        )
+        with warnings.catch_warnings():
+            # ConvergenceWarning is informational (CLAUDE.md, Solver dispatch).
+            warnings.simplefilter("ignore")
+            model.fit(cd)
+        fits[solver] = model
+    return fits
+
+
+def _assert_auglag_matches_reference_solvers(fits: dict[str, MLT]) -> None:
+    """auglag converges, stays feasible and reaches the best scipy optimum.
+
+    trust-constr and SLSQP keep the linear rows satisfied at every iterate,
+    so they are the reference here (no R fixture exists for censored data).
+    The two stop at slightly different points along flat directions
+    (logLik differences up to ~7e-7 relative), so auglag is compared with
+    the better converged one at CLAUDE.md's rtol=1e-6.
+    """
+    aug = fits["auglag"]
+    assert aug.result_.converged
+    theta_b = aug.theta_[:_P]
+    assert theta_b[0] >= -_FEAS_TOL
+    assert np.all(np.diff(theta_b) >= -_FEAS_TOL)
+    refs = [
+        fits[s].result_.log_likelihood
+        for s in ("trust-constr", "slsqp")
+        if fits[s].result_.converged
+    ]
+    assert refs, "no converged reference solver"
+    np.testing.assert_allclose(aug.result_.log_likelihood, max(refs), rtol=1e-6)
+
+
+def _simulated(seed: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """The issue #161 design: Exp(rate 2·exp(0.3·x_s)) responses, n = 150."""
+    rng = np.random.default_rng(seed)
+    x_s = rng.normal(size=(150, 1))
+    y = rng.exponential(size=150) / (2.0 * np.exp(0.5 * 0.6 * x_s[:, 0]))
+    return y, x_s
+
+
+class TestCensoredOnlyRegion:
+    """auglag on the #114 path with censored rows exact rows do not cover.
+
+    A right-censored row contributes ``−log S = h(y_i|x_i)`` and no
+    ``−log h'`` term.  If no exact observation sits near ``y_i``, nothing in
+    the likelihood holds ``h_0`` monotone there: with ``D θ_b ≥ 0`` only a
+    PHR row, ``h_0(y_i)`` drops below ``θ_b[0]`` and the NLL falls
+    exponentially in ``γ`` through ``f_i = exp(0.5·x_s,i·γ)``.  Before the
+    fix, auglag reported ``converged=False`` at logLik ≈ +2000 with
+    ``min D θ_b ≈ −10`` on all nine designs below.  The scale-only path now
+    solves in increment coordinates, where ``D θ_b ≥ 0`` is a hard bound
+    (``optimizer._increment_auglag``, ADR 0005 #161 amendment).
+
+    Design (the reproducer of #161): every row below the common time ``c``
+    is censored at its own time, and the rows above ``c`` are exact at
+    ``c``, so ``[0, c)`` holds censored rows only.
+    """
+
+    @pytest.mark.parametrize("q", [0.5, 0.8, 0.95])
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_right_censored_below_exact(self, seed: int, q: float) -> None:
+        y, x_s = _simulated(seed)
+        c = float(np.quantile(y, q))
+        cd = CensoredData.right_censored(np.minimum(y, c), y <= c)
+        fits = _fit_censored(cd, x_s, (0.0, 1.01 * c), CensoringType.RIGHT)
+        _assert_auglag_matches_reference_solvers(fits)
+
+    def test_right_censored_below_exact_fixture(self, ref: dict[str, object]) -> None:
+        """Same design on the R fixture's data (diverged to logLik +1868)."""
+        y = np.asarray(ref["y"])
+        c = float(np.quantile(y, 0.8))
+        cd = CensoredData.right_censored(np.minimum(y, c), y <= c)
+        fits = _fit_censored(
+            cd,
+            ref["x_s"],  # type: ignore[arg-type]
+            (0.0, 1.01 * c),
+            CensoringType.RIGHT,
+        )
+        _assert_auglag_matches_reference_solvers(fits)
+
+    def test_monotonicity_multipliers_reported(self, ref: dict[str, object]) -> None:
+        """Active monotonicity rows carry their bound multipliers in ``mu_ineq``.
+
+        At this optimum ``θ_b[0] = … = θ_b[3] = 0 < θ_b[4]``: the support row
+        and the first three monotonicity rows are active.  In increment coordinates
+        those are bounds, so their force must come back through ``ν_lo``;
+        stationarity in θ then reads ``∇nll = Aᵀ μ`` on the reported rows.
+        """
+        y = np.asarray(ref["y"])
+        c = float(np.quantile(y, 0.8))
+        cd = CensoredData.right_censored(np.minimum(y, c), y <= c)
+        aug = _fit_censored(
+            cd,
+            ref["x_s"],  # type: ignore[arg-type]
+            (0.0, 1.01 * c),
+            CensoringType.RIGHT,
+        )["auglag"]
+        res = aug.result_
+        assert res.mu_ineq is not None and res.constraint_A_ineq is not None
+        assert np.all(res.mu_ineq >= 0.0)
+        # Rows: D θ_b ≥ 0 (k = 0…3), then the support row θ_b[0] ≥ 0.  The
+        # first three monotonicity rows and the support row are active; the
+        # last monotonicity row (θ_b[4] > θ_b[3]) is not.
+        assert np.all(res.mu_ineq[[0, 1, 2, 4]] > 1e-3)
+        assert res.mu_ineq[3] == 0.0
+        out = negative_log_likelihood(
+            aug.theta_,
+            aug.basis,
+            cd,
+            None,
+            CensoringType.RIGHT,
+            gradient=True,
+            base_distribution="exponential",
+            scaling=ref["x_s"],  # type: ignore[arg-type]
+        )
+        assert isinstance(out, tuple)
+        grad = out[1]
+        scale = max(1.0, float(np.max(np.abs(grad))))
+        np.testing.assert_allclose(
+            grad, res.constraint_A_ineq.T @ res.mu_ineq, atol=1e-4 * scale
+        )
+
+
+class TestTypeICensoring:
+    """Administrative (Type-I) censoring at a common time, issue #161 item 4.
+
+    Every row beyond the censoring time is censored *at* that time, and
+    exact rows cover the rest of the support, so these designs never
+    triggered the #161 divergence (auglag agreed before the fix as well).
+    They pin the behaviour of the usual survival design on this path.
+    """
+
+    @pytest.mark.parametrize("q", [0.5, 0.8, 0.95])
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_right(self, seed: int, q: float) -> None:
+        y, x_s = _simulated(seed)
+        c = float(np.quantile(y, q))
+        cd = CensoredData.right_censored(np.minimum(y, c), y > c)
+        fits = _fit_censored(cd, x_s, (0.0, 1.01 * c), CensoringType.RIGHT)
+        _assert_auglag_matches_reference_solvers(fits)
+
+    @pytest.mark.parametrize("q", [0.5, 0.8, 0.95])
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_left(self, seed: int, q: float) -> None:
+        y, x_s = _simulated(seed)
+        c = float(np.quantile(y, 1.0 - q))
+        cd = CensoredData.left_censored(np.maximum(y, c), y < c)
+        fits = _fit_censored(cd, x_s, (0.0, float(y.max())), CensoringType.LEFT)
+        _assert_auglag_matches_reference_solvers(fits)
+
+    @pytest.mark.parametrize("q", [0.5, 0.8, 0.95])
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    def test_interval_inspection_grid(self, seed: int, q: float) -> None:
+        """Four common inspection times; the last interval is open, (t_4, ∞)."""
+        y, x_s = _simulated(seed)
+        grid = np.quantile(y, np.linspace(0.0, q, 5)[1:])
+        k = np.searchsorted(grid, y)
+        lower = np.concatenate([[0.0], grid])[k]
+        upper = np.concatenate([grid, [np.inf]])[k]
+        cd = CensoredData.interval_censored(lower, upper)
+        fits = _fit_censored(
+            cd, x_s, (0.0, 1.01 * float(grid[-1])), CensoringType.INTERVAL
+        )
+        _assert_auglag_matches_reference_solvers(fits)
+
+    def test_right_fixture(self, ref: dict[str, object]) -> None:
+        y = np.asarray(ref["y"])
+        c = float(np.quantile(y, 0.8))
+        cd = CensoredData.right_censored(np.minimum(y, c), y > c)
+        fits = _fit_censored(
+            cd,
+            ref["x_s"],  # type: ignore[arg-type]
+            (0.0, 1.01 * c),
+            CensoringType.RIGHT,
+        )
+        _assert_auglag_matches_reference_solvers(fits)

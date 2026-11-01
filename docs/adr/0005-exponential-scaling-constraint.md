@@ -417,6 +417,9 @@ the row's `mu_ineq` entry.
 
 - **Scope.** Only the scaled exponential shift path passes a box. Every other
   path is unchanged (`bounds=None`), and its fits are byte-identical.
+  *(#161: the box alone does not bound the subproblem on censored data; the
+  path now solves in #115's increment coordinates, with `θ_b[0] ≥ 0` as the
+  bound on `δ_0`, see the #161 amendment.)*
 - **Rejected — larger `ρ₀`.** `ρ₀ = 10³` converged on the fixture, but the
   subproblem stays unbounded, so this is tuning, not a fix.
 - **Rejected — a barrier on `h(y_i | x_i) < 0`** (R's `dexp = −Inf`). It
@@ -517,7 +520,9 @@ already turns into the infeasibility penalty.
   over-constrain the fit.
 - **Rejected — increment coordinates on every path.** The unscaled and
   scale-only paths are bounded without it, and their fits stay
-  byte-identical.
+  byte-identical. *(#161: wrong for the scale-only path. Its censored fits
+  diverge the same way; it now solves in increment coordinates too, see the
+  #161 amendment.)*
 
 **Validation.** R `mlt` has no support rule, so, as Decision 4 prescribes, the
 reference `reference/mlt_exponential_scaling_shift_*` (generated in
@@ -549,6 +554,75 @@ rejection, and the reported `[D ; J(θ̂)]` rows.
 predict-side case anticipated below: the midpoint of the two binding rows lies
 strictly inside the training `(x_d, x_s)` hull, and `h(a|x) < 0` there by the
 Jensen gap `θ_b[0] · [f(x̄_s) − (f_i + f_j)/2]`. The #157 warning names it.
+
+---
+
+## Amendment (2026-11-01, [#161](https://github.com/RMKruse/mltpy/issues/161)) — Increment Coordinates on the Scale-Only Path
+
+**Problem.** The #114 box `θ_b[0] ≥ 0` left the monotonicity rows
+`D θ_b ≥ 0` as PHR rows only. The #115 mechanism then applies unchanged: a
+right-censored row contributes `−log S = h(y_i|x_i)` and no `−log h'` term,
+so where a region of `y` holds censored rows but no exact rows, nothing in the
+likelihood keeps `h_0` non-decreasing there. A violated monotonicity row
+lets `h_0(y_i) < θ_b[0]`, and through `f_i` the NLL falls exponentially in
+`γ` against a penalty quadratic in `D θ_b`.
+
+**Which designs trigger it.** The #161 reproducer passes `y ≤ c` as the
+`censored` flag of `CensoredData.right_censored`. Every row below the common
+time `c` is then censored at its own time, and the exact rows sit tied at
+`c`, so `[0, c)` holds censored rows only. On that design (Exp responses,
+`n = 150`, seeds 0–2, `c` at the 50/80/95 % quantile) `v0.6.0` auglag
+diverged in 9/9 fits (`converged=False`, logLik `+1.8e3 … +2.9e3`,
+`min D θ_b ≈ −9 … −18`). trust-constr and SLSQP agreed with each other and
+stayed monotone. The left-censored mirror diverged in 1/9 fits. Proper Type-I
+censoring (`censored = y > c`, every row above `c` censored at `c`) did
+**not** diverge: right, left and interval designs on the same grid already
+agreed with trust-constr / SLSQP at `rtol ≤ 1e-6` in 27/27 fits. There the
+censored rows are evaluated only where exact rows also constrain `h_0`.
+
+**Decision: option (a), every scaled exponential auglag fit.**
+`_optimize_auglag` routes the scale-only path through `_increment_auglag`
+as well. `support_nl` is now optional, and the collapsed support row becomes
+the bound `δ_0 = θ_b[0] ≥ b` (`intercept_lower`). The model and the
+constraint functions are unchanged. The monotonicity and support rows stay in
+`A_ineq` for reporting. Their bound multipliers `ν_lo[1:p]` and `ν_lo[0]` are
+folded into `mu_ineq`, as on the #115 path.
+
+- **Rejected — (b) every exponential auglag fit.** The unscaled path is
+  bounded: without `f_i` the NLL falls at most linearly in a violated row,
+  against the quadratic penalty. Its fits stay byte-identical (#158/#160
+  fixtures untouched).
+- **Rejected — (c) every auglag fit.** Under the normal and logistic links
+  `−log S(h)` and `−log f(h)` are bounded below, so no censoring branch can
+  drive the NLL to `−∞` through a violated monotonicity row. Changing those
+  paths would give up byte-identical R-parity fits for no gain. The large
+  positive logLik that shift + scale normal/logistic fits reach on the #161
+  design is a separate clipping artefact (`h` clipped at `±30`, `log h'` not),
+  tracked in [#162](https://github.com/RMKruse/mltpy/issues/162).
+
+**What changed numerically.** Only scale-only, zero-offset exponential auglag
+fits. On the exact-data R fixture `mlt_exponential_scaling_*` the fit moves
+*closer* to R: `max |Δθ|` drops from `3.1e-7` to `1.1e-8`, the relative
+logLik error from `4.8e-10` to `1.5e-15`, the active row `θ_b[2] = θ_b[3]`
+now holds exactly, and `mu_ineq` matches R's KKT multipliers as before. Every
+existing test tolerance holds unchanged. The #115 path already solved in
+increment coordinates and is byte-identical.
+
+**Validation.** `tests/test_exponential_scaling_no_shift.py`:
+
+- `TestCensoredOnlyRegion` covers the #161 design (nine simulated fits plus
+  the R fixture's data). auglag must converge, stay feasible and monotone, and
+  match the better converged trust-constr / SLSQP logLik at `rtol = 1e-6`.
+  It also checks that the active monotonicity and support rows carry their
+  bound multipliers, with `∇nll = Aᵀ μ`. All eleven tests fail on `v0.6.0`.
+- `TestTypeICensoring` covers administrative censoring at a common time
+  (right, left), a fixed inspection grid with an open last interval
+  (interval), and right censoring on the fixture data, all under the same
+  criteria.
+
+The left-censored mirror of the #161 design is not a parity test. Its
+optimum sits in the `±30` clip regime of #162 (`θ_b[4] ≈ 5·10³`), so the
+three solvers agree only on the clipped objective.
 
 ---
 
