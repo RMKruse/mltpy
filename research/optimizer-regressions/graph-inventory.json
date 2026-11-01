@@ -1,0 +1,959 @@
+{
+  "project": "Users-entropy-Git-mltpy",
+  "query": {
+    "name_pattern": ".*(test_|generate_dataset|compare_results|fit_python_model|run_benchmark).*",
+    "label": "Function",
+    "limit": 500
+  },
+  "note": "Top-level function inventory; class methods and R generators are described in README.",
+  "symbols": [
+    {
+      "name": "_make_test_case",
+      "file": "tests/test_gradient_verification.py"
+    },
+    {
+      "name": "compare_results",
+      "file": "validation/run_validation.py"
+    },
+    {
+      "name": "fit_python_model",
+      "file": "validation/run_validation.py"
+    },
+    {
+      "name": "generate_dataset",
+      "file": "benchmarks/bench_python.py"
+    },
+    {
+      "name": "run_benchmark",
+      "file": "benchmarks/bench_python.py"
+    },
+    {
+      "name": "test_active_monotonicity_fit_never_falsely_converges",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_all_list_matches_imports",
+      "file": "tests/test_api.py"
+    },
+    {
+      "name": "test_analytical_gradient_matches_finite_difference",
+      "file": "tests/test_gradient_verification.py"
+    },
+    {
+      "name": "test_auglag_bounded_boundary_satisfied",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_bounded_loglik_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_bounded_theta_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_converged",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_exponential_loglik_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_exponential_support_satisfied",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_exponential_theta_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_loglik_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_monotonicity_satisfied",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_auglag_theta_matches_r",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_boxcox_accepts_scaling_kwarg",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_feature_names_scaling_default",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_feature_names_scaling_from_dataframe",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_fitted_transformation_monotone",
+      "file": "tests/test_tram.py"
+    },
+    {
+      "name": "test_boxcox_gamma_property",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_gamma_raises_without_scaling",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_interval_scaled_matches_R",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_boxcox_log_likelihood_matches_R",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_predict_matches_R",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_predict_requires_X_scale_new",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_theta_beta_gamma_match_R",
+      "file": "tests/test_tram_boxcox_scaling.py"
+    },
+    {
+      "name": "test_boxcox_vcov_estfun_against_R",
+      "file": "tests/test_vcov.py"
+    },
+    {
+      "name": "test_build_constraint_matrices_rejects_polynomial_x",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_cdf_is_monotone_hypothesis",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_cdf_pdf_matches_R",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_colr_accepts_scaling_kwarg",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_feature_names_scaling_default",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_feature_names_scaling_from_dataframe",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_gamma_property",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_gamma_raises_without_scaling",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_log_likelihood_matches_R",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_logodds_demonstrates_non_proportional_odds",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_predict_logodds_matches_R",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_predict_requires_X_scale_new",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_scaled_matches_R",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_colr_theta_beta_gamma_match_R",
+      "file": "tests/test_tram_colr_scaling.py"
+    },
+    {
+      "name": "test_colr_uses_logistic_distribution",
+      "file": "tests/test_tram.py"
+    },
+    {
+      "name": "test_colr_vcov_estfun_against_R",
+      "file": "tests/test_vcov.py"
+    },
+    {
+      "name": "test_compare_results_crash_short_circuits",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_fail_cdf",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_fail_hazard_with_cdf",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_fail_loglik",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_fail_pdf_with_cdf",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_fail_quantile_with_loglik",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_missing_optional_metrics",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_multiple_failures",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_not_converged_but_correct_passes",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_pass",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_pass_with_functional",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_pdf_informational_when_cdf_ok",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_theta_informational_only",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_compare_results_theta_with_cdf_fail",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_confband_baseline_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_density_hazard_clip_extreme_h_warns",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_density_positive",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_distribution_in_unit_interval",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_distribution_vs_survivor",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_estimate_matches_predict",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_intercept_only_no_X",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_narrower_at_lower_level",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confband_scaling_argument_validation",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confband_scaling_estimate_matches_point_prediction",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confband_scaling_factor_actually_shifts_band",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confband_scaling_matches_R",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confband_scaling_matches_finite_difference_delta",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confband_scaling_only_no_shift_covariates",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_confint_boxcox_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_colr_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_coxph_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_equals_wald_formula",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_invalid_type_raises",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_narrower_at_lower_level",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_parm_subset",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_baseline_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_boxcox_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_bracket_failure_raises",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_colr_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_coxph_matches_R",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_profile_parm_subset",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_confint_type_wald_matches_default",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_converges_on_first_attempt_without_warning",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_coxph_accepts_scaling_kwarg",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_feature_names_scaling_default",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_feature_names_scaling_from_dataframe",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_gamma_property",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_gamma_raises_without_scaling",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_log_likelihood_matches_R",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_right_scaled_gradient_matches_fd",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_coxph_right_scaled_matches_R",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_coxph_survival_demonstrates_non_PH",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_survival_matches_R",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_survival_requires_X_scale",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_theta_beta_gamma_match_R",
+      "file": "tests/test_tram_coxph_scaling.py"
+    },
+    {
+      "name": "test_coxph_vcov_estfun_against_R",
+      "file": "tests/test_vcov.py"
+    },
+    {
+      "name": "test_coxsnell_residuals_scaling_only_apply_scale_factor",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_coxsnell_residuals_shift_and_scaling_match_cumhazard",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_exponential_with_scaling_and_shift_fits_on_slsqp",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_exponential_without_scaling_still_works",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_fit_regression_no_runtime_warning_on_flat_hp_boundary",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_fixed_time_R_loglik_at_mltpy_theta",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_fixed_time_gradient_matches_fd_beyond_clip",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_fixed_time_inputs_are_issue_draw",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_fixed_time_loglik_at_R_theta_matches_R",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_fixed_time_right_scaled_fit_matches_R",
+      "file": "tests/test_scaling_censoring.py"
+    },
+    {
+      "name": "test_fixture_is_issue_data",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_from_exact_masks_sum_to_one",
+      "file": "tests/test_variables.py"
+    },
+    {
+      "name": "test_gradient_is_near_zero_at_converged_theta",
+      "file": "tests/test_gradient_verification.py"
+    },
+    {
+      "name": "test_hazard_matches_R",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_hessian_matches_finite_differences",
+      "file": "tests/test_vcov.py"
+    },
+    {
+      "name": "test_hessian_scaled_exact_normal_matches_finite_differences",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_init_reload",
+      "file": "tests/test_api.py"
+    },
+    {
+      "name": "test_integration_r_reference",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_integration_r_reference_aic_bic",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_integration_r_reference_anova",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_integration_r_reference_new_distributions",
+      "file": "tests/test_model.py"
+    },
+    {
+      "name": "test_integration_run_validation_single_case",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_interaction_basis_bernstein_bernstein_accepted",
+      "file": "tests/test_interaction_basis_bernstein.py"
+    },
+    {
+      "name": "test_interaction_quantiles_do_not_cache_midpoints",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_kkt_residual_at_floating_point_floor",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_lehmann_differs_from_coxph",
+      "file": "tests/test_tram.py"
+    },
+    {
+      "name": "test_ll_finite_for_valid_theta",
+      "file": "tests/test_likelihood.py"
+    },
+    {
+      "name": "test_ll_right_finite_for_valid_data",
+      "file": "tests/test_likelihood.py"
+    },
+    {
+      "name": "test_lm_accepts_scaling_kwarg",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_beta_gamma_match_R",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_closed_form_accessors_raise_under_scaling",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_closed_form_accessors_still_work_without_scaling",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_feature_names_scaling_default",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_feature_names_scaling_from_dataframe",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_gamma_property",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_gamma_raises_without_scaling",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_log_likelihood_matches_R",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_lm_predict_requires_X_scale_new",
+      "file": "tests/test_tram_lm_scaling.py"
+    },
+    {
+      "name": "test_load_reference_synthetic",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_load_reference_with_status",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_log_likelihood_invalid_distribution_raises",
+      "file": "tests/test_likelihood.py"
+    },
+    {
+      "name": "test_loglik_matches_R",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_loglik_matches_r",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_mlt_accepts_scaling_kwarg",
+      "file": "tests/test_scaling_basic.py"
+    },
+    {
+      "name": "test_mltpy_top_level_import",
+      "file": "tests/test_tram.py"
+    },
+    {
+      "name": "test_monotone_on_dense_grid",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_monotone_property_ascending",
+      "file": "tests/test_constraints.py"
+    },
+    {
+      "name": "test_monotone_property_strictly_descending",
+      "file": "tests/test_constraints.py"
+    },
+    {
+      "name": "test_narrow_interval_triggers_taylor_branch",
+      "file": "tests/test_gradient_verification.py"
+    },
+    {
+      "name": "test_negative_log_likelihood_invalid_distribution_raises",
+      "file": "tests/test_likelihood.py"
+    },
+    {
+      "name": "test_new_metric_exceedance_is_informational_when_cdf_loglik_ok",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_new_metric_none_when_reference_absent",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_new_metric_populated_when_reference_given",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_nll_equals_negation_of_ll",
+      "file": "tests/test_likelihood.py"
+    },
+    {
+      "name": "test_nonuniform_weights_are_scale_invariant",
+      "file": "tests/test_slsqp_weight_scale.py"
+    },
+    {
+      "name": "test_one_hot_basis_in_public_api",
+      "file": "tests/test_interaction_basis.py"
+    },
+    {
+      "name": "test_plot_interaction_requires_X",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_plot_interaction_with_X",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_predict_X_scale_row_mismatch_raises",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_cumhazard_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_cumhazard_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_density_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_distribution_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_hazard_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_odds_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_log_survivor_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_missing_X_scale_new_raises",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_odds_consistent",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_quantile_matches_R",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_trafo_is_h",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_what_matches_R",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_predict_wrong_X_scale_shape_raises",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_print_report_contains_pass_fail",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_print_report_renders_extended_table_when_new_metrics_present",
+      "file": "tests/test_validation_script.py"
+    },
+    {
+      "name": "test_profile_ci_boundary_failure_returns_signed_inf_under_parm_none",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_boundary_failure_under_parm_explicit_raises",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_convergence_failure_returns_nan_under_parm_none",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_convergence_failure_under_parm_explicit_raises",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_convergence_warning_names_parameter_index",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_inner_loglik_detects_boundary_vs_convergence",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_parm_explicit_unbracketable_raises_with_diagnostic",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_profile_ci_parm_none_warns_and_returns_inf_when_one_param_unbracketable",
+      "file": "tests/test_confidence.py"
+    },
+    {
+      "name": "test_public_api_importable",
+      "file": "tests/test_api.py"
+    },
+    {
+      "name": "test_quantile_inverts_cdf",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_quantile_matches_R",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_r_weights_parity",
+      "file": "tests/test_weights_offset.py"
+    },
+    {
+      "name": "test_reference_npy",
+      "file": "tests/test_basis.py"
+    },
+    {
+      "name": "test_reference_starting_point",
+      "file": "tests/test_r_parity_auglag.py"
+    },
+    {
+      "name": "test_residuals_score_works_on_scaled_fit",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_right_censored_masks_are_mutually_exclusive",
+      "file": "tests/test_variables.py"
+    },
+    {
+      "name": "test_scaled_fit_estfun_returns_full_block_and_sums_to_minus_grad",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_fit_sandwich_vcov_returns_full_block",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_fit_standard_errors_returns_full_block",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_fit_vcov_returns_full_block",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_fit_wald_test_on_gamma_contrast_returns_finite_pvalue",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_gradient_interval_for_each_distribution",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_scaled_gradient_left_for_each_distribution",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_scaled_gradient_none_for_each_distribution",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_scaled_gradient_right_for_each_distribution",
+      "file": "tests/test_scaling_distributions.py"
+    },
+    {
+      "name": "test_scaled_hessian_matches_finite_differences",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_intercept_score_matches_closed_form_exact_normal",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_sandwich_coxph_matches_R_via_auglag",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_sandwich_matches_R",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_score_sums_to_minus_nll_gradient",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_vcov_bare_matches_R",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_vcov_coxph_matches_R_via_auglag",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_wald_test_gamma_coxph_matches_R_via_auglag",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaled_wald_test_gamma_matches_R",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_scaling_analytical_gradient_matches_finite_difference",
+      "file": "tests/test_scaling_basic.py"
+    },
+    {
+      "name": "test_scaling_gamma_exposed",
+      "file": "tests/test_scaling_basic.py"
+    },
+    {
+      "name": "test_scaling_log_likelihood_matches_R",
+      "file": "tests/test_scaling_basic.py"
+    },
+    {
+      "name": "test_scaling_theta_beta_gamma_match_R",
+      "file": "tests/test_scaling_basic.py"
+    },
+    {
+      "name": "test_score_matrix_scaled_exact_normal_returns_full_gamma_columns",
+      "file": "tests/test_scaling_inference.py"
+    },
+    {
+      "name": "test_score_sums_to_minus_nll_gradient",
+      "file": "tests/test_vcov.py"
+    },
+    {
+      "name": "test_simulate_ks_at_fixed_x",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_simulate_under_scaling_matches_distribution",
+      "file": "tests/test_scaling_predict.py"
+    },
+    {
+      "name": "test_solver_agreement",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_survivor_matches_R",
+      "file": "tests/test_interaction_predict_extras.py"
+    },
+    {
+      "name": "test_survreg_accepts_scaling_kwarg",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_beta_gamma_match_R",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_feature_names_scaling_default",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_feature_names_scaling_from_dataframe",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_gamma_property",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_gamma_raises_without_scaling",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_log_likelihood_matches_R",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_survival_matches_predict",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_survreg_survival_requires_X_scale",
+      "file": "tests/test_tram_survreg_scaling.py"
+    },
+    {
+      "name": "test_theta_matches_R",
+      "file": "tests/test_interaction_r_parity.py"
+    },
+    {
+      "name": "test_theta_matches_r",
+      "file": "tests/test_interaction_stall.py"
+    },
+    {
+      "name": "test_trust_constr_normal_mle",
+      "file": "tests/test_optimizer.py"
+    },
+    {
+      "name": "test_trust_constr_objective_hessian",
+      "file": "tests/test_optimizer.py"
+    },
+    {
+      "name": "test_trust_constr_recovers_from_infeasible_fixed_start",
+      "file": "tests/test_optimizer.py"
+    },
+    {
+      "name": "test_uniform_heavy_weights_reach_unit_weight_mle",
+      "file": "tests/test_slsqp_weight_scale.py"
+    },
+    {
+      "name": "test_unsupported_x_basis_still_rejected",
+      "file": "tests/test_interaction_basis_bernstein.py"
+    },
+    {
+      "name": "test_version_string",
+      "file": "tests/test_api.py"
+    }
+  ]
+}
