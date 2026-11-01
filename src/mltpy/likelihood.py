@@ -205,9 +205,11 @@ class DistOps:
         if kind == "exponential":
             # h = 0 gives the exact log F(0) = −inf (an interval (0, t] once
             # the support row θ_b[0] ≥ 0 is active); h < 0 lies outside the
-            # support and gives NaN, which the likelihood raises as
-            # InfeasibleParameterError and predict() flags with its own
-            # h(a|x) < 0 warning.  numpy's notices for both are noise (#163).
+            # support and gives NaN.  On a left-censored or (−∞, t] row the
+            # NaN reaches ℓ and is raised as InfeasibleParameterError; on a
+            # both-finite interval row _log_diff_ndtr maps it to a finite
+            # value (see there).  predict() flags h(a|x) < 0 with its own
+            # warning.  numpy's notices for both are noise (#163).
             with np.errstate(divide="ignore", invalid="ignore"):
                 return cast(NDArray[np.float64], np.log(-expm1(-h)))
         if kind == "laplace":
@@ -439,7 +441,9 @@ def _log_diff_ndtr(
     Returns
     -------
     NDArray[np.float64]
-        Array of log(F(b) - F(a)) values, same shape as inputs.
+        Array of log(F(b) - F(a)) values, same shape as inputs.  A NaN
+        ``log F(a)`` (exponential, ``a < 0``) is *not* propagated: it takes
+        the narrow branch and yields a finite value (see the inline comment).
 
     Notes
     -----
@@ -466,9 +470,16 @@ def _log_diff_ndtr(
 
     log_Fa = _logcdf(a)  # log F(a)
     log_Fb = _logcdf(b)  # log F(b)
-    # ratio <= 0 (since a <= b).  When F(b) = 0 (exponential, a = b = 0 at
-    # the support end) it is −inf − (−inf) = NaN; the NaN fails the `wide`
-    # test below, and the narrow branch returns the exact log P = −inf.
+    # ratio <= 0 (since a <= b).  It is NaN in two exponential cases, and the
+    # NaN fails the `wide` test below, so both take the narrow branch:
+    # - F(b) = 0 (a = b = 0 at the support end): −inf − (−inf); the narrow
+    #   branch returns the exact log P = −inf.
+    # - log F(a) NaN (a < 0, below the support): the narrow branch returns
+    #   f(mid)·(b − a) under the extension log f = −h, which is finite and
+    #   can exceed 0.  Only SLSQP / trust-constr trial points reach this; the
+    #   support row keeps accepted iterates at h ≥ 0.  Propagating the NaN
+    #   (→ InfeasibleParameterError → penalty) instead left trust-constr at
+    #   its start with converged=True (ADR 0005, #163 amendment).
     with np.errstate(invalid="ignore"):
         ratio = log_Fa - log_Fb
 

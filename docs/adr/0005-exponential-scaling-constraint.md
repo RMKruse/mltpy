@@ -513,7 +513,14 @@ non-decreasing at every inner iterate, every censoring branch's NLL falls at
 most linearly in a violated `g_i`, against the quadratic penalty. The objective
 also runs under `np.errstate(invalid="ignore")`: a left- or interval-censored
 trial point with `h(c|x_i) < 0` makes `log F` NaN, which the likelihood
-already turns into the infeasibility penalty.
+already turns into the infeasibility penalty. *(#163: only for left-censored
+and `(−∞, t]` rows. On a both-finite interval row `_log_diff_ndtr` sends the
+NaN ratio to its narrow branch, `log f(mid) + log(u − l)` under the extension
+`log f = −h`, which is finite and can exceed 0. The value is bounded, not
+exponential in `γ`: `h` is clipped to `±30` and `mid` is linear in the
+violated endpoint, so the NLL still falls at most linearly in a violated
+`g_i`. Since #163 the objective also suppresses numpy's notices for this
+case. See the #163 amendment below.)*
 
 - **Rejected — a box on `θ_b[0]` as in #114.** With a shift block `θ_b[0]`
   may legitimately be negative (`x_d · β + offset > 0`), so `θ_b[0] ≥ 0` would
@@ -634,6 +641,38 @@ below 0 at an endpoint or `h_0` decreases across the row. The
 exponential-in-`γ` descent of right-censored rows has no interval
 counterpart. The inspection-grid designs above, where every row is
 interval-censored, already agreed on `v0.6.0`.
+
+**#163 amendment: out-of-support interval rows are not the penalty.** The
+paragraph above is wrong on one point. When `h(l|x_i) < 0` at a finite lower
+endpoint while the upper endpoint is finite, `log F(h_l)` is NaN, but
+`_log_diff_ndtr` does not propagate it. The NaN ratio fails its `wide` test,
+and the narrow branch returns a finite `log P`, too large and sometimes
+above 0. On the inspection grid (seed 0, `q = 0.8`) a trial point at
+`θ_b[0] = −0.5` scores logLik −194.0 against −243.7 at the nearby feasible
+`θ_b[0] = 0`. The conclusion stands: the value is bounded (clip at `±30`), so
+there is still no interval counterpart of the right-censored descent.
+
+auglag never evaluates such a point on the scale-only path (`θ_b[0] ≥ 0` is
+a box). SLSQP did in 120 of 326 interval evaluations of the 9-design sweep,
+trust-constr in 18 of 347. Every solver still ends on the support row and
+matches auglag's logLik within `2·10⁻⁹` relative.
+
+- **Rejected — propagate the NaN** (so ℓ raises `InfeasibleParameterError`
+  and the scipy objective returns the infeasibility penalty). The penalty's
+  subgradient points back into the monotone cone only, not across the support
+  row. trust-constr then stayed at its start, `θ = [0, ¼, ½, ¾, 1 | γ = 0]`,
+  on all three `q = 0.5` designs and reported `converged=True` 8–11 logLik
+  units below the optimum. SLSQP moved by at most `1.3·10⁻⁷` in logLik.
+- **Deferred — R's `pexp` semantics, `F(h) = 0` for `h ≤ 0`.** Then
+  `log P = log F(h_u)` whenever `h_l ≤ 0`, which is continuous at the boundary
+  and rewards nothing outside it. It is a new extension, though, and needs a
+  matching gradient (zero lower-endpoint weight below the support), so it
+  needs its own decision.
+
+`TestTypeICensoring::test_interval_inspection_grid` now requires SLSQP and
+trust-constr each to match auglag's logLik (`rtol = 1e-6`). The previous
+check, "auglag matches the best converged reference", let the trust-constr
+stall through.
 
 ---
 

@@ -41,6 +41,7 @@ from mltpy.constraints import build_constraint_matrices, build_constraints
 from mltpy.likelihood import (
     InfeasibleParameterError,
     _get_dist,
+    _log_diff_ndtr,
     log_likelihood,
     negative_log_likelihood,
 )
@@ -897,6 +898,16 @@ class TestTypeICensoring:
         cd, support = _inspection_grid(y, q)
         fits = _fit_censored(cd, x_s, support, CensoringType.INTERVAL)
         _assert_auglag_matches_reference_solvers(fits)
+        # Every solver, not just the best reference, reaches auglag's optimum.
+        # Turning the out-of-support interval rows of SLSQP / trust-constr
+        # trial points into the infeasibility penalty left trust-constr at its
+        # start (logLik 8–11 lower at q = 0.5) with converged=True (#163
+        # follow-up, ADR 0005).  The "best converged reference" above hid it.
+        ll_aug = fits["auglag"].result_.log_likelihood
+        for solver in ("slsqp", "trust-constr"):
+            np.testing.assert_allclose(
+                fits[solver].result_.log_likelihood, ll_aug, rtol=1e-6
+            )
 
     def test_right_fixture(self, ref: dict[str, object]) -> None:
         cd, support = _right_at_c(np.asarray(ref["y"]), 0.8, censored_below=False)
@@ -1032,15 +1043,37 @@ class TestNoSpuriousRuntimeWarnings:
             )
 
     @pytest.mark.parametrize("gradient", [False, True])
-    def test_outside_support_interval_is_quiet(self, gradient: bool) -> None:
-        """An infeasible SLSQP / trust-constr trial point evaluates quietly.
+    def test_outside_support_interval_is_finite_and_quiet(self, gradient: bool) -> None:
+        """An out-of-support both-finite interval row gives a finite ℓ, quietly.
 
-        ``h(0|x_i) < 0`` makes ``log F(h_lo)`` NaN on the rows ``(0, t]``.  On
-        a both-finite row ``_log_diff_ndtr`` routes the NaN ratio to its
-        narrow Taylor branch, so ℓ comes back finite here instead of raising.
-        That is pre-existing behaviour outside this test's scope; only the
-        absence of RuntimeWarnings is pinned.
+        ``h(0|x_i) < 0`` makes ``log F(h_lo)`` NaN on the rows ``(0, t]``.
+        ``_log_diff_ndtr`` routes the NaN ratio to its narrow Taylor branch,
+        so ℓ is finite (and too large) here rather than raising.  That is
+        deliberate (ADR 0005, #163 amendment): only SLSQP / trust-constr trial
+        points get here, the support row keeps every accepted iterate at
+        ``h ≥ 0``, and raising instead left trust-constr at its start.
         """
-        _nll_erroring_on_runtime_warnings(
+        out = _nll_erroring_on_runtime_warnings(
             _THETA_OUTSIDE_SUPPORT, CensoringType.INTERVAL, gradient=gradient
         )
+        nll = out[0] if isinstance(out, tuple) else out
+        assert np.isfinite(nll)
+
+    @pytest.mark.parametrize(
+        ("a", "b", "expected"),
+        [
+            (0.0, 0.0, -np.inf),  # zero width at the support end: P = 0
+            (0.0, 1.0, np.log(-np.expm1(-1.0))),  # F(0) = 0: log P = log F(1)
+            (0.5, 1.0, np.log(np.exp(-0.5) - np.exp(-1.0))),
+        ],
+    )
+    def test_log_diff_ndtr_exponential_support_end(
+        self, a: float, b: float, expected: float
+    ) -> None:
+        """``log(F(b) − F(a))`` at the support end is exact and quiet."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            out = _log_diff_ndtr(
+                np.array([a]), np.array([b]), dist=_get_dist("exponential")
+            )
+        np.testing.assert_allclose(out, [expected], rtol=1e-12)
