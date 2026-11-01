@@ -38,7 +38,12 @@ from scipy.optimize import LinearConstraint
 from mltpy import MLT
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import build_constraint_matrices, build_constraints
-from mltpy.likelihood import log_likelihood, negative_log_likelihood
+from mltpy.likelihood import (
+    InfeasibleParameterError,
+    _get_dist,
+    log_likelihood,
+    negative_log_likelihood,
+)
 from mltpy.model import ConditionalTransformationModel, ConvergenceWarning
 from mltpy.optimizer import OptimizerConfig, optimize
 from mltpy.variables import CensoredData, CensoringType
@@ -626,13 +631,12 @@ def _fit_censored(
         )
         with warnings.catch_warnings():
             # ConvergenceWarning is informational (CLAUDE.md, Solver dispatch).
-            # numpy's floating-point RuntimeWarnings on interval data are
-            # spurious (issue #163): log F(0) = −inf at the active support row
-            # θ_b[0] = 0, plus log F of h < 0 and overflow at large γ on
-            # infeasible trial points, emitted by all three solvers.  Remove
-            # this filter once #163 is fixed.  Every other warning surfaces.
+            # numpy floating-point RuntimeWarnings are errors (issue #163): the
+            # exact −inf of log F(0) at the active support row θ_b[0] = 0, and
+            # log F / gradient overflow at infeasible trial points, must not
+            # surface on any solver.  Every other warning surfaces.
             warnings.simplefilter("ignore", ConvergenceWarning)
-            warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("error", RuntimeWarning)
             model.fit(cd)
         fits[solver] = model
     return fits
@@ -693,6 +697,23 @@ def _right_at_c(
     c = float(np.quantile(y, q))
     censored = y <= c if censored_below else y > c
     return CensoredData.right_censored(np.minimum(y, c), censored), (0.0, 1.01 * c)
+
+
+def _inspection_grid(
+    y: NDArray[np.float64], q: float
+) -> tuple[CensoredData, tuple[float, float]]:
+    """Interval-censored data at four common inspection times.
+
+    The times are the ``linspace(0, q, 5)[1:]`` quantiles of ``y``.  The
+    first interval is ``(0, t_1]`` and the last is open, ``(t_4, ∞)``.  The
+    support is ``(0, 1.01·t_4)``.
+    """
+    grid = np.quantile(y, np.linspace(0.0, q, 5)[1:])
+    k = np.searchsorted(grid, y)
+    lower = np.concatenate([[0.0], grid])[k]
+    upper = np.concatenate([grid, [np.inf]])[k]
+    support = (0.0, 1.01 * float(grid[-1]))
+    return CensoredData.interval_censored(lower, upper), support
 
 
 @pytest.fixture(scope="module")
@@ -873,14 +894,8 @@ class TestTypeICensoring:
     def test_interval_inspection_grid(self, seed: int, q: float) -> None:
         """Four common inspection times; the last interval is open, (t_4, ∞)."""
         y, x_s = _simulated(seed)
-        grid = np.quantile(y, np.linspace(0.0, q, 5)[1:])
-        k = np.searchsorted(grid, y)
-        lower = np.concatenate([[0.0], grid])[k]
-        upper = np.concatenate([grid, [np.inf]])[k]
-        cd = CensoredData.interval_censored(lower, upper)
-        fits = _fit_censored(
-            cd, x_s, (0.0, 1.01 * float(grid[-1])), CensoringType.INTERVAL
-        )
+        cd, support = _inspection_grid(y, q)
+        fits = _fit_censored(cd, x_s, support, CensoringType.INTERVAL)
         _assert_auglag_matches_reference_solvers(fits)
 
     def test_right_fixture(self, ref: dict[str, object]) -> None:
@@ -892,3 +907,140 @@ class TestTypeICensoring:
             CensoringType.RIGHT,
         )
         _assert_auglag_matches_reference_solvers(fits)
+
+
+# ---------------------------------------------------------------------------
+# No spurious numpy RuntimeWarnings on censored exponential data (issue #163)
+# ---------------------------------------------------------------------------
+
+# θ = [θ_b | γ] with θ_b[0] = 0: the support row is active, as at the MLE of
+# the inspection-grid fits.  Monotone, so the point is feasible.
+_THETA_ACTIVE_SUPPORT = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 0.3])
+# h_0 ≡ 0: every censored row has probability zero.  γ > 0 gives f_i > 1 on
+# rows with x_s,i > 0, where the capped Mills weight used to overflow.
+_THETA_ZERO_PROBABILITY = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.7])
+# θ_b[0] < 0: h(0|x_i) < 0 lies outside the support, as at an infeasible
+# SLSQP / trust-constr trial point.
+_THETA_OUTSIDE_SUPPORT = np.array([-0.5, 0.5, 1.0, 1.5, 2.0, 0.3])
+
+
+def _censored_design(
+    censoring: CensoringType,
+) -> tuple[CensoredData, NDArray[np.float64], tuple[float, float]]:
+    """Seed-0 #161 design, interval- (q = 0.8) or left-censored (median)."""
+    y, x_s = _simulated(0)
+    if censoring is CensoringType.INTERVAL:
+        cd, support = _inspection_grid(y, 0.8)
+        return cd, x_s, support
+    c = float(np.quantile(y, 0.5))
+    cd = CensoredData.left_censored(np.maximum(y, c), y < c)
+    return cd, x_s, (0.0, float(y.max()))
+
+
+def _nll_erroring_on_runtime_warnings(
+    theta: NDArray[np.float64],
+    censoring: CensoringType,
+    *,
+    gradient: bool,
+) -> float | tuple[float, NDArray[np.float64]]:
+    """NLL on :func:`_censored_design` with RuntimeWarnings raised as errors."""
+    cd, x_s, support = _censored_design(censoring)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        return negative_log_likelihood(
+            theta,
+            BernsteinBasis(order=_ORDER, support=support),
+            cd,
+            None,
+            censoring,
+            gradient=gradient,
+            base_distribution="exponential",
+            scaling=x_s,
+        )
+
+
+class TestNoSpuriousRuntimeWarnings:
+    """Censored exponential + scaling fits emit no numpy warnings (issue #163).
+
+    Two sources warned before the fix:
+
+    1. The exponential ``log F(h) = log(1 − e^{−h})``.  At ``h = 0`` it is
+       exactly ``−inf``: the lower end of an interval ``(0, t]`` once the
+       support row ``θ_b[0] ≥ 0`` is active.  At ``h < 0`` it is NaN, which
+       the likelihood turns into :class:`InfeasibleParameterError`.
+    2. The censored gradient at a zero-probability row.  The Mills weight
+       ``f(h)/P`` is capped at ``float64.max`` and overflowed once multiplied
+       by ``f_i = exp(0.5·x_s,i·γ) > 1``.  ℓ is ``−inf`` there, so that
+       gradient is never returned.
+    """
+
+    @pytest.mark.parametrize(
+        ("h", "expected"),
+        [
+            (0.0, -np.inf),
+            (-1e-3, np.nan),
+            (-1.0, np.nan),
+            (1e-300, np.log(1e-300)),
+            (1.0, np.log1p(-np.exp(-1.0))),
+        ],
+    )
+    def test_logcdf_at_support_end(self, h: float, expected: float) -> None:
+        """``log F`` is exact at and below ``h = 0`` and warns nowhere."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            out = _get_dist("exponential").logcdf(np.array([h]))
+        np.testing.assert_allclose(out, [expected], rtol=1e-12)
+
+    @pytest.mark.parametrize("gradient", [False, True])
+    def test_feasible_active_support_row(self, gradient: bool) -> None:
+        """Interval rows ``(0, t]`` at ``θ_b[0] = 0`` give a finite NLL quietly."""
+        cd, _, _ = _censored_design(CensoringType.INTERVAL)
+        assert np.any(cd.lower == 0.0)  # rows with log F(h(0|x_i)) = −inf
+        out = _nll_erroring_on_runtime_warnings(
+            _THETA_ACTIVE_SUPPORT, CensoringType.INTERVAL, gradient=gradient
+        )
+        if gradient:
+            assert isinstance(out, tuple)
+            nll, grad = out
+            assert np.all(np.isfinite(grad))
+        else:
+            assert isinstance(out, float)
+            nll = out
+        assert np.isfinite(nll)
+
+    @pytest.mark.parametrize("gradient", [False, True])
+    @pytest.mark.parametrize("censoring", [CensoringType.INTERVAL, CensoringType.LEFT])
+    def test_zero_probability_raises_quietly(
+        self, censoring: CensoringType, gradient: bool
+    ) -> None:
+        """ℓ = −inf raises :class:`InfeasibleParameterError`, with no overflow.
+
+        On the interval design both endpoints of ``(0, t]`` sit at ``h = 0``,
+        so ``_log_diff_ndtr`` also meets ``log F(a) − log F(b) = −inf − −inf``.
+        """
+        with pytest.raises(InfeasibleParameterError):
+            _nll_erroring_on_runtime_warnings(
+                _THETA_ZERO_PROBABILITY, censoring, gradient=gradient
+            )
+
+    @pytest.mark.parametrize("gradient", [False, True])
+    def test_outside_support_left_raises_quietly(self, gradient: bool) -> None:
+        """``h(c|x_i) < 0`` makes ``log F`` NaN: raises, no warning."""
+        with pytest.raises(InfeasibleParameterError):
+            _nll_erroring_on_runtime_warnings(
+                _THETA_OUTSIDE_SUPPORT, CensoringType.LEFT, gradient=gradient
+            )
+
+    @pytest.mark.parametrize("gradient", [False, True])
+    def test_outside_support_interval_is_quiet(self, gradient: bool) -> None:
+        """An infeasible SLSQP / trust-constr trial point evaluates quietly.
+
+        ``h(0|x_i) < 0`` makes ``log F(h_lo)`` NaN on the rows ``(0, t]``.  On
+        a both-finite row ``_log_diff_ndtr`` routes the NaN ratio to its
+        narrow Taylor branch, so ℓ comes back finite here instead of raising.
+        That is pre-existing behaviour outside this test's scope; only the
+        absence of RuntimeWarnings is pinned.
+        """
+        _nll_erroring_on_runtime_warnings(
+            _THETA_OUTSIDE_SUPPORT, CensoringType.INTERVAL, gradient=gradient
+        )

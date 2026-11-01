@@ -117,6 +117,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Censored fits with `base_distribution="exponential"` and `scaling=` no
+  longer emit spurious numpy `RuntimeWarning`s. Before the fix, every
+  interval-censored fit warned on all three solvers, including when the NLL
+  was evaluated at the feasible optimum. The exponential `log F` now returns
+  its exact `−inf` at `h = 0` and its NaN outside the support without a
+  warning, as the laplace branch already did. `_log_diff_ndtr` does the same
+  for the `−inf − (−inf)` ratio of a zero-width interval at `h = 0`. The
+  right-, left- and interval-censored gradients are no longer accumulated
+  once ℓ is non-finite: the gradient is undefined there, and the likelihood
+  raises `InfeasibleParameterError` instead of returning it. That removes the
+  overflow of the capped Mills weight times `f_i > 1` at zero-probability
+  rows. Overflow at a finite ℓ still warns. Fitted θ and logLik are
+  byte-identical. (#163)
 - `score(..., X_scale=...)` now includes scaling for both shift and interaction
   models. Scaled fits require an explicit scaling design, including when scoring
   training data; unscaled fits reject it. Missing or invalid designs raise

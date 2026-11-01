@@ -203,7 +203,13 @@ class DistOps:
         if kind == "max_extreme_value":
             return cast(NDArray[np.float64], -np.exp(-h))
         if kind == "exponential":
-            return cast(NDArray[np.float64], np.log(-expm1(-h)))
+            # h = 0 gives the exact log F(0) = −inf (an interval (0, t] once
+            # the support row θ_b[0] ≥ 0 is active); h < 0 lies outside the
+            # support and gives NaN, which the likelihood raises as
+            # InfeasibleParameterError and predict() flags with its own
+            # h(a|x) < 0 warning.  numpy's notices for both are noise (#163).
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return cast(NDArray[np.float64], np.log(-expm1(-h)))
         if kind == "laplace":
             with np.errstate(divide="ignore", invalid="ignore"):
                 return cast(
@@ -460,7 +466,11 @@ def _log_diff_ndtr(
 
     log_Fa = _logcdf(a)  # log F(a)
     log_Fb = _logcdf(b)  # log F(b)
-    ratio = log_Fa - log_Fb  # <= 0  (since a <= b)
+    # ratio <= 0 (since a <= b).  When F(b) = 0 (exponential, a = b = 0 at
+    # the support end) it is −inf − (−inf) = NaN; the NaN fails the `wide`
+    # test below, and the narrow branch returns the exact log P = −inf.
+    with np.errstate(invalid="ignore"):
+        ratio = log_Fa - log_Fb
 
     # Wide-interval path: ratio well below 0 → log1p stable
     ratio_safe = np.minimum(ratio, _LOG_DIFF_NDTR_RATIO_CAP)
@@ -794,6 +804,31 @@ def _add_grad_censored(
         grad[p : p + q_d] += X_c.T @ weight
     if scaling_c is not None and f_c is not None:
         grad[p + q_d :] += 0.5 * (scaling_c.T @ (weight * h0_c * f_c))
+
+
+def _finish_censored_grad(
+    ll: np.float64, grad: NDArray[np.float64] | None
+) -> NDArray[np.float64] | None:
+    """Return a censored kernel's ``grad``, all-NaN when ``ll`` is non-finite.
+
+    The censored kernels accumulate a sub-group's gradient block only while
+    the running log-likelihood ``ll`` is finite (``grad is not None and
+    np.isfinite(ll)``).  A non-finite ℓ comes from a zero-probability
+    censored row (``log P = −inf``) or an ``h`` outside the base
+    distribution's support (``NaN``).  The gradient is undefined there, and
+    :func:`_negative_log_likelihood_from_dist` raises
+    :class:`InfeasibleParameterError` instead of returning it.  Skipping the
+    block also avoids evaluating it: with ``P = 0`` the Mills weight
+    ``f(h)/P`` is capped at ``float64.max``, and multiplying it by a scaling
+    factor ``f_i > 1`` overflows (issue #163).  Overflow at a finite ℓ is not
+    skipped and still warns.
+
+    Once a block was skipped the partial sum is not a gradient, so it is
+    filled with NaN: no caller can read it as one.
+    """
+    if grad is not None and not np.isfinite(ll):
+        grad.fill(np.nan)
+    return grad
 
 
 def _shift(
@@ -1764,13 +1799,13 @@ def _ll_and_grad_right(
             ll += np.dot(w_c, logsf_c)
         else:
             ll += np.sum(logsf_c)
-        if grad is not None:
+        if grad is not None and np.isfinite(ll):  # see _finish_censored_grad
             log_hazard = dist.logpdf(h_c) - logsf_c
             hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
             whazard = hazard if w_c is None else w_c * hazard
             _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, whazard, p, q_d)
 
-    return ll, grad
+    return ll, _finish_censored_grad(ll, grad)
 
 
 def _ll_and_grad_left(
@@ -1827,12 +1862,12 @@ def _ll_and_grad_left(
             ll += np.dot(w_c, log_Fc)
         else:
             ll += np.sum(log_Fc)
-        if grad is not None:
+        if grad is not None and np.isfinite(ll):  # see _finish_censored_grad
             inv_mills = np.exp(np.minimum(dist.logpdf(h_c) - log_Fc, _LOG_FLOAT_MAX))
             winv = inv_mills if w_c is None else w_c * inv_mills
             _add_grad_censored(grad, B_c, X_c, S_c, f_c, h0_c, -winv, p, q_d)
 
-    return ll, grad
+    return ll, _finish_censored_grad(ll, grad)
 
 
 def _ll_and_grad_interval(
@@ -1903,7 +1938,7 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_b, log_p_b)
             else:
                 ll += np.sum(log_p_b)
-            if grad is not None:
+            if grad is not None and np.isfinite(ll):  # see _finish_censored_grad
                 w_hi_b, w_lo_b = _pair_density_weights(h_lo_b, h_hi_b, log_p_b, dist)
                 if ww_b is not None:
                     w_hi_b = ww_b * w_hi_b
@@ -1930,7 +1965,7 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_o, log_Fc)
             else:
                 ll += np.sum(log_Fc)
-            if grad is not None:
+            if grad is not None and np.isfinite(ll):  # see _finish_censored_grad
                 inv_mills = np.exp(
                     np.minimum(dist.logpdf(h_hi_o) - log_Fc, _LOG_FLOAT_MAX)
                 )
@@ -1953,14 +1988,14 @@ def _ll_and_grad_interval(
                 ll += np.dot(ww_o, logsf_o)
             else:
                 ll += np.sum(logsf_o)
-            if grad is not None:
+            if grad is not None and np.isfinite(ll):  # see _finish_censored_grad
                 log_hazard = dist.logpdf(h_lo_o) - logsf_o
                 hazard = np.exp(np.minimum(log_hazard, _LOG_FLOAT_MAX))
                 if ww_o is not None:
                     hazard = ww_o * hazard
                 _add_grad_censored(grad, B_lo_o, X_o, S_o, f_o, h0_lo_o, hazard, p, q_d)
 
-    return ll, grad
+    return ll, _finish_censored_grad(ll, grad)
 
 
 # ---------------------------------------------------------------------------
