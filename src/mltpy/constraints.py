@@ -222,18 +222,81 @@ class ConstraintMatrices:
     d_eq: NDArray[np.float64]
 
 
+def _validate_support_offset(
+    offset: NDArray[np.float64] | None, n_rows: int | None
+) -> NDArray[np.float64] | None:
+    """Validate the per-observation offset that shifts the support rows.
+
+    Parameters
+    ----------
+    offset:
+        Per-observation offset, any shape that ravels to ``(n,)``, or ``None``.
+    n_rows:
+        Required length (number of rows of ``X``), or ``None`` when there are
+        no covariate rows to match (the single no-covariate support row), in
+        which case any non-empty length is accepted.
+
+    Returns
+    -------
+    NDArray of shape ``(n,)`` or None
+        The offset as a flat ``float64`` array, or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If ``offset`` has the wrong length, is empty, or is not finite.
+    """
+    if offset is None:
+        return None
+    off = np.asarray(offset, dtype=np.float64).ravel()
+    if n_rows is not None and off.shape[0] != n_rows:
+        raise ValueError(
+            f"offset must have one entry per row of X ({n_rows}); got {off.shape[0]}."
+        )
+    if off.shape[0] == 0:
+        raise ValueError(
+            "offset must have at least one entry when nonneg_lower=True; "
+            "got an empty array."
+        )
+    if not np.all(np.isfinite(off)):
+        raise ValueError(
+            "offset must be finite to define the exponential support rows "
+            "h(a|x_i) >= 0; got NaN or infinite entries."
+        )
+    return off
+
+
+def _single_row_rhs(offset: NDArray[np.float64] | None) -> NDArray[np.float64]:
+    """Right-hand side of the no-covariate row ``θ_b[0] ≥ max_i(−offset_i)``.
+
+    Parameters
+    ----------
+    offset:
+        Validated per-observation offset, or ``None`` (right-hand side 0).
+
+    Returns
+    -------
+    NDArray of shape ``(1,)``
+    """
+    if offset is None:
+        return np.zeros(1, dtype=np.float64)
+    return np.array([float(np.max(-offset))], dtype=np.float64)
+
+
 def _assemble_constraint_arrays(
     n_params: int,
     *,
     total_params: int | None,
     nonneg_lower: bool,
     X: NDArray[np.float64] | None,
-) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    offset: NDArray[np.float64] | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None, NDArray[np.float64] | None]:
     """Build the inequality rows shared by both constraint builders.
 
     Returns the padded monotonicity matrix ``D`` (shape
-    ``(n_params-1, total)``) and the optional support-feasibility rows
-    ``support_rows`` (shape ``(n_rows, total)`` or ``None``).  This is the
+    ``(n_params-1, total)``), the optional support-feasibility rows
+    ``support_rows`` (shape ``(n_rows, total)`` or ``None``) and their
+    right-hand side ``support_rhs`` (shape ``(n_rows,)`` or ``None``).  This is the
     block that :func:`build_constraints` and :func:`build_constraint_matrices`
     previously duplicated character-for-character; both now consume its output
     — :func:`build_constraints` keeps ``D`` and ``support_rows`` as separate
@@ -255,6 +318,10 @@ def _assemble_constraint_arrays(
     X:
         Covariate matrix, shape ``(n, q)``.  Only consulted when
         ``nonneg_lower=True``.
+    offset:
+        Per-observation offset, shape ``(n,)``, or ``None``.  Only consulted
+        when ``nonneg_lower=True``; it sets the support right-hand side (see
+        Notes).
 
     Returns
     -------
@@ -263,13 +330,27 @@ def _assemble_constraint_arrays(
     support_rows : NDArray of shape ``(n_rows, total)`` or None
         Support-feasibility inequality rows, or ``None`` when
         ``nonneg_lower=False``.
+    support_rhs : NDArray of shape ``(n_rows,)`` or None
+        Right-hand side ``b`` of ``support_rows @ θ ≥ b``: ``−offset`` per
+        observation (zeros without an offset), or ``None`` when
+        ``nonneg_lower=False``.
 
     Raises
     ------
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
-        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted.
+        ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted, or if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``.
+
+    Notes
+    -----
+    ADR 0005 Decision 1 requires ``h(a|x_i) ≥ 0`` for every training row,
+    with ``h`` the transformation as the likelihood evaluates it, offset
+    included: ``h(a|x_i) = θ_b[0] + x_i·β + offset_i`` (issue #160).  With
+    covariates that is one row ``[1, 0, …, 0 | x_i]·θ ≥ −offset_i`` per
+    observation.  Without covariates the rows all read ``θ_b[0] ≥ −offset_i``
+    and collapse to the single row ``θ_b[0] ≥ max_i(−offset_i)``.
     """
     total = total_params if total_params is not None else n_params
     D = MonotonicityConstraint(n_params).as_matrix()  # (n_params-1, n_params)
@@ -280,6 +361,7 @@ def _assemble_constraint_arrays(
     # Support-feasibility rows.  No covariates: one row [1, 0, ..., 0].
     # With covariates: n rows [1, 0, ..., 0 | X_i].
     support_rows: NDArray[np.float64] | None = None
+    support_rhs: NDArray[np.float64] | None = None
     if nonneg_lower:
         if X is None:
             if total > n_params:
@@ -290,6 +372,7 @@ def _assemble_constraint_arrays(
                 )
             support_rows = np.zeros((1, total), dtype=np.float64)
             support_rows[0, 0] = 1.0
+            support_rhs = _single_row_rhs(_validate_support_offset(offset, None))
         else:
             X_arr = np.asarray(X, dtype=np.float64)
             if X_arr.ndim != 2:
@@ -305,16 +388,21 @@ def _assemble_constraint_arrays(
                     f"X has {X_arr.shape[1]} columns but total_params - "
                     f"n_params = {total - n_params}"
                 )
+            off = _validate_support_offset(offset, X_arr.shape[0])
             if X_arr.shape[1] == 0:
                 support_rows = np.zeros((1, total), dtype=np.float64)
                 support_rows[0, 0] = 1.0
+                support_rhs = _single_row_rhs(off)
             else:
                 n_obs = X_arr.shape[0]
                 support_rows = np.zeros((n_obs, total), dtype=np.float64)
                 support_rows[:, 0] = 1.0
                 support_rows[:, n_params:] = X_arr
+                support_rhs = (
+                    -off if off is not None else np.zeros(n_obs, dtype=np.float64)
+                )
 
-    return D, support_rows
+    return D, support_rows, support_rhs
 
 
 def _interaction_support_rows(
@@ -502,6 +590,7 @@ def build_constraint_matrices(
     total_params: int | None = None,
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> ConstraintMatrices:
     """Build constraint matrices for the augmented Lagrangian solver.
 
@@ -532,20 +621,28 @@ def build_constraint_matrices(
         the ``nonneg_lower`` branch of :func:`build_constraints`:
 
         * No covariates (``X is None``): a single row ``[1, 0, …, 0]``
-          enforcing ``θ_b[0] ≥ 0``.
+          enforcing ``θ_b[0] ≥ max_i(−offset_i)`` (``θ_b[0] ≥ 0`` without an
+          offset).
         * With covariates: one row ``[1, 0, …, 0 | X_i]`` per observation,
-          enforcing ``θ_b[0] + X_i · β ≥ 0``.
+          enforcing ``θ_b[0] + X_i · β ≥ −offset_i``.
 
     X:
         Covariate matrix, shape ``(n, q)``.  Only consulted when
         ``nonneg_lower=True``; ``q`` must equal ``total_params - n_params``.
+    offset:
+        Optional per-observation offset, shape ``(n,)``.  Only consulted when
+        ``nonneg_lower=True``; it moves the support-row right-hand side to
+        ``−offset_i`` so the rule covers ``h(a|x_i) = θ_b[0] + X_i·β +
+        offset_i`` as the likelihood evaluates it (ADR 0005 Decision 1,
+        issue #160).  ``None`` leaves the right-hand side at zero.
 
     Returns
     -------
     ConstraintMatrices
         ``A_ineq`` is the padded forward-difference matrix D (shape
         ``(n_params-1, total_params)``) optionally followed by the support
-        rows; ``b_ineq`` is all-zeros.  ``C_eq`` has 0, 1, or 2 rows
+        rows; ``b_ineq`` is zero on the monotonicity rows and ``−offset``
+        (or zero) on the support rows.  ``C_eq`` has 0, 1, or 2 rows
         depending on which of ``lower``/``upper`` are provided; ``d_eq``
         carries the corresponding right-hand-side values.
 
@@ -553,20 +650,38 @@ def build_constraint_matrices(
     ------
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
-        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted.
+        ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted, or if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> cm = build_constraint_matrices(
+    ...     3,
+    ...     total_params=4,
+    ...     nonneg_lower=True,
+    ...     X=np.array([[0.0], [1.0]]),
+    ...     offset=np.array([0.5, -0.25]),
+    ... )
+    >>> cm.b_ineq.tolist()
+    [0.0, 0.0, -0.5, 0.25]
     """
     total = total_params if total_params is not None else n_params
-    D, support_rows = _assemble_constraint_arrays(
-        n_params, total_params=total_params, nonneg_lower=nonneg_lower, X=X
+    D, support_rows, support_rhs = _assemble_constraint_arrays(
+        n_params,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        X=X,
+        offset=offset,
     )
 
-    if support_rows is not None:
+    b_ineq = np.zeros(D.shape[0], dtype=np.float64)
+    if support_rows is not None and support_rhs is not None:
         A_ineq = np.vstack([D, support_rows])
+        b_ineq = np.concatenate([b_ineq, support_rhs])
     else:
         A_ineq = D
-
-    m_ineq = A_ineq.shape[0]
 
     # Boundary equality rows.  Mirrors BoundaryConstraint: a single row per
     # active side picking out θ[0] (lower) or θ[n_params-1] (upper).
@@ -591,7 +706,7 @@ def build_constraint_matrices(
 
     return ConstraintMatrices(
         A_ineq=A_ineq,
-        b_ineq=np.zeros(m_ineq, dtype=np.float64),
+        b_ineq=b_ineq,
         C_eq=C_eq,
         d_eq=d_eq,
     )
@@ -612,6 +727,7 @@ def build_constraints(
     total_params: int | None = None,
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> list[dict[str, Any]]: ...
 
 
@@ -625,6 +741,7 @@ def build_constraints(
     total_params: int | None = None,
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> list[LinearConstraint]: ...
 
 
@@ -637,6 +754,7 @@ def build_constraints(
     total_params: int | None = None,
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
+    offset: NDArray[np.float64] | None = None,
 ) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
@@ -683,28 +801,59 @@ def build_constraints(
           ``X``, making the training fit feasible under the exponential
           support.
 
+        With an ``offset`` the rule covers ``h(a|x_i) = theta_b[0] + X_i·β
+        + offset_i`` (ADR 0005 Decision 1, issue #160): the rows become
+        ``theta_b[0] + X_i · β >= −offset_i``, and without covariates the
+        single row becomes ``theta_b[0] >= max_i(−offset_i)``.  The SLSQP
+        dict returns ``S @ theta − b`` and the ``LinearConstraint`` uses
+        ``lb = b``.
+
         Kept distinct from ``lower`` because ``lower`` is an *equality* that
         pins ``theta[0]``.
     X:
         Optional covariate matrix of shape ``(n, q)``.  Only consulted when
         ``nonneg_lower=True`` — see above.  ``q`` must equal
         ``total_params - n_params``.
+    offset:
+        Optional per-observation offset, shape ``(n,)``.  Only consulted when
+        ``nonneg_lower=True`` — see above.  ``None`` leaves the support
+        right-hand side at zero.
 
     Raises
     ------
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
-        ``total_params - n_params``, or if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted.
+        ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
+        but ``total_params`` is omitted, or if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``.
 
     Returns
     -------
     list[dict] for ``solver="slsqp"``, list[LinearConstraint] for
     ``solver="trust-constr"``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> cons = build_constraints(
+    ...     3,
+    ...     solver="slsqp",
+    ...     total_params=4,
+    ...     nonneg_lower=True,
+    ...     X=np.array([[0.0], [1.0]]),
+    ...     offset=np.array([0.5, -0.25]),
+    ... )
+    >>> theta = np.array([0.25, 0.5, 1.0, 0.0])  # [θ_b | β]
+    >>> cons[1]["fun"](theta).tolist()  # h(a|x_i) = θ_b[0] + x_i·β + offset_i
+    [0.75, 0.0]
     """
     total = total_params if total_params is not None else n_params
-    D, support_rows = _assemble_constraint_arrays(
-        n_params, total_params=total_params, nonneg_lower=nonneg_lower, X=X
+    D, support_rows, support_rhs = _assemble_constraint_arrays(
+        n_params,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        X=X,
+        offset=offset,
     )
 
     if solver == "slsqp":
@@ -715,11 +864,13 @@ def build_constraints(
                 "jac": lambda theta, _D=D: _D,
             }
         ]
-        if support_rows is not None:
+        if support_rows is not None and support_rhs is not None:
             result.append(
                 {
                     "type": "ineq",
-                    "fun": lambda theta, _S=support_rows: _S @ theta,
+                    "fun": lambda theta, _S=support_rows, _b=support_rhs: (
+                        _S @ theta - _b
+                    ),
                     "jac": lambda theta, _S=support_rows: _S,
                 }
             )
@@ -732,8 +883,8 @@ def build_constraints(
 
     else:  # trust-constr
         lcs: list[LinearConstraint] = [LinearConstraint(D, lb=0.0, ub=np.inf)]
-        if support_rows is not None:
-            lcs.append(LinearConstraint(support_rows, lb=0.0, ub=np.inf))
+        if support_rows is not None and support_rhs is not None:
+            lcs.append(LinearConstraint(support_rows, lb=support_rhs, ub=np.inf))
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(
                 n_params, lower=lower, upper=upper, total_params=total

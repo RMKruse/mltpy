@@ -277,10 +277,10 @@ x-basis being a non-negative partition of unity) makes every support row
 feasible.
 
 **Offset.** These rows include the offset in their right-hand side, so they
-enforce exactly `h(a|x_i) ≥ 0` with `h` as the likelihood evaluates it. The
-shift path's `nonneg_lower` rows `θ_b[0] + x_d,i · β ≥ 0` currently do not
-include the offset; that difference only matters for fits with a non-zero
-`offset` and is left to a follow-up; it is out of scope for #158.
+enforce exactly `h(a|x_i) ≥ 0` with `h` as the likelihood evaluates it. At
+the time, the shift path's `nonneg_lower` rows `θ_b[0] + x_d,i · β ≥ 0` did not
+include the offset; that was left out of scope for #158 and closed by the
+[#160 amendment](#amendment-2026-11-01-160--offset-on-the-shift-path) below.
 
 **Rejected — the per-column variant `Θ[0, j] ≥ 0` (`q` rows).** Because
 `h(a|x) = Σ_j Θ[0, j] b_j(x)` is a convex combination of `Θ[0, :]`, these rows
@@ -315,6 +315,65 @@ scaling the row is non-linear in `γ`.
 
 ---
 
+## Amendment (2026-11-01, [#160](https://github.com/RMKruse/mltpy/issues/160)) — Offset on the Shift Path
+
+**Problem.** Decision 1's `h` is the transformation as the likelihood
+evaluates it, so on the unscaled shift path
+`h(a|x_i) = θ_b[0] + x_d,i · β + offset_i`. The shift-path `nonneg_lower` rows
+were `[1, 0, …, 0 | x_d,i] · θ ≥ 0` with a zero right-hand side, i.e. they
+enforced `θ_b[0] + x_d,i · β ≥ 0` without the offset. A negative offset left
+the support on every training row: logLik was inflated by the smooth
+extension `log f = −h`, and the in-sample CDF at `a` was negative while the
+fit reported `converged=True`. A positive offset over-constrained the fit,
+pinning it at `h(a|x_i) = offset_i` with a spurious atom of mass
+`1 − e^{−offset_i}` at `a`.
+
+**Decision.** The shift-path support rows take the offset into their
+right-hand side, matching the interaction rows of #158:
+
+    θ_b[0] + x_d,i · β ≥ −offset_i,    i = 1, …, n;
+
+without covariates they collapse to the single row
+`θ_b[0] ≥ max_i(−offset_i)`. `_assemble_constraint_arrays` returns the
+right-hand side next to the rows, and `build_constraint_matrices` /
+`build_constraints` accept `offset=`. auglag consumes `b_ineq`, the SLSQP
+dict returns `S θ − b`, and trust-constr uses `lb = b`. The `fixed_params`
+reductions carry the non-zero right-hand side through unchanged. The start
+point and every perturb-and-project restart lift `θ_b[0]` to
+`max(0, max_i(−offset_i))`, which makes every row feasible at `β = 0`. The
+auglag Newton-CG polish now checks `A_ineq θ ≥ b_ineq` (support rows
+included) instead of monotonicity alone. With `offset=None` the right-hand
+side is zero and the lift is the old `θ_b[0] ≥ 0`, so existing fits are
+unchanged.
+
+**Validation.** R `mlt` has no support rule (Decision 1), so the reference
+(`reference/mlt_exponential_offset_*`, generated in
+`reference/generate_reference.R`) is an explicit-constraint
+`alabama::auglag` fit on mlt's likelihood (checked against `mlt`'s
+`loglik`/`scorei` with `offset=`) with `hin` rows
+`θ_b[0] + x_i · β + offset_i ≥ 0` and `D θ_b ≥ 0`. It uses 10 feasible
+starts and is then polished by equality-constrained Newton on the common
+active set (stationarity ~1e-14). The fixture is cross-checked
+independently: with `θ_b = θ_0 + (0, δ)` the problem separates into an LP in
+`(θ_0, β)`, whose solution is the upper-hull edge of the points
+`(x_i, −offset_i)`, and the no-covariate problem in `δ`, solved by
+`mlt(fixed = c("Bs1(y)" = 0))`. `tests/test_exponential_offset_support.py`
+compares all three solvers with it. It also covers the issue's
+reproduction (a constant offset shifts `θ_b` by exactly `−offset` at
+unchanged logLik), the no-covariate row, `offset=None` / zero parity,
+`fixed_params`, and silence of the #157 warning in-sample.
+
+**Solver note.** A constant offset, like `offset=None`, makes every support
+row active at the optimum (`β = 0`). This is a fully degenerate active set.
+auglag resolves it to ~1e-9. trust-constr stops with ~1e-6 interior slack,
+and SLSQP can end on its line-search failure (reported `converged=False`).
+
+**Scaled shift path (future).** When scaling + exponential lands (Decision 2),
+the nonlinear rows need the same right-hand side:
+`g_i(θ) = θ_b[0] · f_i + x_d,i · β ≥ −offset_i`.
+
+---
+
 ## Consequences
 
 - **ADR 0002 Decision 3 is superseded** for its exponential corner case. Its
@@ -327,7 +386,9 @@ scaling the row is non-linear in `γ`.
 - **Unscaled exponential path:** no code change. Decision 1 ratifies the
   existing `nonneg_lower` rows. The unscaled `InteractionBasis` path gained
   the equivalent rows in [#158](https://github.com/RMKruse/mltpy/issues/158)
-  (see the amendment above).
+  (see the amendment above), and
+  [#160](https://github.com/RMKruse/mltpy/issues/160) moved the shift-path
+  rows' right-hand side to `−offset_i`.
 - **Prediction at new `x`.** The training rows guarantee `h(a | x) ≥ 0` only
   at training `x`. Unscaled, that extends to the convex hull of training `X`.
   Scaled, `θ_b[0] · e^{0.5 · x_s · γ} + x_d · β` is convex in `x_s` whenever

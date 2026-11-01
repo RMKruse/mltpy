@@ -434,6 +434,189 @@ writeLines(format(ll_exp, digits = 15),
 cat(sprintf("Exponential: n=%d, ll=%.6f\n", length(y_exp), ll_exp))
 
 # ---------------------------------------------------------------------------
+# exponential + shift covariate + offset reference (issue #160)
+#
+# Model: todistr = "Exponential", order-3 Bernstein on (0, 1) in y, one linear
+# shift term x (h(y|x) = a(y)'theta_b + x * beta + offset, mlt's default
+# positive sign), exact data, per-row offset.  Writes:
+#   mlt_exponential_offset_y.txt      — 200 responses on (0.05, 0.95)
+#   mlt_exponential_offset_x.txt      — 200 covariate values on (0, 1)
+#   mlt_exponential_offset_offset.txt — 200 per-row offsets (N(0, 0.3^2))
+#   mlt_exponential_offset_theta.txt  — c(theta_b (4), beta (1))
+#   mlt_exponential_offset_ll.txt     — mlt's own loglik at theta
+#
+# The fixture checks that mltpy's support rows include the offset (ADR 0005
+# Decision 1): h(a | x_i) = theta_b[0] + x_i * beta + offset_i >= 0 for every
+# training row.  R mlt itself has no support rule, so, as for the
+# no-covariate exponential fixture above (#156), the reference is an
+# explicit-constraint alabama::auglag fit on mlt's likelihood with those rows
+# written out, multi-started from feasible points.
+#
+# Cross-check (independent of auglag): with theta_b = theta_0 + (0, delta)
+# the problem separates.  h'(y) depends on delta only, the support rows on
+# (theta_0, beta) only, and the objective's (theta_0, beta) part is the
+# linear term n * theta_0 + beta * sum(x).  So
+#   * (theta_0, beta) solves the LP  min n*theta_0 + beta*sum(x)  subject to
+#     theta_0 + x_i*beta >= -offset_i: the upper-hull edge of the points
+#     (x_i, -offset_i) above mean(x), found by enumerating point pairs;
+#   * delta is the no-covariate exponential problem at theta_0 = 0, solved by
+#     plain mlt(fixed = c("Bs1(y)" = 0)) on y alone.
+# ---------------------------------------------------------------------------
+
+set.seed(160)
+n_eo   <- 200L
+x_eo   <- runif(n_eo, 0, 1)
+y_eo   <- runif(n_eo, 0.05, 0.95)
+off_eo <- rnorm(n_eo, 0, 0.3)
+d_eo   <- data.frame(y = y_eo, x = x_eo)
+w_eo   <- rep(1, n_eo)
+
+m_eo  <- numeric_var("y", support = c(0, 1), bounds = c(0, 1))
+b_eo  <- Bernstein_basis(m_eo, order = 3, ui = "increasing")
+sh_eo <- as.basis(~ x, data = d_eo, remove_intercept = TRUE)
+ctm_eo <- ctm(b_eo, shifting = sh_eo, todistr = "Exponential")
+mlt_eo <- mlt(ctm_eo, data = d_eo, offset = off_eo, dofit = FALSE)
+p_eo   <- 4L
+
+B_eo  <- model.matrix(b_eo, data = d_eo)
+Bp_eo <- model.matrix(b_eo, data = d_eo, deriv = c(y = 1L))
+h_eo  <- function(th) drop(B_eo %*% th[1:p_eo]) + x_eo * th[p_eo + 1L] + off_eo
+nll_eo <- function(th) sum(h_eo(th)) - sum(log(Bp_eo %*% th[1:p_eo]))
+grad_eo <- function(th) c(
+  colSums(B_eo) - colSums(Bp_eo / drop(Bp_eo %*% th[1:p_eo])),
+  sum(x_eo)
+)
+
+# Constraint rows, hin(theta) = A theta - b >= 0: support rows
+# theta_b[0] + x_i beta >= -offset_i, then monotonicity D theta_b >= 0.
+A_eo <- rbind(
+  cbind(1, matrix(0, n_eo, p_eo - 1L), x_eo),
+  cbind(diff(diag(p_eo)), 0)
+)
+b_eo_rhs <- c(-off_eo, rep(0, p_eo - 1L))
+
+th_chk_eo <- c(1, 1.5, 2, 4, 0.3)
+stopifnot(
+  abs(nll_eo(th_chk_eo) + mlt_eo$loglik(th_chk_eo, weights = w_eo)) < 1e-10,
+  max(abs(grad_eo(th_chk_eo) +
+          colSums(mlt_eo$scorei(th_chk_eo, weights = w_eo)))) < 1e-10
+)
+
+set.seed(2160)
+feasible_start_eo <- function(beta) {
+  steps <- cumsum(c(0, rexp(p_eo - 1L)))
+  th0 <- max(-off_eo - x_eo * beta) + runif(1, 0.01, 1)
+  c(th0 + steps, beta)
+}
+starts_eo <- c(
+  list(c(max(-off_eo) + 0.1 + seq(0, 1, length.out = p_eo), 0)),
+  lapply(runif(9, -1, 1), feasible_start_eo)
+)
+fits_eo <- lapply(starts_eo, function(s) suppressWarnings(alabama::auglag(
+  par = s, fn = nll_eo, gr = grad_eo,
+  hin = function(th) drop(A_eo %*% th) - b_eo_rhs,
+  hin.jac = function(th) A_eo,
+  control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500L,
+                       method = "BFGS", kkt2.check = FALSE),
+  control.optim = list(maxit = 5000L, reltol = 1e-15)
+)))
+conv_eo  <- vapply(fits_eo, `[[`, integer(1), "convergence")
+value_eo <- vapply(fits_eo, `[[`, numeric(1), "value")
+TH_eo    <- t(vapply(fits_eo, `[[`, numeric(p_eo + 1L), "par"))
+spread_eo <- max(apply(TH_eo, 2, function(z) diff(range(z))))
+# Every start converges to the same active set.  (theta_0, beta) sit on an
+# LP vertex and agree tightly; the smooth delta block is flat along
+# theta_b[3], where BFGS stops ~1e-5 early (cf. #156), hence step 2.
+act_by_start <- lapply(seq_len(nrow(TH_eo)), function(k)
+  which(drop(A_eo %*% TH_eo[k, ]) - b_eo_rhs < 1e-6))
+stopifnot(all(conv_eo == 0L), diff(range(value_eo)) < 1e-6,
+          max(apply(TH_eo[, c(1L, p_eo + 1L)], 2, function(z) diff(range(z)))) < 1e-7,
+          all(vapply(act_by_start, identical, logical(1), act_by_start[[1L]])))
+act_eo   <- act_by_start[[1L]]
+A_act_eo <- A_eo[act_eo, , drop = FALSE]
+b_act_eo <- b_eo_rhs[act_eo]
+
+# Step 2: equality-constrained Newton on that active set, from the best start.
+# theta = theta_p + Z u with A_act Z = 0 and A_act theta_p = b_act.  The
+# Hessian of the nll is Bp' diag(1 / (Bp theta_b)^2) Bp on the theta_b block
+# (zero on beta); Z' H Z is positive definite because the active support rows
+# pin theta_0 and beta.
+hess_eo <- function(th) {
+  hp <- drop(Bp_eo %*% th[1:p_eo])
+  H  <- matrix(0, p_eo + 1L, p_eo + 1L)
+  H[1:p_eo, 1:p_eo] <- crossprod(Bp_eo / hp)
+  H
+}
+qr_act <- qr(t(A_act_eo))
+Z_eo   <- qr.Q(qr_act, complete = TRUE)[, -seq_len(nrow(A_act_eo)), drop = FALSE]
+theta_eo <- TH_eo[which.min(value_eo), ]
+theta_eo <- theta_eo - drop(qr.solve(A_act_eo, drop(A_act_eo %*% theta_eo) - b_act_eo))
+for (it in 1:50) {
+  zg <- drop(crossprod(Z_eo, grad_eo(theta_eo)))
+  if (max(abs(zg)) < 1e-12) break
+  theta_eo <- theta_eo - drop(Z_eo %*% solve(crossprod(Z_eo, hess_eo(theta_eo) %*% Z_eo), zg))
+}
+names(theta_eo) <- names(coef(mlt_eo))
+ll_eo <- mlt_eo$loglik(theta_eo, weights = w_eo)
+dpolish_eo <- max(abs(theta_eo - TH_eo[which.min(value_eo), ]))
+
+# KKT at the polished point: g = A_act' lambda with lambda > 0 on the active
+# rows, every row feasible, and no worse than any auglag start.
+g_eo     <- grad_eo(theta_eo)
+slack_eo <- drop(A_eo %*% theta_eo) - b_eo_rhs
+lam_eo   <- qr.solve(t(A_act_eo), g_eo)
+stat_eo  <- max(abs(g_eo - drop(t(A_act_eo) %*% lam_eo)))
+stopifnot(all(lam_eo > 1e-3), stat_eo < 1e-9, all(slack_eo > -1e-12),
+          identical(which(slack_eo < 1e-8), act_eo),
+          nll_eo(theta_eo) <= min(value_eo) + 1e-10,
+          # two support rows (an upper-hull edge) are active
+          sum(act_eo <= n_eo) == 2L)
+
+# Cross-check 1: (theta_0, beta) is the LP vertex.
+pairs_eo <- t(combn(n_eo, 2L))
+best_lp  <- c(Inf, NA, NA)
+for (k in seq_len(nrow(pairs_eo))) {
+  i <- pairs_eo[k, 1L]; j <- pairs_eo[k, 2L]
+  bt <- (off_eo[i] - off_eo[j]) / (x_eo[j] - x_eo[i])
+  t0 <- -off_eo[i] - x_eo[i] * bt
+  if (all(t0 + x_eo * bt >= -off_eo - 1e-12)) {
+    obj <- n_eo * t0 + bt * sum(x_eo)
+    if (obj < best_lp[1L]) best_lp <- c(obj, t0, bt)
+  }
+}
+dlp_eo <- max(abs(theta_eo[c(1L, p_eo + 1L)] - best_lp[2:3]))
+
+# Cross-check 2: delta from plain mlt on y alone with Bs1 pinned at 0.
+ctm_eo0 <- ctm(b_eo, todistr = "Exponential")
+fit_eo0 <- mlt(ctm_eo0, data = d_eo["y"], fixed = c("Bs1(y)" = 0),
+               optim = mltoptim(abstol = 1e-12, reltol = 1e-12))
+ddelta_eo <- max(abs((theta_eo[1:p_eo] - theta_eo[1L]) - coef(fit_eo0)))
+stopifnot(fit_eo0$convergence == 0, dlp_eo < 1e-10, ddelta_eo < 1e-6)
+
+cat(sprintf(paste0(
+  "Exponential + offset: %d/%d auglag starts converged, theta spread %.1e, ",
+  "Newton polish moved theta %.1e; active rows {%s}, multipliers {%s}, ",
+  "stationarity %.1e; LP |d(theta_0, beta)| %.1e; ",
+  "mlt(fixed Bs1 = 0) |d delta| %.1e\n"),
+  sum(conv_eo == 0L), length(conv_eo), spread_eo, dpolish_eo,
+  paste(act_eo, collapse = ", "), paste(sprintf("%.4g", lam_eo), collapse = ", "),
+  stat_eo, dlp_eo, ddelta_eo))
+
+writeLines(format(y_eo, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_offset_y.txt"))
+writeLines(format(x_eo, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_offset_x.txt"))
+writeLines(format(off_eo, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_offset_offset.txt"))
+writeLines(format(theta_eo, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_offset_theta.txt"))
+writeLines(format(ll_eo, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_offset_ll.txt"))
+
+cat(sprintf("Exponential + offset: n=%d, ll=%.10f, theta = %s\n", n_eo, ll_eo,
+            paste(sprintf("%.8f", theta_eo), collapse = ", ")))
+
+# ---------------------------------------------------------------------------
 # Lm (normal linear regression as a CTM) reference
 #
 # tram::Lm with order=1 Bernstein + normal base is equivalent to classical

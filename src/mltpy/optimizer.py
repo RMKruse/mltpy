@@ -641,6 +641,7 @@ def _perturb_and_project(
     rng: np.random.Generator,
     scale: float = 0.1,
     nonneg_lower: bool = False,
+    support_floor: float = 0.0,
 ) -> NDArray[np.float64]:
     """Perturb the current parameter vector randomly and re-project to a feasible state.
 
@@ -660,8 +661,14 @@ def _perturb_and_project(
     scale : float, default=0.1
         Scale (standard deviation) of the normal noise added.
     nonneg_lower : bool, default=False
-        If True, shift the projected coefficients so ``theta_b[0] >= 0``
-        (needed when ``base_distribution="exponential"``).
+        If True, shift the projected coefficients in parallel so
+        ``theta_b[0] >= support_floor`` (needed when
+        ``base_distribution="exponential"``).
+    support_floor : float, default=0.0
+        Lower bound for ``theta_b[0]`` under ``nonneg_lower``:
+        ``max(0, max_i(−offset_i))`` from :func:`_support_floor`.  With
+        ``β = 0`` (the default start) it makes every exponential support row
+        ``theta_b[0] + x_i·β ≥ −offset_i`` feasible (issue #160).
 
     Returns
     -------
@@ -670,11 +677,43 @@ def _perturb_and_project(
     """
     theta_b = theta[:n_params] + rng.normal(0.0, scale, size=n_params)
     theta_b = _project_to_feasible(theta_b)
-    if nonneg_lower and theta_b[0] < 0.0:
-        theta_b = theta_b - theta_b[0]
+    if nonneg_lower and theta_b[0] < support_floor:
+        theta_b = theta_b - theta_b[0] + support_floor
     if len(theta) > n_params:
         return cast(NDArray[np.float64], np.concatenate([theta_b, theta[n_params:]]))
     return theta_b
+
+
+def _support_floor(nonneg_lower: bool, offset: NDArray[np.float64] | None) -> float:
+    """Lower bound ``c = max(0, max_i(−offset_i))`` for a feasible ``theta_b[0]``.
+
+    Parameters
+    ----------
+    nonneg_lower : bool
+        Whether the exponential support rows are active.
+    offset : NDArray[np.float64] | None
+        Per-observation offset, or ``None``.
+
+    Returns
+    -------
+    float
+        ``0.0`` unless ``nonneg_lower`` and a non-empty ``offset`` with some
+        ``offset_i < 0`` are given.
+
+    Notes
+    -----
+    The shift-path support rows read ``theta_b[0] + x_i·β ≥ −offset_i``
+    (ADR 0005 Decision 1, issue #160).  At ``β = 0`` — the default start —
+    every row holds once ``theta_b[0] ≥ c``; the ``max(0, ·)`` keeps the
+    pre-#160 lift to ``theta_b[0] ≥ 0``, so ``offset=None`` is unchanged.
+    The interaction path computes the same ``c`` for its column lift.
+    """
+    if not nonneg_lower or offset is None:
+        return 0.0
+    off = np.asarray(offset, dtype=np.float64)
+    if off.size == 0:
+        return 0.0
+    return max(0.0, float(np.max(-off)))
 
 
 def _restart_loop(
@@ -962,6 +1001,13 @@ def optimize(
     theta_init = _initial_theta(
         n_params, X, lower=config.lower, upper=config.upper, q_s=q_s
     )
+    # Exponential support rows read θ_b[0] + x_i·β ≥ −offset_i (issue #160).
+    # At the default β = 0 they all hold once θ_b[0] ≥ c = max(0,
+    # max_i(−offset_i)); lift the start there (np.maximum keeps it monotone
+    # and leaves an upper pin intact) unless θ_b[0] is pinned by ``lower``.
+    support_floor = _support_floor(nonneg_lower, offset)
+    if support_floor > 0.0 and config.lower is None:
+        theta_init[:n_params] = np.maximum(theta_init[:n_params], support_floor)
 
     if config.solver == "auglag":
         return _optimize_auglag(
@@ -977,6 +1023,7 @@ def optimize(
             n_params=n_params,
             total_params=total_params,
             nonneg_lower=nonneg_lower,
+            support_floor=support_floor,
             rng=rng,
             theta_init=theta_init,
             scaling=scaling,
@@ -995,6 +1042,7 @@ def optimize(
         n_params=n_params,
         total_params=total_params,
         nonneg_lower=nonneg_lower,
+        support_floor=support_floor,
         rng=rng,
         theta_init=theta_init,
         scaling=scaling,
@@ -1015,6 +1063,7 @@ def _optimize_scipy(
     n_params: int,
     total_params: int,
     nonneg_lower: bool,
+    support_floor: float,
     rng: np.random.Generator,
     theta_init: NDArray[np.float64],
     scaling: NDArray[np.float64] | None = None,
@@ -1031,9 +1080,10 @@ def _optimize_scipy(
     # the overloaded ``build_constraints`` matches (auglag is dispatched away
     # before we get here).
     solver = cast("Literal['slsqp', 'trust-constr']", config.solver)
-    # Exponential has support [0, ∞); enforce h(y|x) >= 0.  Without covariates
-    # this reduces to theta_b[0] >= 0; with covariates we add one linear
-    # inequality per training row: theta_b[0] + X_i @ beta >= 0.
+    # Exponential has support [0, ∞); enforce h(a|x_i) >= 0 with the offset
+    # included (ADR 0005 Decision 1, issue #160).  Without covariates this
+    # reduces to theta_b[0] >= max_i(-offset_i); with covariates we add one
+    # linear inequality per training row: theta_b[0] + X_i @ beta >= -offset_i.
     constraints = build_constraints(
         n_params,
         lower=config.lower,
@@ -1042,6 +1092,7 @@ def _optimize_scipy(
         total_params=total_params,
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
+        offset=offset if nonneg_lower else None,
     )
 
     true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
@@ -1150,7 +1201,11 @@ def _optimize_scipy(
 
     def _perturb(t: NDArray[np.float64]) -> NDArray[np.float64]:
         theta_try_full = _perturb_and_project(
-            t, n_params, rng, nonneg_lower=nonneg_lower
+            t,
+            n_params,
+            rng,
+            nonneg_lower=nonneg_lower,
+            support_floor=support_floor,
         )
         if fixed_idx is not None:
             # Perturbation projects theta_b onto the monotone cone, which may
@@ -1278,9 +1333,7 @@ def _optimize_interaction(
     basis_at_lower = basis.y_basis.evaluate(
         np.full(1, basis.support[0], dtype=np.float64)
     )[0]
-    support_floor = 0.0
-    if nonneg_lower and offset is not None:
-        support_floor = max(0.0, float(np.max(-np.asarray(offset, dtype=np.float64))))
+    support_floor = _support_floor(nonneg_lower, offset)
 
     def lift_to_support(Theta: NDArray[np.float64]) -> NDArray[np.float64]:
         if not nonneg_lower:
@@ -1614,6 +1667,7 @@ def _optimize_auglag(
     n_params: int,
     total_params: int,
     nonneg_lower: bool,
+    support_floor: float,
     rng: np.random.Generator,
     theta_init: NDArray[np.float64],
     scaling: NDArray[np.float64] | None = None,
@@ -1632,6 +1686,7 @@ def _optimize_auglag(
         total_params=total_params,
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
+        offset=offset if nonneg_lower else None,
     )
     # fixed_params (issue #85): append one equality row per pinned index.
     # Each row is e_i with rhs v_i, stacked under any existing rows from
@@ -1682,7 +1737,13 @@ def _optimize_auglag(
     best_auglag_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
-        lambda t: _perturb_and_project(t, n_params, rng, nonneg_lower=nonneg_lower),
+        lambda t: _perturb_and_project(
+            t,
+            n_params,
+            rng,
+            nonneg_lower=nonneg_lower,
+            support_floor=support_floor,
+        ),
         lambda t: auglag_minimize(
             obj,
             t,
@@ -1729,8 +1790,16 @@ def _optimize_auglag(
                 scaling=scaling,
             )
 
+        # Feasibility of the polished θ is checked against every inequality
+        # row with its right-hand side: monotonicity (b = 0) and, under the
+        # exponential link, the support rows (b = −offset, issue #160).
         theta_polished = _ncg_polish(
-            best_auglag_result.theta, obj, shift_hess, n_params
+            best_auglag_result.theta,
+            obj,
+            shift_hess,
+            n_params,
+            A_ineq=cm.A_ineq,
+            b_ineq=cm.b_ineq,
         )
         if theta_polished is not None:
             final_theta = theta_polished

@@ -152,6 +152,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   The interaction quantile clip message now comes from the shared helper.
   `scaling=` + `InteractionBasis` + exponential stays rejected. Recorded as an
   amendment to ADR 0005. (#158)
+- Shift path + `base_distribution="exponential"`: the support rows ignored
+  `offset`, so ADR 0005's rule `h(a|x_i) = θ_b[0] + x_i·β + offset_i ≥ 0` was
+  not enforced. A negative offset left the support on every training row
+  (issue reproduction, offset −0.5: logLik +94.87 instead of −5.13, in-sample
+  CDF at `y = a` of −0.649, `converged=True`). A positive offset pinned the fit
+  at `h(a|x_i) = offset_i`, a spurious atom of mass `1 − e^{−offset}` at `a`.
+  The rows are now `θ_b[0] + x_i·β ≥ −offset_i`; without covariates they
+  collapse to the single row `θ_b[0] ≥ max_i(−offset_i)`. They are built by
+  `build_constraint_matrices(..., offset=...)` / `build_constraints(...,
+  offset=...)` and honoured by auglag, SLSQP (`S θ − b`) and trust-constr
+  (`lb = b`), including under `fixed_params`. Starts and restarts lift
+  `θ_b[0]` to `max(0, max_i(−offset_i))`, and the auglag Newton-CG polish
+  checks the support rows too. Both signs of the reproduction now reach
+  logLik −5.1326 with `θ_b` shifted by exactly `−offset`. New R reference
+  `reference/mlt_exponential_offset_*` (per-row offset + covariate): an
+  explicit-constraint `alabama::auglag` fit on mlt's likelihood, Newton-polished
+  on its active set and cross-checked by an exact LP + `mlt(fixed=)`
+  decomposition. All three solvers match it at logLik `rtol=1e-6`. With
+  `offset=None` nothing changes. Recorded as an amendment to ADR 0005. (#160)
 
 ## [0.4.0] — 2026-05-25
 
