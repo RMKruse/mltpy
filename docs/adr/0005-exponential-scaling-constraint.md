@@ -630,7 +630,7 @@ increment coordinates and is byte-identical.
   optimum, but not for parity: its optimum sits in the `±30` clip regime of
   #162 (`θ_b[4] ≈ 5·10³`), where the three solvers agree only on the clipped
   objective. *(#162: the clipped objective equals the likelihood at that
-  optimum, see the #162 amendment.)* 14 of these 16 tests fail on `v0.6.0`;
+  optimum, and the test now asserts parity; see the #162 amendment.)* 14 of these 16 tests fail on `v0.6.0`;
   the left mirror passes for seeds 0 and 1.
 - `TestTypeICensoring` covers administrative censoring at a common time
   (right, left), a fixed inspection grid with an open last interval
@@ -697,10 +697,12 @@ data to logLik `+73.7` (normal) and `+118.5` (logistic) with
 `|h| = 50` for normal, 40 rows up to `2.5·10⁵` for logistic), and mltpy's
 clipped ℓ still equals R's unclipped logLik to `3·10⁻¹⁴` relative. Those
 rows sit at `h < −30`, where `log S(h)` is flat, and no exact row comes near
-the clip (`max |h| < 1.2`). The issue's "true
-logLik `−2.9·10²⁰`" scored θ against the un-flipped flag. Correctly
+the clip (`max |h| < 1.2`). The other way round, R scores mltpy's
+reported θ (`γ = −16.8`, censored `|h|` up to `2·10¹⁰`) at `+257.7467`
+(normal) and `+238.5636` (logistic), the values mltpy reported. The issue's
+"true logLik `−2.9·10²⁰`" scored θ against the un-flipped flag. Correctly
 specified, the design fits R (`−63.4154` normal, `−65.8135` logistic) on
-every solver, with `max |h| < 3.5`.
+auglag, trust-constr and SLSQP, with `max |h| < 3.5`.
 
 **Exponential left mirror.** `left_censored(np.maximum(y, c), y >= c)` also
 ties all 75 exact rows at `c`. At the optimum, the clipped and unclipped ℓ
@@ -718,11 +720,25 @@ fits and R θs above, and the three left-mirror seeds on all three solvers).
 Changing the clip needs its own decision.
 
 **Validation.** `tests/test_scaling_censoring.py`, fixtures
-`reference/scaling_fixed_time_*`: R parity of the correctly specified fits
-(normal and logistic, auglag and trust-constr); ℓ at R's θ against R's logLik
-on all four fits, flipped ones included, with the flipped θ asserted to
-put censored `|h|` above 30; and the analytical gradient against central
-differences at the flipped θ.
+`reference/scaling_fixed_time_*` (design drawn by
+`reference/write_scaling_fixed_time_data.py`, which also writes mltpy's θ
+on the literal repro as an R input):
+
+- R parity of the correctly specified fits: normal and logistic, on auglag,
+  trust-constr and SLSQP.
+- ℓ at R's θ against R's logLik on all four fits, flipped ones included. The
+  flipped θ is asserted to put censored `|h|` above 30.
+- R's logLik at mltpy's literal-repro θ against mltpy's ℓ, which is positive.
+- The analytical gradient against central differences at the flipped θ.
+
+`TestCensoredOnlyRegion::test_left_censored_above_exact_does_not_diverge` now
+asserts auglag's parity with the scipy solvers (`rtol = 1e-6`), in place of
+"not above the scipy optimum".
+
+Not covered here: the clip's value/gradient mismatch for exact rows, which
+needs a design that reaches it, and a guard for unbounded likelihoods (R
+reports convergence on the flipped data as well). Both would be new
+decisions.
 
 ---
 

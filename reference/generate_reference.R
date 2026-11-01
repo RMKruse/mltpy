@@ -1820,14 +1820,10 @@ cat(sprintf("scaling Coxph right-censored ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 
 # ---- scaling_fixed_time (ctm shift + scale, fixed-time RIGHT censoring) ---
 #
-# Issue #162.  The design is the issue's numpy repro, read from committed
-# inputs because it is drawn with numpy's RNG:
-#
-#   rng = np.random.default_rng(0); n = 150
-#   x_s = rng.normal(size=(n, 1))
-#   y   = rng.exponential(size=n) / (2 * np.exp(0.5 * 0.6 * x_s[:, 0]))
-#   x_d = np.random.default_rng(50).uniform(size=(n, 1))
-#   c   = np.quantile(y, 0.8); event = y <= c; y = np.minimum(y, c)
+# Issue #162.  The design is the issue's repro, drawn with NumPy's RNG (which
+# R cannot replay) by `python reference/write_scaling_fixed_time_data.py`:
+# n = 150, x_s ~ N(0, 1), x_d ~ U(0, 1), y exponential with scale depending
+# on x_s, every y above its 80 % quantile c censored at c.
 #
 # Inputs:  scaling_fixed_time_{y,event,x_d,x_s}.txt  (event: 1 = observed)
 # Outputs: scaling_fixed_time_support.txt            — "0 1.01·max(y)"
@@ -1841,6 +1837,10 @@ cat(sprintf("scaling Coxph right-censored ref: n=%d, p+q_d+q_s=%d, ll=%.6f\n",
 #                censored rows' h → −∞).  R stops at a large positive logLik
 #                with convergence 0; its θ puts censored h far beyond mltpy's
 #                ±30 clip, so the logLik there checks that the clip is inert.
+#          scaling_fixed_time_flipped_<dist>_loglik_at_mltpy.txt
+#              — R's logLik at mltpy's θ on that data (input
+#                scaling_fixed_time_flipped_<dist>_mltpy_theta.txt, the
+#                issue's reported optimum for normal).
 # θ is coef(fit) = [θ_b (5) | β | γ]; ctm's shifting term enters as + x_d·β,
 # sign-aligned with mltpy (no flip).  <dist> ∈ {normal, logistic}.
 .fixed_time_path <- function(stem) {
@@ -1875,6 +1875,16 @@ for (dist_ft in c("Normal", "Logistic")) {
                con = .fixed_time_path(paste0(stem_ft, "_loglik")))
     cat(sprintf("scaling fixed-time right-censored ref %-17s ll=%.6f\n",
                 stem_ft, ll_ft))
+    if (flipped_ft) {
+      # R's logLik at mltpy's θ on the issue's literal repro (written by the
+      # Python script above); there |h| of censored rows reaches ~1e10.
+      theta_py_ft <- scan(.fixed_time_path(paste0(stem_ft, "_mltpy_theta")),
+                          quiet = TRUE)
+      ll_py_ft <- as.numeric(logLik(fit_ft, parm = theta_py_ft))
+      writeLines(format(ll_py_ft, digits = 17),
+                 con = .fixed_time_path(paste0(stem_ft, "_loglik_at_mltpy")))
+      cat(sprintf("  R logLik at mltpy theta (%s): %.6f\n", stem_ft, ll_py_ft))
+    }
   }
 }
 

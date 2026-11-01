@@ -136,7 +136,20 @@ class CensoredData:
             Observed value (exact value or censoring threshold).
         censored:
             Boolean array.  ``True`` means the actual event time is
-            *above* ``y`` (only a lower bound is known).
+            *above* ``y`` (only a lower bound is known).  This is the
+            negation of R's ``Surv(y, event)`` event indicator: for an event
+            flag ``event``, pass ``censored=~event``.  Passing ``event`` itself
+            swaps exact and censored rows; under administrative censoring at
+            a common time ``c`` that ties every exact row at ``c`` and makes
+            the likelihood unbounded (issue #162).
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> event = np.array([True, False])  # R: Surv(c(1.0, 2.0), event)
+        >>> cd = CensoredData.right_censored(np.array([1.0, 2.0]), ~event)
+        >>> cd.is_exact_mask.tolist()
+        [True, False]
         """
         y = np.asarray(y, dtype=float)
         censored = np.asarray(censored, dtype=bool)
@@ -159,7 +172,9 @@ class CensoredData:
             Observed value (exact value or censoring threshold).
         censored:
             Boolean array.  ``True`` means the actual value is
-            *below* ``y`` (only an upper bound is known).
+            *below* ``y`` (only an upper bound is known).  As in
+            :meth:`right_censored`, this is the negation of R's ``Surv``
+            event indicator: pass ``censored=~event``.
         """
         y = np.asarray(y, dtype=float)
         censored = np.asarray(censored, dtype=bool)

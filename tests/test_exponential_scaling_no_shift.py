@@ -774,16 +774,14 @@ class TestCensoredOnlyRegion:
         row is tied at ``c``, so the optimum has ``θ_b[4]`` in the thousands;
         the left-censored rows' ``h`` passes ``+30`` there, but only where
         ``log F(h) ≈ 0``, so the clipped objective equals the likelihood
-        (ADR 0005, #162 amendment).  What is asserted: auglag converges to a
-        feasible point and does not exceed the scipy optimum.
+        (ADR 0005, #162 amendment).  The optimum is finite (``h ≥ 0`` bounds
+        ``h_0'(c) / h_0(c)``), and auglag matches the scipy solvers on it.
         """
         y, x_s = _simulated(seed)
         c = float(np.quantile(y, 0.5))
         cd = CensoredData.left_censored(np.maximum(y, c), y >= c)
         fits = _fit_censored(cd, x_s, (0.0, float(y.max())), CensoringType.LEFT)
-        _assert_auglag_feasible(fits["auglag"])
-        best = _best_reference_ll(fits)
-        assert fits["auglag"].result_.log_likelihood <= best + 1e-6 * abs(best)
+        _assert_auglag_matches_reference_solvers(fits)
 
     def test_monotonicity_multipliers_reported(
         self,
