@@ -626,11 +626,11 @@ def _fit_censored(
         )
         with warnings.catch_warnings():
             # ConvergenceWarning is informational (CLAUDE.md, Solver dispatch).
-            # numpy's floating-point RuntimeWarnings come from infeasible trial
-            # points (log F of h < 0, overflow at large γ) on interval data,
-            # emitted by all three solvers and already on v0.6.0; the
-            # likelihood turns those points into the infeasibility penalty.
-            # Every other warning still surfaces.
+            # numpy's floating-point RuntimeWarnings on interval data are
+            # spurious (issue #163): log F(0) = −inf at the active support row
+            # θ_b[0] = 0, plus log F of h < 0 and overflow at large γ on
+            # infeasible trial points, emitted by all three solvers.  Remove
+            # this filter once #163 is fixed.  Every other warning surfaces.
             warnings.simplefilter("ignore", ConvergenceWarning)
             warnings.simplefilter("ignore", RuntimeWarning)
             model.fit(cd)
