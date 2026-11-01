@@ -629,6 +629,9 @@ cat(sprintf("Exponential + offset: n=%d, ll=%.10f, theta = %s\n", n_eo, ll_eo,
 #   mlt_exponential_scaling_theta.txt   — c(theta_b (5), gamma (1)), in
 #                                         mltpy's [theta_b | gamma] order
 #   mlt_exponential_scaling_ll.txt      — mlt's own loglik at theta
+#   mlt_exponential_scaling_mu.txt      — KKT multipliers of the rows
+#                                         c(theta_b[0] >= 0, D theta_b >= 0
+#                                         (4 rows)); 0 on inactive rows
 #
 # Why this case has exact R parity (ADR 0005 Decisions 2 and 4,
 # research/exp-scaling-r-route/README.md §5, §10, §12): mltpy's support rule
@@ -744,6 +747,10 @@ writeLines(format(theta_es, digits = 15),
            con = file.path(out_dir, "mlt_exponential_scaling_theta.txt"))
 writeLines(format(ll_es, digits = 15),
            con = file.path(out_dir, "mlt_exponential_scaling_ll.txt"))
+mu_es <- numeric(nrow(A_es))
+mu_es[act_es] <- lam_es
+writeLines(format(mu_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_mu.txt"))
 
 # ---------------------------------------------------------------------------
 # Lm (normal linear regression as a CTM) reference

@@ -509,15 +509,17 @@ class TestCensoredAndEdgeCases:
     def test_support_multiplier_reported(self, fitted_auglag: MLT) -> None:
         """The boxed support row carries the bound multiplier in ``mu_ineq``.
 
-        R's polished reference has multiplier 154.8 on θ_b[0] ≥ 0 and 0.81 on
-        θ_b[2] ≤ θ_b[3] (``reference/generate_reference.R``, issue #114).
+        R's polished reference stores the KKT multipliers of its rows
+        ``c(θ_b[0] ≥ 0, D θ_b ≥ 0)`` in ``mlt_exponential_scaling_mu.txt``
+        (154.8 on the support row, 0.81 on θ_b[2] ≤ θ_b[3]).  mltpy orders
+        the rows the other way round: monotonicity first, then support.
+        Multipliers are estimated from the gradient at the solver's θ (Δθ
+        ~3e-7 on a flat surface), hence the looser tolerance.
         """
+        mu_r = _load("mlt_exponential_scaling_mu.txt")
         mu = fitted_auglag.result_.mu_ineq
         assert mu is not None
-        # Rows: 4 monotonicity rows (θ_b[k] − θ_b[k−1] ≥ 0), then support.
-        np.testing.assert_allclose(mu[-1], 154.8, rtol=1e-3)
-        np.testing.assert_allclose(mu[2], 0.8113, rtol=1e-2)
-        np.testing.assert_allclose(mu[[0, 1, 3]], 0.0, atol=1e-6)
+        np.testing.assert_allclose(mu, np.roll(mu_r, -1), rtol=1e-3, atol=1e-6)
 
     def test_multi_column_scaling(self, ref: dict[str, object]) -> None:
         y = ref["y"]

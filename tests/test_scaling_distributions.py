@@ -248,7 +248,7 @@ def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
     ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β ≥ 0`` is non-linear in ``γ`` and not yet
     implemented.
     """
-    y, x_d, x_s, support = _make_dataset()
+    y, x_d, x_s, _ = _make_dataset()
     y_pos = y - y.min() + 0.01
     sup = (0.0, float(y_pos.max() + 0.5))
     model = MLT(

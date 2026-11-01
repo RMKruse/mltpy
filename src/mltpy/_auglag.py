@@ -141,12 +141,14 @@ class AugLagResult:
     rho_final:
         Final penalty parameter ρ.
     nu_lower:
-        Multipliers (≥ 0) of the lower box bounds ``θ ≥ lb``, shape (n,); zero
-        on coordinates whose bound is inactive or absent (all zero without
-        ``bounds``).  Read off the augmented-Lagrangian gradient, see
-        :func:`auglag_minimize` (Notes).
+        Multipliers (≥ 0) of the lower box bounds ``θ ≥ lb``, shape (n,) as
+        returned by :func:`auglag_minimize`; zero on coordinates whose bound
+        is inactive or absent (all zero without ``bounds``).  Read off the
+        augmented-Lagrangian gradient, see :func:`auglag_minimize` (Notes).
+        Defaults to an empty array only when the result is built by hand.
     nu_upper:
-        Multipliers (≥ 0) of the upper box bounds ``θ ≤ ub``, shape (n,).
+        Multipliers (≥ 0) of the upper box bounds ``θ ≤ ub``, shape (n,);
+        same conventions as ``nu_lower``.
     """
 
     theta: NDArray[np.float64]
@@ -335,11 +337,17 @@ def _validate_bounds(
             f"bounds must be a pair (lb, ub) of arrays of shape ({n},); got "
             f"shapes {lb.shape} and {ub.shape}."
         )
-    if np.any(np.isnan(lb)) or np.any(np.isnan(ub)):
-        raise ValueError("bounds must not contain NaN; use ±inf for no bound.")
-    if np.any(lb == np.inf) or np.any(ub == -np.inf):
+    nan_idx = np.flatnonzero(np.isnan(lb) | np.isnan(ub)).tolist()
+    if nan_idx:
         raise ValueError(
-            "bounds give an empty box: every lb must be < +inf and every ub > −inf."
+            "bounds must not contain NaN (use ±inf for no bound); got NaN at "
+            f"indices {nan_idx}."
+        )
+    empty_idx = np.flatnonzero((lb == np.inf) | (ub == -np.inf)).tolist()
+    if empty_idx:
+        raise ValueError(
+            "bounds give an empty box: every lb must be < +inf and every ub "
+            f"> −inf; violated at indices {empty_idx}."
         )
     if np.any(lb > ub):
         bad = np.flatnonzero(lb > ub).tolist()
