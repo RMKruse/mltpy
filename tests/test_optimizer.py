@@ -189,7 +189,7 @@ class TestInitialThetaSupportFloor:
 
     The lift used to be ``np.maximum(θ_b, c)``, which for ``c`` above the
     first spacing makes the leading coefficients equal: h' then vanishes to
-    high order at the lower support end, ∂log h'/∂θ_b is ~8e7 at the start,
+    high order at the lower support end, ‖∇ℓ‖ is ~8e7 at the start (#115 data),
     and SLSQP's first quasi-Newton step (B = I) leaves for overflow.
     """
 
@@ -203,6 +203,15 @@ class TestInitialThetaSupportFloor:
     def test_no_lift_at_or_below_start(self, floor: float) -> None:
         np.testing.assert_array_equal(
             _initial_theta(5, None, support_floor=floor), np.linspace(0.0, 1.0, 5)
+        )
+
+    @pytest.mark.parametrize("upper", [0.5, 0.0, -1.0])
+    def test_no_floor_leaves_low_upper_pin_alone(self, upper: float) -> None:
+        """Floor 0 (every non-exponential fit) never lifts, even at θ_b[0] < 0."""
+        theta = _initial_theta(5, None, upper=upper)
+        np.testing.assert_array_equal(theta, np.linspace(0.0, 1.0, 5) + (upper - 1.0))
+        np.testing.assert_array_equal(
+            _initial_theta(5, None, upper=upper, support_floor=0.0), theta
         )
 
     def test_covariate_and_scale_blocks_stay_zero(self) -> None:

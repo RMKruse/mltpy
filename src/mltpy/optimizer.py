@@ -570,7 +570,7 @@ def _initial_theta(
         Number of scaling columns; their γ entries start at zero.
     support_floor : float, default=0.0
         Exponential support floor ``c = max(0, max_i(−offset_i))`` from
-        :func:`_support_floor`.  When ``lower`` is not pinned and
+        :func:`_support_floor`.  When ``c > 0``, ``lower`` is not pinned and
         ``theta_b[0] < c``, the basis coefficients are lifted so
         ``theta_b[0] = c`` while staying strictly increasing (see Notes).
 
@@ -609,7 +609,9 @@ def _initial_theta(
         theta_b = np.linspace(0.0, 1.0, n_params) + (float(upper) - 1.0)
     else:
         theta_b = np.linspace(0.0, 1.0, n_params)
-    if lower is None and theta_b[0] < support_floor:
+    # ``support_floor > 0`` keeps every non-exponential fit (floor 0) on its
+    # unlifted start, including an ``upper`` pin below 1 (θ_b[0] < 0).
+    if lower is None and support_floor > 0.0 and theta_b[0] < support_floor:
         if upper is None:
             theta_b = theta_b + (support_floor - theta_b[0])
         else:

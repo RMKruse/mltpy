@@ -135,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `RuntimeWarning`; no fit with `max_restarts=0`). Unscaled, both SLSQP and
   trust-constr reached their iteration limits. The start now lifts in
   parallel (`_initial_theta(..., support_floor=c)`), as the restarts already
-  did, keeping an `upper` pin. Every solver converges on its first attempt.
+  did, keeping an `upper` pin. On the #115 fixture every solver now converges
+  on its first attempt.
   SLSQP's θ now lands 3.5e-6 from the reference instead of 3e-5, and its test
   tolerance tightens from 1e-4 to 1e-5. Fits without an offset, or with
   `offset ≥ 0`, are unchanged. (#165)

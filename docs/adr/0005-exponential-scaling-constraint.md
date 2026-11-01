@@ -972,13 +972,21 @@ The restart path (`_perturb_and_project`) and the interaction column lift
 already lifted in parallel. Only the default shift start flattened `θ_b`.
 
 **Decision.** `_initial_theta(..., support_floor=c)` lifts `θ_b` so that
-`θ_b[0] = c` without changing its spacing:
+`θ_b[0] = c` and keeps it strictly increasing whenever a feasible
+increasing start exists:
 
-- **No pins:** a parallel shift, `θ_b + (c − θ_b[0])`.
+- **No pins:** a parallel shift, `θ_b + (c − θ_b[0])`, with the spacing
+  unchanged.
 - **`upper` pinned:** `linspace(c, max(c, upper), p)`, so the pin holds
   whenever `c ≤ upper`. For `c > upper` no increasing start is feasible, and
-  the start is flat at `c`, as before.
-- **`lower` pinned, or `θ_b[0] ≥ c` already:** unchanged.
+  the start is flat at `c`, as before. The spacing is `(upper − c)/(p − 1)`,
+  so an `upper` just above `c` gives a nearly flat start again. With
+  `upper = 0.8` on the #115 fixture, scaled SLSQP still warns about the
+  overflow on its first step, though it converges. The pin leaves no room
+  for a wider start; this case is not addressed further.
+- **`lower` pinned, `c = 0`, or `θ_b[0] ≥ c` already:** unchanged. The
+  `c > 0` guard keeps every non-exponential fit, including one with an
+  `upper` pin below 1 (`θ_b[0] < 0`), on its unlifted start.
 
 `optimize()` passes the floor in place of its `np.maximum` line. The start
 stays feasible for every support row at `β = 0`, `γ = 0`.

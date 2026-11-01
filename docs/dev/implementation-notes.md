@@ -230,7 +230,8 @@ The rule is nonlinear in γ: `θ_b[0]·exp(0.5·x_s,i·γ) + x_d,i·β + offset_
   `np.maximum(θ_b, c)` flattened the leading coefficients, so `h'` vanished
   at `a` and ‖∇ℓ‖ was ~8e7. SLSQP's first step then overflowed
   `exp(0.5·x_s·γ)`, and unscaled SLSQP and trust-constr reached their
-  iteration limits. Both scipy solvers now converge on their first attempt.
+  iteration limits. On the #115 fixture both scipy solvers now converge on
+  their first attempt.
 - **R parity:** R `mlt` has no support rule, so the parity fixture
   `mlt_exponential_scaling_shift_*` is an explicit-constraint `alabama::auglag`
   reference.
