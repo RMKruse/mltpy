@@ -536,11 +536,11 @@ checks:
 | Check | Tolerance |
 |---|---|
 | logLik, θ | `rtol = 1e-6`, `atol = 1e-10` |
-| `mu_ineq` (R's KKT multipliers, same active rows) | `rtol = 1e-5`, `atol = 1e-6` |
+| `mu_ineq` (R's KKT multipliers, same active rows) | `rtol = 1e-6`, `atol = 1e-10` |
 | full `[θ_b \| β \| γ]` gradient vs central differences at R's θ | `rtol = 1e-6` |
 | `J` vs central differences; `γ = 0` rows = linear rows | `1e-7` / `1e-14` |
 | `h(y|x_i) ≥ −1e-7` on a support grid, every training row | — |
-| right / left / interval censoring and scale-only offset vs an independent trust-constr solve with the rows written inline | logLik `rtol = 1e-5` |
+| right / left / interval censoring and scale-only offset vs an independent trust-constr solve with the rows written inline | logLik `rtol = 1e-6` |
 
 The tests also cover `fixed_params` (β pinned at the optimum reproduces the fit;
 `γ` pinned at 0 equals the unscaled #160 fit), the SLSQP / trust-constr

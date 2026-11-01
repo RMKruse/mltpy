@@ -19,7 +19,12 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint, OptimizeResult, minimize
 
-from mltpy._auglag import AugLagOptions, AugLagResult, auglag_minimize
+from mltpy._auglag import (
+    AugLagOptions,
+    AugLagResult,
+    NonlinearInequality,
+    auglag_minimize,
+)
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import (
     ConstraintMatrices,
@@ -1629,10 +1634,7 @@ def _ncg_polish(
     *,
     A_ineq: NDArray[np.float64] | None = None,
     b_ineq: NDArray[np.float64] | None = None,
-    nonlinear_ineq: (
-        Callable[[NDArray[np.float64]], tuple[NDArray[np.float64], NDArray[np.float64]]]
-        | None
-    ) = None,
+    nonlinear_ineq: NonlinearInequality | None = None,
 ) -> NDArray[np.float64] | None:
     """Newton-CG polish: trust-ncg from auglag's θ-hat using the analytical Hessian.
 
@@ -1699,7 +1701,7 @@ def _ncg_polish(
 
 
 def _increment_auglag(
-    obj: Callable[[NDArray[np.float64]], Any],
+    obj: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
     cm: ConstraintMatrices,
     support_nl: ScaledSupportConstraint,
     n_params: int,

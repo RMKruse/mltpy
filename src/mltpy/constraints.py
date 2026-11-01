@@ -1158,11 +1158,14 @@ def _scaled_support_block(
     if X is not None:
         x_arr = np.asarray(X)
         if x_arr.ndim != 2:
-            raise ValueError(f"X must be 2-D, got shape {x_arr.shape}")
+            raise ValueError(
+                f"X must be a 2-D shift design of shape (n, q_d); got shape "
+                f"{x_arr.shape}."
+            )
         if x_arr.shape[1] != q_d:
             raise ValueError(
-                f"X has {x_arr.shape[1]} columns but total_params - n_params - "
-                f"q_s = {q_d}"
+                f"X must have q_d = total_params - n_params - q_s = {q_d} "
+                f"column(s); got {x_arr.shape[1]}."
             )
     elif q_d > 0:
         raise ValueError(

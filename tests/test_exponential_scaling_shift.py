@@ -487,7 +487,7 @@ class TestRParity:
         mu = fitted.result_.mu_ineq
         assert mu is not None
         assert mu.shape == ref["mu"].shape
-        np.testing.assert_allclose(mu, ref["mu"], rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(mu, ref["mu"], rtol=1e-6, atol=1e-10)
         np.testing.assert_array_equal(
             np.flatnonzero(mu > 1e-3), np.flatnonzero(ref["mu"])
         )
@@ -542,8 +542,8 @@ class TestRParity:
         mu = fitted.result_.mu_ineq
         assert A is not None and mu is not None
         resid = np.asarray(grad) - A.T @ mu
-        # Relative to |∇f| ~ 1e2 on the active rows' normals.
-        assert np.max(np.abs(resid)) < 1e-3
+        # |∇f| ≈ 1.6e2; the residual is ≈ 2e-6 (≈ 1e-8 relative).
+        assert np.max(np.abs(resid)) < 1e-5
 
 
 class TestFeasibility:
@@ -665,7 +665,7 @@ class TestComposition:
         model = _model(ref, fixed_params={_BETA: beta})
         model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
         assert model.theta_[_BETA] == pytest.approx(beta, abs=1e-8)
-        np.testing.assert_allclose(model.theta_, ref["theta"], rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(model.theta_, ref["theta"], rtol=1e-6, atol=1e-10)
         assert model.result_.constraint_C_eq is not None
 
     def test_fixed_gamma_zero_equals_unscaled_fit(
@@ -735,7 +735,7 @@ class TestComposition:
         assert model.result_.converged
         ref_ll = _trust_constr_reference(ref, data, ref["x_d"], censoring)
         assert model.result_.log_likelihood >= ref_ll - 1e-6
-        np.testing.assert_allclose(model.result_.log_likelihood, ref_ll, rtol=1e-5)
+        np.testing.assert_allclose(model.result_.log_likelihood, ref_ll, rtol=1e-6)
 
     def test_inference_finite(self, fitted: MLT) -> None:
         """Wald covariance on the active (linearised) rows is finite, symmetric."""
@@ -765,6 +765,7 @@ class TestComposition:
             model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
         g = _support_values(model, ref["x_d"], x_s, ref["offset"])
         assert g.min() >= -_FEAS_TOL
+        # γ absorbs the rescaling, so the optimum's logLik is R's.
         np.testing.assert_allclose(
-            model.result_.log_likelihood, ref["ll"][0], rtol=1e-5
+            model.result_.log_likelihood, ref["ll"][0], rtol=1e-6, atol=1e-10
         )

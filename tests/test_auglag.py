@@ -1076,13 +1076,26 @@ class TestNonlinearInequality:
         np.testing.assert_allclose(nl.theta, lin.theta, atol=1e-10)
         np.testing.assert_allclose(nl.mu_ineq, lin.mu_ineq, atol=1e-8)
 
-    def test_none_is_byte_identical(self) -> None:
-        """``nonlinear_ineq=None`` leaves the linear path untouched."""
+    def test_empty_block_is_byte_identical(self) -> None:
+        """A zero-row block takes the validation / ``m_nl`` path, yet the fit is
+        byte-identical to ``nonlinear_ineq=None`` (the linear fast path).
+
+        Pre-#115 linear-path fits were also checked byte-identical (θ and
+        ``mu_ineq`` SHA-256) across the change during review.
+        """
         obj = quadratic_obj(np.array([-1.0, 2.0]))
         A = np.array([[1.0, 0.0], [-1.0, 1.0]])
         a = auglag_minimize(
             obj, np.ones(2), A_ineq=A, b_ineq=None, C_eq=None, d_eq=None
         )
+        calls: list[int] = []
+
+        def empty(
+            t: NDArray[np.float64],
+        ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+            calls.append(1)
+            return np.zeros(0), np.zeros((0, 2))
+
         b = auglag_minimize(
             obj,
             np.ones(2),
@@ -1090,8 +1103,10 @@ class TestNonlinearInequality:
             b_ineq=None,
             C_eq=None,
             d_eq=None,
-            nonlinear_ineq=None,
+            nonlinear_ineq=empty,
         )
+        assert calls  # the block was evaluated (shape validation at x0)
+        assert b.mu_ineq.shape == (2,)
         np.testing.assert_array_equal(a.theta, b.theta)
         np.testing.assert_array_equal(a.mu_ineq, b.mu_ineq)
         assert a.kkt_residual == b.kkt_residual
