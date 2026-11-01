@@ -614,15 +614,26 @@ increment coordinates and is byte-identical.
   the R fixture's data). auglag must converge, stay feasible and monotone, and
   match the better converged trust-constr / SLSQP logLik at `rtol = 1e-6`.
   It also checks that the active monotonicity and support rows carry their
-  bound multipliers, with `∇nll = Aᵀ μ`. All eleven tests fail on `v0.6.0`.
+  bound multipliers, with `∇nll = Aᵀ μ`, and that `fixed_params` pins
+  (`θ_b[4]` or `γ` at the optimum) compose with the increment box and
+  reproduce the fit. The left-censored mirror (seeds 0–2, `c` at the median)
+  is checked for convergence, feasibility and logLik not above the scipy
+  optimum, but not for parity: its optimum sits in the `±30` clip regime of
+  #162 (`θ_b[4] ≈ 5·10³`), where the three solvers agree only on the clipped
+  objective. 14 of these 16 tests fail on `v0.6.0`; the left mirror passes
+  for seeds 0 and 1.
 - `TestTypeICensoring` covers administrative censoring at a common time
   (right, left), a fixed inspection grid with an open last interval
   (interval), and right censoring on the fixture data, all under the same
   criteria.
 
-The left-censored mirror of the #161 design is not a parity test. Its
-optimum sits in the `±30` clip regime of #162 (`θ_b[4] ≈ 5·10³`), so the
-three solvers agree only on the clipped objective.
+No interval-censored divergence was found. An interval row contributes
+`log(F(h(u|x_i)) − F(h(l|x_i)))` with `log F(h) = log(1 − e^{−h})`, which is
+undefined, and so turned into the infeasibility penalty, as soon as `h` dips
+below 0 at an endpoint or `h_0` decreases across the row. The
+exponential-in-`γ` descent of right-censored rows has no interval
+counterpart. The inspection-grid designs above, where every row is
+interval-censored, already agreed on `v0.6.0`.
 
 ---
 
