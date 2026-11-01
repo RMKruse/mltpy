@@ -91,6 +91,7 @@ nbsphinx_prolog = r"""
 # MyST
 # ---------------------------------------------------------------------------
 myst_enable_extensions = ["dollarmath", "amsmath", "colon_fence"]
+myst_heading_anchors = 2
 
 # ---------------------------------------------------------------------------
 # Intersphinx

@@ -20,7 +20,8 @@ base distribution that needs a **support constraint** on top of the Bernstein
 monotonicity rows `D θ_b ≥ 0`.
 
 Notation (shift basis; the unscaled `InteractionBasis` path is covered by the
-#158 amendment below):
+[#158 amendment](0005-exponential-scaling-constraint.md#amendment-2026-11-01-158--unscaled-interactionbasis-path)
+below):
 
 - `[a, b]`: the Bernstein support of the response basis. Only the first
   Bernstein polynomial is non-zero at `a`, and it equals 1 there, so
@@ -281,7 +282,8 @@ feasible.
 enforce exactly `h(a|x_i) ≥ 0` with `h` as the likelihood evaluates it. At
 the time, the shift path's `nonneg_lower` rows `θ_b[0] + x_d,i · β ≥ 0` did not
 include the offset; that was left out of scope for #158 and closed by the
-#160 amendment below.
+[#160 amendment](0005-exponential-scaling-constraint.md#amendment-2026-11-01-160--offset-on-the-shift-path)
+below.
 
 **Rejected — the per-column variant `Θ[0, j] ≥ 0` (`q` rows).** Because
 `h(a|x) = Σ_j Θ[0, j] b_j(x)` is a convex combination of `Θ[0, :]`, these rows
