@@ -35,7 +35,7 @@ from typing import Callable
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
-from scipy.optimize import minimize, nnls
+from scipy.optimize import Bounds, minimize, nnls
 
 
 @dataclass
@@ -140,6 +140,13 @@ class AugLagResult:
         Final inequality multipliers (≥ 0), shape (m_ineq,).
     rho_final:
         Final penalty parameter ρ.
+    nu_lower:
+        Multipliers (≥ 0) of the lower box bounds ``θ ≥ lb``, shape (n,); zero
+        on coordinates whose bound is inactive or absent (all zero without
+        ``bounds``).  Read off the augmented-Lagrangian gradient, see
+        :func:`auglag_minimize` (Notes).
+    nu_upper:
+        Multipliers (≥ 0) of the upper box bounds ``θ ≤ ub``, shape (n,).
     """
 
     theta: NDArray[np.float64]
@@ -152,6 +159,12 @@ class AugLagResult:
     lambda_eq: NDArray[np.float64]
     mu_ineq: NDArray[np.float64]
     rho_final: float
+    nu_lower: NDArray[np.float64] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
+    nu_upper: NDArray[np.float64] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.float64)
+    )
 
 
 def _make_auglag_obj(
@@ -280,6 +293,110 @@ def _projected_stationarity(
     return (float(np.max(np.abs(r))) if r.size else 0.0), gap
 
 
+# scipy.optimize.minimize methods that accept both ``bounds`` and ``jac=True``.
+_BOUNDED_INNER_METHODS = frozenset({"L-BFGS-B", "TNC", "SLSQP", "trust-constr"})
+
+
+def _validate_bounds(
+    bounds: tuple[NDArray[np.float64], NDArray[np.float64]] | None,
+    n: int,
+    inner_method: str,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]] | None:
+    """Validate the box ``lb ≤ θ ≤ ub`` passed to :func:`auglag_minimize`.
+
+    Parameters
+    ----------
+    bounds:
+        ``(lb, ub)``, each of shape (n,), or ``None``.  ``±inf`` marks an
+        absent bound.
+    n:
+        Number of parameters.
+    inner_method:
+        ``AugLagOptions.inner_method``; must accept box bounds.
+
+    Returns
+    -------
+    tuple[NDArray, NDArray] or None
+        ``(lb, ub)`` as ``float64`` arrays, or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If ``lb`` / ``ub`` do not have shape (n,), contain NaN, if some
+        ``lb_j = +inf`` or ``ub_j = −inf`` (empty box), if ``lb_j > ub_j``, or
+        if ``inner_method`` cannot take bounds.
+    """
+    if bounds is None:
+        return None
+    lb = np.asarray(bounds[0], dtype=np.float64)
+    ub = np.asarray(bounds[1], dtype=np.float64)
+    if lb.shape != (n,) or ub.shape != (n,):
+        raise ValueError(
+            f"bounds must be a pair (lb, ub) of arrays of shape ({n},); got "
+            f"shapes {lb.shape} and {ub.shape}."
+        )
+    if np.any(np.isnan(lb)) or np.any(np.isnan(ub)):
+        raise ValueError("bounds must not contain NaN; use ±inf for no bound.")
+    if np.any(lb == np.inf) or np.any(ub == -np.inf):
+        raise ValueError(
+            "bounds give an empty box: every lb must be < +inf and every ub > −inf."
+        )
+    if np.any(lb > ub):
+        bad = np.flatnonzero(lb > ub).tolist()
+        raise ValueError(f"bounds must satisfy lb <= ub; violated at indices {bad}.")
+    if inner_method not in _BOUNDED_INNER_METHODS:
+        raise ValueError(
+            "bounds require an inner_method that accepts box bounds "
+            f"({sorted(_BOUNDED_INNER_METHODS)}); got {inner_method!r}."
+        )
+    return lb, ub
+
+
+def _bound_multipliers(
+    theta: NDArray[np.float64],
+    grad_L_A: NDArray[np.float64],
+    lb: NDArray[np.float64],
+    ub: NDArray[np.float64],
+    tol: float,
+) -> tuple[
+    NDArray[np.float64], NDArray[np.float64], NDArray[np.bool_], NDArray[np.bool_]
+]:
+    """Box multipliers read off the augmented-Lagrangian gradient.
+
+    Parameters
+    ----------
+    theta:
+        Current iterate, shape (n,).
+    grad_L_A:
+        ``∇_θ L_A`` at ``theta`` (objective gradient minus the PHR
+        constraint forces), shape (n,).
+    lb, ub:
+        Box bounds, shape (n,).
+    tol:
+        A bound counts as active when its slack is at most ``tol``.
+
+    Returns
+    -------
+    nu_lower, nu_upper : NDArray of shape (n,)
+        ``ν_lo,j = max(∂_j L_A, 0)`` on active lower bounds and
+        ``ν_up,j = max(−∂_j L_A, 0)`` on active upper bounds; zero elsewhere.
+    active_lower, active_upper : NDArray[bool] of shape (n,)
+        Activity masks.
+
+    Notes
+    -----
+    The KKT conditions of ``min L_A`` over the box are
+    ``∇L_A = ν_lo − ν_up`` with ``ν ≥ 0`` supported on active bounds.  The
+    projected residual ``∇L_A − ν_lo + ν_up`` is therefore ``∇L_A`` on free
+    coordinates and only the wrong-signed part on active ones.
+    """
+    active_lower = (theta - lb) <= tol
+    active_upper = (ub - theta) <= tol
+    nu_lower = np.where(active_lower, np.maximum(grad_L_A, 0.0), 0.0)
+    nu_upper = np.where(active_upper, np.maximum(-grad_L_A, 0.0), 0.0)
+    return nu_lower, nu_upper, active_lower, active_upper
+
+
 def auglag_minimize(
     fun: Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]],
     x0: NDArray[np.float64],
@@ -289,6 +406,7 @@ def auglag_minimize(
     C_eq: NDArray[np.float64] | None,
     d_eq: NDArray[np.float64] | None,
     options: AugLagOptions | None = None,
+    bounds: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None,
 ) -> AugLagResult:
     """Minimise a smooth objective subject to linear equality/inequality constraints.
 
@@ -314,6 +432,10 @@ def auglag_minimize(
     options:
         :class:`AugLagOptions` controlling the outer loop.  Defaults to
         :class:`AugLagOptions` with all default values (alabama-parity).
+    bounds:
+        Optional box ``(lb, ub)``, each of shape (n,), with ``±inf`` for an
+        absent bound, enforced inside every inner solve (see Notes).
+        ``None`` (default) leaves the inner solve unconstrained.
 
     Returns
     -------
@@ -321,12 +443,33 @@ def auglag_minimize(
         Contains the optimised θ, multipliers, convergence status, and KKT
         residual.
 
+    Raises
+    ------
+    ValueError
+        If ``bounds`` is malformed (see :func:`_validate_bounds`) or
+        ``options.inner_method`` cannot take box bounds.
+
     Notes
     -----
     The PHR augmented Lagrangian is minimised by an outer loop that updates
     multipliers and (occasionally) the penalty ρ.  Each outer step delegates
     an unconstrained inner solve to L-BFGS-B (configurable via
     ``AugLagOptions.inner_method``).
+
+    **Box bounds.**  With ``bounds=(lb, ub)`` each inner subproblem is
+    ``min L_A(θ)`` over the box ``Ω = {lb ≤ θ ≤ ub}`` rather than over
+    ``ℝⁿ``: the lower-level-box form of Birgin & Martínez (2014, ch. 4),
+    whose ALGENCAN solves box-constrained subproblems.  The inner solver
+    keeps every iterate in ``Ω`` (``x0`` is projected onto it).  This matters
+    when ``f`` is unbounded below outside a bound — a PHR row only adds a
+    penalty quadratic in the violation, so ``min_{ℝⁿ} L_A`` need not exist,
+    whereas ``min_Ω L_A`` does.  The bounds carry no PHR multipliers; their
+    multipliers ``ν_lo, ν_up ≥ 0`` are read off ``∇L_A`` on active
+    coordinates (``nu_lower`` / ``nu_upper``), the stationarity part of the
+    KKT residual uses the box-projected ``∇L_A − ν_lo + ν_up``, and the
+    stall test adds the active bounds to its working set.  A bound may also
+    be listed as a row of ``A_ineq``; that row then stays feasible, keeps a
+    zero PHR multiplier and leaves the force to ``ν``.
 
     References
     ----------
@@ -338,6 +481,11 @@ def auglag_minimize(
 
     x0_arr = np.asarray(x0, dtype=np.float64)
     n = x0_arr.size
+    box = _validate_bounds(bounds, n, options.inner_method)
+    inner_bounds: Bounds | None = None
+    if box is not None:
+        inner_bounds = Bounds(box[0], box[1])
+        x0_arr = np.clip(x0_arr, box[0], box[1])
 
     # Normalise both sides to concrete arrays; zero-row when absent.
     if A_ineq is None or np.asarray(A_ineq).shape[0] == 0:
@@ -386,6 +534,10 @@ def auglag_minimize(
     best_kkt = np.inf
     best_lambda_eq = lambda_eq.copy()
     best_mu_ineq = mu_ineq.copy()
+    nu_lower = np.zeros(n, dtype=np.float64)
+    nu_upper = np.zeros(n, dtype=np.float64)
+    best_nu_lower = nu_lower.copy()
+    best_nu_upper = nu_upper.copy()
 
     for outer_iter in range(options.max_outer_iter):
         n_outer_iter = outer_iter + 1
@@ -399,6 +551,7 @@ def auglag_minimize(
                 theta,
                 method=options.inner_method,
                 jac=True,
+                bounds=inner_bounds,
                 options=options.inner_options,
             )
         except LinAlgError:
@@ -422,6 +575,20 @@ def auglag_minimize(
             phi = np.maximum(0.0, mu_ineq - rho * g)
             grad_L_A = grad_L_A - A_.T @ phi
 
+        # Box bounds (Notes): multipliers read off ∇L_A on active coordinates;
+        # stationarity is measured on the box-projected gradient.
+        box_viol = 0.0
+        active_lower = np.zeros(n, dtype=bool)
+        active_upper = np.zeros(n, dtype=bool)
+        if box is not None:
+            nu_lower, nu_upper, active_lower, active_upper = _bound_multipliers(
+                theta, grad_L_A, box[0], box[1], options.feas_tol
+            )
+            grad_L_A = grad_L_A - nu_lower + nu_upper
+            box_viol = float(
+                np.max(np.maximum(0.0, np.maximum(box[0] - theta, theta - box[1])))
+            )
+
         # KKT residual: equality violation, inequality complementarity, and
         # stationarity.  ``feasibility`` is the raw primal constraint violation
         # (no complementarity), used by the penalty update and the stall test.
@@ -432,13 +599,16 @@ def auglag_minimize(
         ineq_viol = float(np.max(np.maximum(0.0, -g))) if m_ineq > 0 else 0.0
         stationarity = float(np.max(np.abs(grad_L_A)))
         kkt_residual = max(eq_viol, ineq_kkt, stationarity)
-        feasibility = max(eq_viol, ineq_viol)
+        feasibility = max(eq_viol, ineq_viol, box_viol)
+        kkt_residual = max(kkt_residual, box_viol)
 
         if kkt_residual < best_kkt:
             best_kkt = kkt_residual
             best_theta = theta.copy()
             best_lambda_eq = lambda_eq.copy()
             best_mu_ineq = mu_ineq.copy()
+            best_nu_lower = nu_lower.copy()
+            best_nu_upper = nu_upper.copy()
 
         if kkt_residual < options.outer_tol:
             converged = True
@@ -482,9 +652,21 @@ def auglag_minimize(
             working = (np.maximum(0.0, mu_ineq - rho * g) > 0.0) | (
                 g <= options.feas_tol
             )
-            projected, gap = _projected_stationarity(
-                grad_f, C_, A_[working], g[working]
-            )
+            # Active box bounds join the working set as rows ±e_j with
+            # slacks θ_j − lb_j (lower) and ub_j − θ_j (upper).
+            A_work = A_[working]
+            g_work = g[working]
+            if box is not None and (active_lower.any() or active_upper.any()):
+                eye = np.eye(n, dtype=np.float64)
+                A_work = np.vstack([A_work, eye[active_lower], -eye[active_upper]])
+                g_work = np.concatenate(
+                    [
+                        g_work,
+                        (theta - box[0])[active_lower],
+                        (box[1] - theta)[active_upper],
+                    ]
+                )
+            projected, gap = _projected_stationarity(grad_f, C_, A_work, g_work)
             stationarity_floor = options.theta_tol ** (2.0 / 3.0) * (
                 1.0 + abs(float(f_val))
             )
@@ -509,6 +691,8 @@ def auglag_minimize(
             best_theta = theta.copy()
             best_lambda_eq = lambda_eq.copy()
             best_mu_ineq = mu_ineq.copy()
+            best_nu_lower = nu_lower.copy()
+            best_nu_upper = nu_upper.copy()
             break
 
         # Multiplier updates
@@ -554,4 +738,6 @@ def auglag_minimize(
         lambda_eq=lambda_eq,
         mu_ineq=mu_ineq,
         rho_final=rho,
+        nu_lower=best_nu_lower,
+        nu_upper=best_nu_upper,
     )

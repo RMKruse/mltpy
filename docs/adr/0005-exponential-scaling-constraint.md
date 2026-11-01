@@ -374,6 +374,87 @@ the nonlinear rows need the same right-hand side:
 
 ---
 
+## Amendment (2026-11-01, [#114](https://github.com/RMKruse/mltpy/issues/114)) — Scale-Only Path and the Box-Constrained Inner Solve
+
+**Implemented.** Simplification 1 of Decision 2 is in place. With scaling,
+no shift block (`q_d = 0`) and a zero (or absent) offset, the support rule is
+the single linear row `θ_b[0] ≥ 0`. `build_constraint_matrices` /
+`build_constraints` emit it as `[1, 0, …, 0 | 0_{q_s}]` through the new
+`q_s=` argument. `MLT.__init__` now rejects exponential + scaling only on an
+`InteractionBasis` (ADR 0003 Decision 5). `optimize()` raises
+`NotImplementedError` for a shift block or a non-zero offset: the row is
+then `θ_b[0] ≥ −offset_i · e^{−0.5 · x_s,i · γ}`, non-linear in `γ`, which is
+#115's nonlinear block.
+
+**Problem: the PHR subproblem is unbounded.** mltpy's exponential
+log-density is the smooth extension `log f(h) = −h` on the whole line (R
+`mlt`'s score uses the same extension; its objective is `−∞` for `h < 0`).
+With `h(y | x) = h_0(y) · f_i` and `θ_b[0] = −t < 0`, the negative
+log-likelihood falls like `−t · Σ_i f_i`, exponentially in `γ`, while the PHR
+term for the violated row grows like `ρ t² / 2`. So `min_{ℝⁿ} L_A` has no
+minimiser for any finite `ρ`. On the fixture the default auglag ran off to
+`θ_b[0] ≈ −20` and logLik `+2768` from a feasible start. SLSQP and
+trust-constr keep the linear rows satisfied and were unaffected. The unscaled
+path does not have this problem: there the objective falls only linearly in
+`t`, and the quadratic penalty bounds it.
+
+**Decision: box-constrained inner solve.** `auglag_minimize` takes an
+optional box `bounds = (lb, ub)`, which every inner L-BFGS-B solve enforces.
+This is the lower-level-box form of the PHR method in Birgin & Martínez
+(2014), the reference `_auglag.py` already cites, whose ALGENCAN minimises
+`L_A` over a box `Ω`. `min_Ω L_A` exists where `min_{ℝⁿ} L_A` does not.
+
+- Bound multipliers are read off the augmented-Lagrangian gradient on active
+  coordinates: `ν_lo,j = max(∂_j L_A, 0)` and `ν_up,j = max(−∂_j L_A, 0)`.
+- The KKT stationarity uses the box-projected gradient `∇L_A − ν_lo + ν_up`.
+- The ADR 0004 stall test adds the active bounds (`±e_j`) to its working set.
+
+On the scaled exponential path the shift-path auglag passes `θ_b[0] ≥ 0` as
+`lb[0] = 0` and also keeps the row in `A_ineq`, so `constraint_A_ineq` and
+the model's active-constraint diagnostics still see it. That row never goes
+infeasible, so its PHR multiplier stays 0. The optimizer adds `ν_lo[0]` to
+the row's `mu_ineq` entry.
+
+- **Scope.** Only the scaled exponential shift path passes a box. Every other
+  path is unchanged (`bounds=None`), and its fits are byte-identical.
+- **Rejected — larger `ρ₀`.** `ρ₀ = 10³` converged on the fixture, but the
+  subproblem stays unbounded, so this is tuning, not a fix.
+- **Rejected — a barrier on `h(y_i | x_i) < 0`** (R's `dexp = −Inf`). It
+  makes the objective discontinuous and risks the line-search stalls R shows
+  in #126.
+- **#115.** The box covers single-coordinate rows only. The nonlinear shift +
+  scale rows `θ_b[0] · f_i + x_d,i · β ≥ −offset_i` face the same
+  unboundedness and need their own treatment.
+
+**Validation.** `reference/mlt_exponential_scaling_*` (generated in
+`reference/generate_reference.R`) is built in four steps:
+
+1. Fit `mlt(ctm(Bernstein, scaling = ~x_s, todistr = "Exponential"),
+   fixed = c("Bs1(y)" = 0))` with tight tolerances.
+2. Polish by equality-constrained Newton on its active set, using mlt's own
+   score and Hessian closures (stationarity 5.6e-15).
+3. KKT-check the result in the full space: the support row (multiplier
+   154.8) and `θ_b[2] = θ_b[3]` (multiplier 0.81) are active.
+4. Cross-check against `tram::Aareg(y ~ 0 | x_s)` (logLik 2e-8).
+
+`tests/test_exponential_scaling_no_shift.py` compares all three solvers with
+it:
+
+| Solver | logLik | θ | Notes |
+|---|---|---|---|
+| auglag | `rtol = 1e-6` | `rtol = 1e-6`, `atol = 1e-6` (Δθ ≈ 3e-7) | reproduces R's multipliers in `mu_ineq` |
+| SLSQP | `rtol = 1e-6` | `1e-4` | stops early along the flat Bs4/Bs5 direction |
+| trust-constr | `rtol = 1e-6` | `1e-4` | stops early along the flat Bs4/Bs5 direction |
+
+With the polished reference, auglag's θ tolerance is tighter than the
+`≈ 1e-5` anticipated in Decision 4. The tests also cover the guards,
+`h(a | x_i) ≥ 0` on every training row, finite predictions, right/left/
+interval censoring (auglag against trust-constr), and silence of the #157
+warning under extrapolation. That warning cannot fire on this path, because
+`h(a | x) = θ_b[0] · f(x) ≥ 0` for every `x`.
+
+---
+
 ## Consequences
 
 - **ADR 0002 Decision 3 is superseded** for its exponential corner case. Its
@@ -382,7 +463,10 @@ the nonlinear rows need the same right-hand side:
   `MLT.__init__` (`src/mltpy/model.py`). It is lifted in the implementation
   slices: the scale-only case via the linear collapse first, then shift + scale
   via the nonlinear block. The `InteractionBasis` rejection in `optimize()`
-  stays, and `MLT.__init__` keeps rejecting that combination.
+  stays, and `MLT.__init__` keeps rejecting that combination. *(#114: the
+  `MLT.__init__` guard now fires only for an `InteractionBasis`; the shift
+  path's remaining rejection, for a shift block or a non-zero offset, is a
+  `NotImplementedError` in `optimize()`, see the #114 amendment.)*
 - **Unscaled exponential path:** no code change. Decision 1 ratifies the
   existing `nonneg_lower` rows. The unscaled `InteractionBasis` path gained
   the equivalent rows in [#158](https://github.com/RMKruse/mltpy/issues/158)

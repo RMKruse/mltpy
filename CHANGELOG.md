@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `scaling=` with `base_distribution="exponential"` on the shift basis when
+  there is no shift block (`MLT(..., base_distribution="exponential",
+  scaling=X_s).fit(y)`). The support rule `h(a|x_i) ≥ 0` collapses to the
+  linear row `θ_b[0] ≥ 0` (ADR 0005 Decision 2). All three solvers and all
+  four censoring types fit it, and `θ_b`, `γ` and the log-likelihood match R
+  `mlt(ctm(..., scaling = ~x_s, todistr = "Exponential"), fixed = c("Bs1(y)"
+  = 0))` (cross-checked against `tram::Aareg(y ~ 0 | x_s)`; fixture
+  `reference/mlt_exponential_scaling_*`). `MLT.__init__` now rejects the
+  combination only on an `InteractionBasis`. A shift block (`X` with columns)
+  or a non-zero `offset` makes the row non-linear in `γ`, so `fit` raises
+  `NotImplementedError` in those cases. (#114)
+- `auglag_minimize(..., bounds=(lb, ub))`: optional box bounds enforced inside
+  every inner L-BFGS-B solve (box-constrained augmented Lagrangian, Birgin &
+  Martínez 2014). Bound multipliers are returned as `nu_lower` / `nu_upper`,
+  and the KKT residual and ADR 0004 stall test are projected onto the box.
+  The scaled exponential path uses it for `θ_b[0] ≥ 0`. There the smooth
+  extension `log f(h) = −h` makes the objective fall like
+  `−t·Σ exp(0.5·x_s·γ)` below the row, so the PHR subproblem over `ℝⁿ` has no
+  minimiser. (#114)
+- `build_constraint_matrices` / `build_constraints` accept `q_s=` (number of
+  trailing `γ` columns) for the exponential support row under scaling. (#114)
+
 - `BoxCox(..., interacting=...)` — stratified / fully-interacting Box-Cox
   models `h(y|x) = (a(y) ⊗ b(x))ᵀ vec(Θ)` through the convenience surface,
   mirroring `Coxph(..., interacting=...)`. Accepts a `BernsteinBasis`,

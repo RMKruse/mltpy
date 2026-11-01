@@ -771,3 +771,199 @@ class TestOptimizerAuglag:
         config = OptimizerConfig(solver="auglag", auglag_options=None)
         result = optimize(basis, y, config=config)
         assert result.converged
+
+
+# ---------------------------------------------------------------------------
+# Box bounds on the inner solve (issue #114)
+# ---------------------------------------------------------------------------
+
+
+def _runaway_obj(theta: np.ndarray) -> tuple[float, np.ndarray]:
+    """``f(x) = x₀·exp(x₁) + x₁²/2``, unbounded below as ``x₀ → −∞, x₁ → ∞``.
+
+    Mirrors the scaled exponential likelihood's smooth extension: below the
+    support row ``x₀ ≥ 0`` the objective falls exponentially in ``x₁`` while a
+    PHR penalty on the row grows only quadratically.  Over ``x₀ ≥ 0`` the
+    minimum is ``(0, 0)`` with multiplier ``∂f/∂x₀ = exp(0) = 1``.
+    """
+    x0, x1 = float(theta[0]), float(theta[1])
+    e = np.exp(x1)
+    return x0 * e + 0.5 * x1 * x1, np.array([e, x0 * e + x1])
+
+
+_NO_BOUNDS = np.array([-np.inf, -np.inf])
+
+
+class TestBoxBounds:
+    """``bounds=(lb, ub)`` is passed to the inner solve (box-constrained AL).
+
+    Birgin & Martínez (2014) minimise each PHR subproblem over a box Ω; the
+    bound multipliers are read off the projected augmented-Lagrangian gradient.
+    """
+
+    @pytest.mark.parametrize(
+        ("center", "lb", "ub", "expected", "nu_lo", "nu_up"),
+        [
+            # Lower bound active: x₀ pushed to 0, ν_lo = ∂f/∂x₀ = 0 − (−1) = 1.
+            (
+                [-1.0, 2.0],
+                [0.0, -np.inf],
+                [np.inf, np.inf],
+                [0.0, 2.0],
+                [1.0, 0],
+                [0, 0],
+            ),
+            # Upper bound active on x₁: ν_up = −∂f/∂x₁ = 3 − 2 = 1.
+            (
+                [0.5, 3.0],
+                [-np.inf, -np.inf],
+                [np.inf, 2.0],
+                [0.5, 2.0],
+                [0, 0],
+                [0, 1.0],
+            ),
+            # Interior optimum: bounds inactive, multipliers zero.
+            ([0.5, 0.5], [0.0, 0.0], [1.0, 1.0], [0.5, 0.5], [0, 0], [0, 0]),
+        ],
+    )
+    def test_quadratic(
+        self,
+        center: list[float],
+        lb: list[float],
+        ub: list[float],
+        expected: list[float],
+        nu_lo: list[float],
+        nu_up: list[float],
+    ) -> None:
+        result = auglag_minimize(
+            quadratic_obj(np.array(center)),
+            np.array([0.5, 0.5]),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            bounds=(np.array(lb), np.array(ub)),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, expected, atol=1e-8)
+        np.testing.assert_allclose(result.nu_lower, nu_lo, atol=1e-6)
+        np.testing.assert_allclose(result.nu_upper, nu_up, atol=1e-6)
+        assert result.kkt_residual < 1e-6
+
+    def test_box_keeps_every_evaluation_inside(self) -> None:
+        """The PHR subproblem is unbounded below for x₀ < 0; the box keeps every
+        objective evaluation at x₀ ≥ 0, so no inner solve can enter that region.
+        """
+        A = np.array([[1.0, 0.0]])
+        seen_x0: list[float] = []
+
+        def recording(theta: np.ndarray) -> tuple[float, np.ndarray]:
+            seen_x0.append(float(theta[0]))
+            return _runaway_obj(theta)
+
+        # L_A at μ = 0, ρ = 10 along x₀ = −1: f + 5 → −∞ as x₁ grows.
+        assert _runaway_obj(np.array([-1.0, 20.0]))[0] + 5.0 < -1e8
+        boxed = auglag_minimize(
+            recording,
+            np.array([0.5, 0.0]),
+            A_ineq=A,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            bounds=(np.array([0.0, -np.inf]), np.array([np.inf, np.inf])),
+        )
+        assert boxed.converged
+        assert min(seen_x0) >= 0.0
+        np.testing.assert_allclose(boxed.theta, [0.0, 0.0], atol=1e-7)
+        # The duplicated PHR row never goes infeasible, so its own multiplier
+        # stays 0 and the force is carried by the bound multiplier.
+        np.testing.assert_allclose(boxed.mu_ineq, [0.0], atol=1e-12)
+        np.testing.assert_allclose(boxed.nu_lower, [1.0, 0.0], atol=1e-6)
+
+    def test_with_linear_rows(self) -> None:
+        """Box + inequality: min ½‖x − (−1, −1)‖² s.t. x₀ ≥ 0, x₁ − x₀ ≥ 0."""
+        result = auglag_minimize(
+            quadratic_obj(np.array([-1.0, -1.0])),
+            np.array([0.5, 1.0]),
+            A_ineq=np.array([[-1.0, 1.0]]),
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            bounds=(np.array([0.0, -np.inf]), np.array([np.inf, np.inf])),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, [0.0, 0.0], atol=1e-7)
+        # ∇f = (1, 1) = ν_lo e₀ + μ (−1, 1)  ⇒  μ = 1, ν_lo = 2.
+        np.testing.assert_allclose(result.mu_ineq, [1.0], atol=1e-5)
+        np.testing.assert_allclose(result.nu_lower, [2.0, 0.0], atol=1e-5)
+
+    def test_x0_outside_box_is_projected(self) -> None:
+        result = auglag_minimize(
+            quadratic_obj(np.array([1.0, 1.0])),
+            np.array([-5.0, 9.0]),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            bounds=(np.array([0.0, 0.0]), np.array([2.0, 2.0])),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, [1.0, 1.0], atol=1e-8)
+
+    def test_no_bounds_matches_default(self) -> None:
+        """``bounds=None`` leaves the solve unchanged; ν are zero vectors."""
+        obj = quadratic_obj(np.array([-1.0, 2.0]))
+        A = np.array([[1.0, 0.0]])
+        a = auglag_minimize(
+            obj, np.ones(2), A_ineq=A, b_ineq=None, C_eq=None, d_eq=None
+        )
+        b = auglag_minimize(
+            obj,
+            np.ones(2),
+            A_ineq=A,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            bounds=None,
+        )
+        np.testing.assert_array_equal(a.theta, b.theta)
+        np.testing.assert_array_equal(a.mu_ineq, b.mu_ineq)
+        np.testing.assert_array_equal(a.nu_lower, np.zeros(2))
+        np.testing.assert_array_equal(a.nu_upper, np.zeros(2))
+
+    @pytest.mark.parametrize(
+        ("bounds", "match"),
+        [
+            ((np.zeros(3), np.ones(3)), "shape"),
+            ((np.zeros(2), np.ones(3)), "shape"),
+            ((np.ones(2), np.zeros(2)), "lb <= ub"),
+            ((np.array([np.nan, 0.0]), np.ones(2)), "NaN"),
+            ((np.array([np.inf, 0.0]), np.full(2, np.inf)), "lb"),
+        ],
+    )
+    def test_invalid_bounds(
+        self, bounds: tuple[np.ndarray, np.ndarray], match: str
+    ) -> None:
+        with pytest.raises(ValueError, match=match):
+            auglag_minimize(
+                quadratic_obj(np.zeros(2)),
+                np.zeros(2),
+                A_ineq=None,
+                b_ineq=None,
+                C_eq=None,
+                d_eq=None,
+                bounds=bounds,
+            )
+
+    def test_bounds_require_bounded_inner_method(self) -> None:
+        with pytest.raises(ValueError, match="inner_method"):
+            auglag_minimize(
+                quadratic_obj(np.zeros(2)),
+                np.zeros(2),
+                A_ineq=None,
+                b_ineq=None,
+                C_eq=None,
+                d_eq=None,
+                bounds=(np.zeros(2), np.ones(2)),
+                options=AugLagOptions(inner_method="BFGS"),
+            )

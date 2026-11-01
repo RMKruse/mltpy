@@ -7,12 +7,14 @@ the CDF near ``a`` is negative.  ADR 0005 consequence 4: warn with a
 ``UserWarning`` naming the offending rows and return the raw values (no
 clamping at ``max(h, 0)``, no raising).
 
-Follow-up note — scaled path: ``scaling=`` combined with the exponential link
-is still rejected at ``__init__`` (ADR 0002 Decision 3), so only the unscaled
-shift path is exercised here.  The predict-side check already uses the scaled
-form ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β + offset``; a scaled, inside-the-hull case
-should be added once the exponential + scaling slices (#114 / #115, map #117)
-make that fit possible.
+Follow-up note — scaled path: ``scaling=`` with the exponential link fits
+only without a shift block so far (#114).  There ``h(a|x) = θ_b[0]·f(x) ≥ 0``
+for every ``x``, so the warning cannot fire
+(``tests/test_exponential_scaling_no_shift.py`` checks it stays silent under
+extrapolation).  The predict-side check already uses the scaled form
+``θ_b[0]·exp(0.5·x_s·γ) + x_d·β + offset``; a scaled, inside-the-hull case
+should be added once the shift + scale slice (#115, map #117) makes that fit
+possible.
 
 Fixture
 -------

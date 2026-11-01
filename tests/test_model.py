@@ -1869,15 +1869,20 @@ class TestScalingStub:
         assert model.scaling is not None
         assert model.scaling.shape == (20, 1)
 
-    def test_scaling_rejected_for_exponential_base(self):
+    def test_scaling_accepted_for_exponential_base(self):
+        """Issue #114: ``__init__`` no longer rejects exponential + scaling.
+
+        The scale-only model fits; a shift block is rejected at ``fit`` (see
+        tests/test_exponential_scaling_no_shift.py).
+        """
         X_s = np.ones((20, 1), dtype=float)
-        with pytest.raises(ValueError, match="0002-scaling-terms"):
-            MLT(
-                order=3,
-                support=(0.0, 1.0),
-                scaling=X_s,
-                base_distribution="exponential",
-            )
+        model = MLT(
+            order=3,
+            support=(0.0, 1.0),
+            scaling=X_s,
+            base_distribution="exponential",
+        )
+        assert model.scaling is not None
 
     def test_scaling_accepted_for_each_censoring_type(self):
         """Issue #71: every censoring type now accepts scaling= at __init__.

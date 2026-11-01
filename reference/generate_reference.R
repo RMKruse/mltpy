@@ -617,6 +617,135 @@ cat(sprintf("Exponential + offset: n=%d, ll=%.10f, theta = %s\n", n_eo, ll_eo,
             paste(sprintf("%.8f", theta_eo), collapse = ", ")))
 
 # ---------------------------------------------------------------------------
+# exponential + scaling term, no shift term (issue #114)
+#
+# Model: todistr = "Exponential", order-4 Bernstein in y on [0, max(y)], one
+# scaling term x_s and no shift term, exact data:
+#   h(y | x_s) = a(y)'theta_b * exp(0.5 * x_s * gamma).
+# Writes:
+#   mlt_exponential_scaling_y.txt       — 150 responses
+#   mlt_exponential_scaling_xs.txt      — 150 scaling-covariate values
+#   mlt_exponential_scaling_support.txt — Bernstein support c(0, max(y))
+#   mlt_exponential_scaling_theta.txt   — c(theta_b (5), gamma (1)), in
+#                                         mltpy's [theta_b | gamma] order
+#   mlt_exponential_scaling_ll.txt      — mlt's own loglik at theta
+#
+# Why this case has exact R parity (ADR 0005 Decisions 2 and 4,
+# research/exp-scaling-r-route/README.md §5, §10, §12): mltpy's support rule
+# h(a | x_i) = theta_b[0] * exp(0.5 * x_s,i * gamma) >= 0 collapses to the
+# linear row theta_b[0] >= 0, since the scaling factor is strictly positive.
+# That row is active at the MLE: shifting theta_b down in parallel leaves every
+# monotonicity row and the sign of every h'_i unchanged and lowers every h_i,
+# which strictly raises the likelihood sum(-h_i + log h'_i) until
+# theta_b[0] = 0.  So mlt(fixed = c("Bs1(y)" = 0)) poses exactly mltpy's
+# problem to R's own optimiser, and with Bs1 pinned h(y_i | x_i) > 0 at every
+# observation, so mlt never touches its dexp -Inf barrier.  tram::Aareg
+# (y ~ 0 | x_s) is the same model (it pins Bs1 = 0 on support [0, max(y)]).
+#
+# Coefficient order Bs1..Bs5, scl_x_s is mltpy's [theta_b | gamma]; raw ctm
+# scales by exp(0.5 * x_s * gamma), so gamma needs no sign flip.
+#
+# Route:
+#   1. mlt(fixed = c("Bs1(y)" = 0)) with tight optimiser tolerances.  It stops
+#      with a stationarity residual of ~2e-5 on this flat surface (#126 §12),
+#      so
+#   2. it is polished by equality-constrained Newton on its active set (the
+#      monotonicity rows with zero slack), using mlt's own score and Hessian
+#      closures over the free parameters.
+#   3. KKT check in the full parameter space: support row theta_b[0] >= 0 and
+#      the active monotonicity rows have strictly positive multipliers, the
+#      stationarity residual is ~1e-12, every row is feasible.
+#   4. Cross-checks: the unpolished mlt fit and tram::Aareg agree on logLik
+#      and theta.
+# ---------------------------------------------------------------------------
+
+set.seed(114)
+n_es  <- 150L
+xs_es <- rnorm(n_es)
+y_es  <- rexp(n_es) / (2 * exp(0.5 * 0.6 * xs_es))
+d_es  <- data.frame(y = y_es, x_s = xs_es)
+w_es  <- rep(1, n_es)
+sup_es <- c(0, max(y_es))
+p_es  <- 5L
+
+b_es   <- Bernstein_basis(numeric_var("y", support = sup_es, bounds = c(0, Inf)),
+                          order = 4, ui = "increasing")
+ctm_es <- ctm(b_es, scaling = ~ x_s, data = d_es, todistr = "Exponential")
+stopifnot(identical(names(coef(ctm_es)),
+                    c(sprintf("Bs%d(y)", 1:5), "scl_x_s")))
+
+# Step 1: R's own fit with Bs1 pinned at 0.
+fit_es <- mlt(ctm_es, data = d_es, fixed = c("Bs1(y)" = 0),
+              optim = mltoptim(abstol = 1e-12, reltol = 1e-12))
+stopifnot(fit_es$convergence == 0)
+ll_es_raw    <- as.numeric(logLik(fit_es))
+theta_es_raw <- coef(fit_es)
+
+# Step 2: Newton polish over the free parameters (Bs2..Bs5, scl_x_s).
+# fit_es$hessian is the Hessian of the negative log-likelihood; the score is
+# the gradient of the log-likelihood.  Monotonicity rows over the free
+# parameters (theta_b[0] = 0 folded in): Bs2 >= 0, Bs{k+1} - Bs{k} >= 0.
+A_free_es <- cbind(rbind(c(1, 0, 0, 0), diff(diag(4L))), 0)
+par_es    <- fit_es$par
+act_free  <- which(drop(A_free_es %*% par_es) < 1e-6)
+stopifnot(length(act_free) >= 1L)
+A_act_free <- A_free_es[act_free, , drop = FALSE]
+Z_es <- qr.Q(qr(t(A_act_free)), complete = TRUE)[, -seq_along(act_free), drop = FALSE]
+par_es <- par_es - drop(qr.solve(A_act_free, drop(A_act_free %*% par_es)))
+for (it in 1:50) {
+  s_es <- colSums(fit_es$scorei(par_es, weights = w_es))
+  zs <- drop(crossprod(Z_es, s_es))
+  if (max(abs(zs)) < 1e-12) break
+  H_es <- fit_es$hessian(par_es, weights = w_es)
+  par_es <- par_es + drop(Z_es %*% solve(crossprod(Z_es, H_es %*% Z_es), zs))
+}
+theta_es <- c(0, par_es)
+names(theta_es) <- names(coef(ctm_es))
+
+# Step 3: KKT in the full space, with mlt's score over all parameters.
+mlt_es  <- mlt(ctm_es, data = d_es, dofit = FALSE)
+ll_es   <- mlt_es$loglik(theta_es, weights = w_es)
+g_es    <- -colSums(mlt_es$scorei(theta_es, weights = w_es))   # grad of nll
+A_es    <- cbind(rbind(c(1, rep(0, p_es - 1L)), diff(diag(p_es))), 0)
+slack_es <- drop(A_es %*% theta_es)
+act_es   <- which(slack_es < 1e-8)
+lam_es   <- qr.solve(t(A_es[act_es, , drop = FALSE]), g_es)
+stat_es  <- max(abs(g_es - drop(t(A_es[act_es, , drop = FALSE]) %*% lam_es)))
+dpolish_es <- max(abs(theta_es - theta_es_raw))
+stopifnot(1L %in% act_es, all(lam_es > 1e-3), stat_es < 1e-9,
+          all(slack_es > -1e-12), ll_es >= ll_es_raw - 1e-12,
+          dpolish_es < 1e-4)
+
+# Step 4: cross-check with tram::Aareg (same model, own support c(0, max y)).
+# Aareg evaluates tram_data() unqualified, so tram must be attached.
+suppressPackageStartupMessages({
+  library(tram)
+})
+fit_es_aareg <- suppressWarnings(Aareg(y ~ 0 | x_s, data = d_es, order = 4))
+dll_aareg_es <- abs(as.numeric(logLik(fit_es_aareg)) - ll_es)
+dth_aareg_es <- max(abs(coef(fit_es_aareg, with_baseline = TRUE) - theta_es))
+stopifnot(dll_aareg_es < 1e-7, dth_aareg_es < 1e-3)
+
+cat(sprintf(paste0(
+  "Exponential + scaling (no shift): mlt(fixed Bs1 = 0) ll %.12f, Newton ",
+  "polish moved theta %.1e to ll %.12f; active rows {%s}, multipliers {%s}, ",
+  "stationarity %.1e; Aareg |d ll| %.1e, |d theta| %.1e\n"),
+  ll_es_raw, dpolish_es, ll_es, paste(act_es, collapse = ", "),
+  paste(sprintf("%.4g", lam_es), collapse = ", "), stat_es,
+  dll_aareg_es, dth_aareg_es))
+
+writeLines(format(y_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_y.txt"))
+writeLines(format(xs_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_xs.txt"))
+writeLines(format(sup_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_support.txt"))
+writeLines(format(theta_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_theta.txt"))
+writeLines(format(ll_es, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_ll.txt"))
+
+# ---------------------------------------------------------------------------
 # Lm (normal linear regression as a CTM) reference
 #
 # tram::Lm with order=1 Bernstein + normal base is equivalent to classical

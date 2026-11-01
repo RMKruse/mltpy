@@ -934,7 +934,12 @@ def optimize(
         :class:`~mltpy.variables.CensoredData` with censored rows (the
         interaction likelihood is exact-data only), when ``scaling`` is
         combined with ``base_distribution="exponential"``, or when
-        ``config.fixed_params`` is set.
+        ``config.fixed_params`` is set.  On the shift basis, when ``scaling``
+        is combined with ``base_distribution="exponential"`` and a shift
+        block (``X`` with columns) or a non-zero ``offset``: the support row
+        is then non-linear in ``γ`` (ADR 0005 Decision 2).  The scale-only
+        case (no ``X``, zero or no offset) fits, its support row collapsing
+        to ``θ_b[0] ≥ 0`` (issue #114).
     """
     # Fail fast for unsupported base distributions before entering scipy.
     dist = _get_dist(base_distribution)
@@ -982,13 +987,28 @@ def optimize(
 
     q_s = scaling.shape[1] if scaling is not None else 0
     if scaling is not None and base_distribution == "exponential":
-        # ADR 0002, Decision 3 — combining scaling with the exponential link
-        # would turn the support-feasibility row into a non-linear constraint
-        # that the current constraint scaffolding does not support.
-        raise NotImplementedError(
-            "scaling= is not supported with base_distribution='exponential' "
-            "(see docs/adr/0002-scaling-terms.md, Decision 3)."
-        )
+        # ADR 0005 Decision 2 — under scaling the support rule h(a|x_i) ≥ 0
+        # reads θ_b[0]·f_i + x_i·β ≥ −offset_i with f_i = exp(0.5·x_s,i·γ).
+        # Without a shift block and with a zero offset it collapses to the
+        # linear row θ_b[0] ≥ 0 (issue #114) and fits on the linear paths;
+        # every other case is non-linear in γ and not implemented yet.
+        q_d = X.shape[1] if X is not None else 0
+        if q_d > 0:
+            raise NotImplementedError(
+                "scaling= with base_distribution='exponential' is not yet "
+                f"implemented when a shift block is present (X has {q_d} "
+                "column(s)): the support row θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0 "
+                "is non-linear in γ (see "
+                "docs/adr/0005-exponential-scaling-constraint.md, Decision 2). "
+                "Fit without X (scale-only) or drop scaling=."
+            )
+        if offset is not None and np.any(np.asarray(offset) != 0.0):
+            raise NotImplementedError(
+                "scaling= with base_distribution='exponential' is not yet "
+                "implemented with a non-zero offset: the support row "
+                "θ_b[0]·exp(0.5·x_s·γ) + offset ≥ 0 is non-linear in γ (see "
+                "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+            )
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0) + q_s
     nonneg_lower = base_distribution == "exponential"
@@ -1084,6 +1104,7 @@ def _optimize_scipy(
     # included (ADR 0005 Decision 1, issue #160).  Without covariates this
     # reduces to theta_b[0] >= max_i(-offset_i); with covariates we add one
     # linear inequality per training row: theta_b[0] + X_i @ beta >= -offset_i.
+    # Under scaling with no shift block it is theta_b[0] >= 0 (issue #114).
     constraints = build_constraints(
         n_params,
         lower=config.lower,
@@ -1093,6 +1114,7 @@ def _optimize_scipy(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
         offset=offset if nonneg_lower else None,
+        q_s=scaling.shape[1] if scaling is not None else 0,
     )
 
     true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
@@ -1687,6 +1709,7 @@ def _optimize_auglag(
         nonneg_lower=nonneg_lower,
         X=X if nonneg_lower else None,
         offset=offset if nonneg_lower else None,
+        q_s=scaling.shape[1] if scaling is not None else 0,
     )
     # fixed_params (issue #85): append one equality row per pinned index.
     # Each row is e_i with rhs v_i, stacked under any existing rows from
@@ -1714,6 +1737,31 @@ def _optimize_auglag(
             C_eq=np.vstack([cm.C_eq, extra_rows]),
             d_eq=np.concatenate([cm.d_eq, extra_rhs]),
         )
+    # Issue #114 — scaled exponential path (shift block and non-zero offset
+    # rejected in optimize()).  The support rule has collapsed to the single
+    # row θ_b[0] ≥ 0, the last row of A_ineq, but the smooth extension
+    # log f(h) = −h makes the objective unbounded below once it is violated:
+    # with θ_b[0] = −t, the NLL falls like −t·Σ_i exp(0.5·x_s,i·γ),
+    # exponentially in γ, against a PHR penalty quadratic in t, so the PHR
+    # subproblem over ℝⁿ has no minimiser.  The row is a pure bound, so it is
+    # also passed to the inner solve as the box θ_b[0] ≥ 0 (box-constrained
+    # AL, auglag_minimize Notes); the row stays in A_ineq for reporting and
+    # its multiplier is the bound multiplier ν_lo[0] (folded in below).
+    support_box: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
+    support_row: int | None = None
+    if nonneg_lower and scaling is not None:
+        support_row = cm.A_ineq.shape[0] - 1
+        e0 = np.zeros(total_params, dtype=np.float64)
+        e0[0] = 1.0
+        if not np.array_equal(cm.A_ineq[support_row], e0):
+            raise RuntimeError(
+                "Expected the collapsed exponential support row [1, 0, …, 0] "
+                "as the last inequality row on the scaled path; got "
+                f"{cm.A_ineq[support_row].tolist()}."
+            )
+        lb = np.full(total_params, -np.inf)
+        lb[0] = cm.b_ineq[support_row]
+        support_box = (lb, np.full(total_params, np.inf))
     true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
 
     # auglag always needs gradients for the L-BFGS-B inner solver
@@ -1752,6 +1800,7 @@ def _optimize_auglag(
             C_eq=cm.C_eq,
             d_eq=cm.d_eq,
             options=auglag_opts,
+            bounds=support_box,
         ),
         lambda r: bool(r.converged),
         lambda r: true_nll(r.theta),
@@ -1769,13 +1818,15 @@ def _optimize_auglag(
     # Newton-CG polish: only for interior-MLE fits (no active inequalities, no
     # equality constraints — the unconstrained trust-ncg would violate lower/upper
     # boundary pins if cm.C_eq has rows).
+    mu_ineq = best_auglag_result.mu_ineq
+    if support_row is not None:
+        # The boxed row never goes infeasible, so its PHR multiplier stays 0;
+        # its force is the bound multiplier on θ_b[0].
+        mu_ineq = mu_ineq.copy()
+        mu_ineq[support_row] += best_auglag_result.nu_lower[0]
     final_theta = best_auglag_result.theta
     final_nll = best_nll
-    if (
-        config.polish
-        and cm.C_eq.shape[0] == 0
-        and np.all(best_auglag_result.mu_ineq < 1e-6)
-    ):
+    if config.polish and cm.C_eq.shape[0] == 0 and np.all(mu_ineq < 1e-6):
 
         def shift_hess(t: NDArray[np.float64]) -> NDArray[np.float64]:
             return _hessian(
@@ -1816,7 +1867,7 @@ def _optimize_auglag(
         n_outer_iter=best_auglag_result.n_outer_iter,
         kkt_residual=best_auglag_result.kkt_residual,
         rho_final=best_auglag_result.rho_final,
-        mu_ineq=best_auglag_result.mu_ineq,
+        mu_ineq=mu_ineq,
         lambda_eq=best_auglag_result.lambda_eq,
         constraint_A_ineq=cm.A_ineq,
         constraint_C_eq=c_eq,

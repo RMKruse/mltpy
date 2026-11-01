@@ -9,9 +9,11 @@ gradient of ``-ℓ`` agrees with a central-difference reference at the fitted
 issue #71: "All seven base distributions tested under scaling for at least
 one censoring type each."
 
-``"exponential"`` × scaling is rejected up-front by
-:class:`~mltpy.model.ConditionalTransformationModel.__init__`
-(see ADR 0002 Decision 3); we assert the ``ValueError`` rather than fit.
+``"exponential"`` × scaling fits only without a shift block (issue #114,
+ADR 0005 Decision 2): with ``x_d`` present, as in this module's datasets, the
+support row is non-linear in ``γ`` and ``fit`` raises ``NotImplementedError``.
+The scale-only case has its own R-parity tests in
+:mod:`tests.test_exponential_scaling_no_shift`.
 """
 
 from __future__ import annotations
@@ -109,8 +111,8 @@ def _check_gradient(
 def test_scaled_gradient_none_for_each_distribution(base_distribution: str) -> None:
     """Exact + scaling: analytical gradient agrees with FD for every link.
 
-    Excludes ``"exponential"`` (rejected at ``__init__`` time — see the
-    dedicated ``test_exponential_*`` cases below).  Evaluates at a generic
+    Excludes ``"exponential"`` (its shift + scale fit is not implemented —
+    see the dedicated ``test_exponential_*`` cases below).  Evaluates at a generic
     feasible θ (``_generic_theta``) rather than the MLE so that ``laplace``'s
     score discontinuity at ``h_i = 0`` does not contaminate the FD reference.
     """
@@ -231,33 +233,40 @@ def test_scaled_gradient_interval_for_each_distribution(
 
 
 # ---------------------------------------------------------------------------
-# "exponential" × scaling — must be rejected up-front (ADR 0002 Decision 3)
+# "exponential" × scaling — shift block still rejected (ADR 0005 Decision 2)
 # ---------------------------------------------------------------------------
 
 
-def test_exponential_with_scaling_rejected_in_init() -> None:
-    """``base_distribution='exponential'`` + ``scaling=`` is a ValueError.
+def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
+    """``base_distribution='exponential'`` + ``scaling=`` + ``x_d`` fails at fit.
 
-    The exponential link requires ``h(y|x) ≥ 0``, which becomes a
-    non-linear-in-γ constraint once a scaling factor multiplies the
-    baseline (ADR 0002 Decision 3 — Option (3): reject up-front).
+    Formerly a ``ValueError`` at ``__init__`` for every exponential +
+    scaling model (ADR 0002 Decision 3).  Issue #114 narrowed the guard: the
+    scale-only model fits (its support row collapses to ``θ_b[0] ≥ 0``), so
+    ``__init__`` now accepts the combination, and the shift design, which
+    only arrives at ``fit``, decides.  With a shift block the support row
+    ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β ≥ 0`` is non-linear in ``γ`` and not yet
+    implemented.
     """
-    _, _, x_s, support = _make_dataset()
-    with pytest.raises(ValueError, match="exponential"):
-        MLT(
-            order=4,
-            support=support,
-            base_distribution="exponential",
-            scaling=x_s,
-        )
+    y, x_d, x_s, support = _make_dataset()
+    y_pos = y - y.min() + 0.01
+    sup = (0.0, float(y_pos.max() + 0.5))
+    model = MLT(
+        order=4,
+        support=sup,
+        base_distribution="exponential",
+        scaling=x_s,
+    )
+    with pytest.raises(NotImplementedError, match="shift block"):
+        model.fit(y_pos, X=x_d)
 
 
 def test_exponential_without_scaling_still_works() -> None:
     """Sanity guard: exponential alone is unchanged by the scaling ADR.
 
-    Confirms the up-front rejection in
-    :class:`~mltpy.model.ConditionalTransformationModel.__init__` does
-    not accidentally fire when ``scaling`` is ``None``.
+    Confirms the exponential + scaling guard in
+    :func:`~mltpy.optimizer.optimize` does not accidentally fire when
+    ``scaling`` is ``None``.
     """
     y, x_d, _, support = _make_dataset()
     # Shift y to be non-negative (exponential support).

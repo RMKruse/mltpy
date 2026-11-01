@@ -283,6 +283,81 @@ def _single_row_rhs(offset: NDArray[np.float64] | None) -> NDArray[np.float64]:
     return np.array([float(np.max(-offset))], dtype=np.float64)
 
 
+def _scaled_support_row(
+    n_params: int,
+    total: int,
+    *,
+    q_s: int,
+    X: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Exponential support row under a scaling term with no shift block.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients.
+    total:
+        Full parameter length ``n_params + q_d + q_s``.
+    q_s:
+        Number of scaling columns (``q_s > 0``).
+    X:
+        Shift design, shape ``(n, q_d)``, or ``None``.  Must have no columns.
+    offset:
+        Per-observation offset, or ``None``.  Must be identically zero.
+
+    Returns
+    -------
+    rows : NDArray of shape ``(1, total)``
+        The row ``[1, 0, …, 0 | 0_{q_s}]``.
+    rhs : NDArray of shape ``(1,)``
+        Zero.
+
+    Raises
+    ------
+    NotImplementedError
+        If a shift block is present (``q_d > 0``) or the offset is non-zero.
+    ValueError
+        If ``X`` is not 2-D, or ``offset`` is empty, not finite, or does not
+        match the rows of ``X``.
+
+    Notes
+    -----
+    ``h(a|x_i) = θ_b[0]·f_i + x_i·β + offset_i`` with
+    ``f_i = exp(0.5·x_s,i·γ) > 0``.  With ``q_d = 0`` and ``offset ≡ 0`` the
+    rule ``h(a|x_i) ≥ 0`` is ``θ_b[0]·f_i ≥ 0 ⇔ θ_b[0] ≥ 0`` for every ``i``
+    (ADR 0005 Decision 2, simplification 1).  Otherwise the row is non-linear
+    in ``γ`` (``θ_b[0] ≥ −offset_i / f_i``, or the β term), which needs the
+    nonlinear inequality block of ADR 0005 Decision 2.
+    """
+    q_d = total - n_params - q_s
+    n_rows: int | None = None
+    if X is not None:
+        X_arr = np.asarray(X, dtype=np.float64)
+        if X_arr.ndim != 2:
+            raise ValueError(f"X must be 2-D, got shape {X_arr.shape}")
+        q_d = max(q_d, X_arr.shape[1])
+        n_rows = X_arr.shape[0]
+    if q_d > 0:
+        raise NotImplementedError(
+            "The exponential support row with scaling= and a shift block "
+            f"(q_d={q_d}) is θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0, which is "
+            "non-linear in γ; it is not implemented yet (see "
+            "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+        )
+    off = _validate_support_offset(offset, n_rows)
+    if off is not None and np.any(off != 0.0):
+        raise NotImplementedError(
+            "The exponential support row with scaling= and a non-zero offset "
+            "is θ_b[0] ≥ −offset_i·exp(−0.5·x_s,i·γ), which is non-linear in "
+            "γ; it is not implemented yet (see "
+            "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+        )
+    rows = np.zeros((1, total), dtype=np.float64)
+    rows[0, 0] = 1.0
+    return rows, np.zeros(1, dtype=np.float64)
+
+
 def _assemble_constraint_arrays(
     n_params: int,
     *,
@@ -290,6 +365,7 @@ def _assemble_constraint_arrays(
     nonneg_lower: bool,
     X: NDArray[np.float64] | None,
     offset: NDArray[np.float64] | None = None,
+    q_s: int = 0,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64] | None, NDArray[np.float64] | None]:
     """Build the inequality rows shared by both constraint builders.
 
@@ -322,6 +398,10 @@ def _assemble_constraint_arrays(
         Per-observation offset, shape ``(n,)``, or ``None``.  Only consulted
         when ``nonneg_lower=True``; it sets the support right-hand side (see
         Notes).
+    q_s:
+        Number of scaling-design columns (``γ`` block, trailing in
+        ``[θ_b | β | γ]``).  Only consulted when ``nonneg_lower=True``; see
+        Notes.
 
     Returns
     -------
@@ -337,11 +417,17 @@ def _assemble_constraint_arrays(
 
     Raises
     ------
+    TypeError
+        If ``q_s`` is not an integer.
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
         ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted, or if ``offset`` is empty, not
-        finite, or does not have one entry per row of ``X``.
+        but ``total_params`` is omitted, if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``, or if ``q_s``
+        is negative or exceeds ``total_params - n_params``.
+    NotImplementedError
+        If ``nonneg_lower=True`` and ``q_s > 0`` with a shift block or a
+        non-zero offset (the support row is then non-linear in ``γ``).
 
     Notes
     -----
@@ -351,8 +437,25 @@ def _assemble_constraint_arrays(
     covariates that is one row ``[1, 0, …, 0 | x_i]·θ ≥ −offset_i`` per
     observation.  Without covariates the rows all read ``θ_b[0] ≥ −offset_i``
     and collapse to the single row ``θ_b[0] ≥ max_i(−offset_i)``.
+
+    With a scaling term (``q_s > 0``) the rule reads
+    ``θ_b[0]·f_i + x_i·β ≥ −offset_i`` with ``f_i = exp(0.5·x_s,i·γ) > 0``,
+    which is non-linear in ``γ``.  Without a shift block and with a zero
+    offset it collapses to ``θ_b[0]·f_i ≥ 0 ⇔ θ_b[0] ≥ 0`` (ADR 0005
+    Decision 2, simplification 1): the single row ``[1, 0, …, 0 | 0_{q_s}]``
+    (issue #114).  Every other scaled case needs the nonlinear block of ADR
+    0005 Decision 2 and raises ``NotImplementedError``.
     """
     total = total_params if total_params is not None else n_params
+    if isinstance(q_s, bool) or not isinstance(q_s, (int, np.integer)):
+        raise TypeError(
+            f"q_s must be an int (number of scaling columns); got {type(q_s).__name__}."
+        )
+    if q_s < 0 or q_s > total - n_params:
+        raise ValueError(
+            f"q_s must lie in [0, total_params - n_params] = "
+            f"[0, {total - n_params}]; got q_s={q_s}."
+        )
     D = MonotonicityConstraint(n_params).as_matrix()  # (n_params-1, n_params)
 
     if total > n_params:
@@ -362,7 +465,11 @@ def _assemble_constraint_arrays(
     # With covariates: n rows [1, 0, ..., 0 | X_i].
     support_rows: NDArray[np.float64] | None = None
     support_rhs: NDArray[np.float64] | None = None
-    if nonneg_lower:
+    if nonneg_lower and q_s > 0:
+        support_rows, support_rhs = _scaled_support_row(
+            n_params, total, q_s=q_s, X=X, offset=offset
+        )
+    elif nonneg_lower:
         if X is None:
             if total > n_params:
                 raise ValueError(
@@ -591,6 +698,7 @@ def build_constraint_matrices(
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    q_s: int = 0,
 ) -> ConstraintMatrices:
     """Build constraint matrices for the augmented Lagrangian solver.
 
@@ -635,6 +743,14 @@ def build_constraint_matrices(
         ``−offset_i`` so the rule covers ``h(a|x_i) = θ_b[0] + X_i·β +
         offset_i`` as the likelihood evaluates it (ADR 0005 Decision 1,
         issue #160).  ``None`` leaves the right-hand side at zero.
+    q_s:
+        Number of scaling-design columns (the trailing ``γ`` block of
+        ``[θ_b | β | γ]``), included in ``total_params``.  Monotonicity
+        rows leave ``γ`` free.  With ``nonneg_lower=True`` and ``q_s > 0``
+        the support rule ``θ_b[0]·exp(0.5·x_s,i·γ) + X_i·β ≥ −offset_i`` is
+        linear only without a shift block and with a zero offset, where it
+        collapses to the single row ``[1, 0, …, 0 | 0_{q_s}]``, i.e.
+        ``θ_b[0] ≥ 0`` (ADR 0005 Decision 2, simplification 1; issue #114).
 
     Returns
     -------
@@ -648,11 +764,18 @@ def build_constraint_matrices(
 
     Raises
     ------
+    TypeError
+        If ``q_s`` is not an integer.
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
         ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted, or if ``offset`` is empty, not
-        finite, or does not have one entry per row of ``X``.
+        but ``total_params`` is omitted, if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``, or if ``q_s``
+        is negative or exceeds ``total_params - n_params``.
+    NotImplementedError
+        If ``nonneg_lower=True`` and ``q_s > 0`` together with a shift block
+        or a non-zero offset: the support row is then non-linear in ``γ``
+        (ADR 0005 Decision 2).
 
     Examples
     --------
@@ -674,6 +797,7 @@ def build_constraint_matrices(
         nonneg_lower=nonneg_lower,
         X=X,
         offset=offset,
+        q_s=q_s,
     )
 
     b_ineq = np.zeros(D.shape[0], dtype=np.float64)
@@ -728,6 +852,7 @@ def build_constraints(
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    q_s: int = 0,
 ) -> list[dict[str, Any]]: ...
 
 
@@ -742,6 +867,7 @@ def build_constraints(
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    q_s: int = 0,
 ) -> list[LinearConstraint]: ...
 
 
@@ -755,6 +881,7 @@ def build_constraints(
     nonneg_lower: bool = False,
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
+    q_s: int = 0,
 ) -> list[dict[str, Any]] | list[LinearConstraint]:
     """Build all optimisation constraints for a Bernstein model.
 
@@ -818,14 +945,25 @@ def build_constraints(
         Optional per-observation offset, shape ``(n,)``.  Only consulted when
         ``nonneg_lower=True`` — see above.  ``None`` leaves the support
         right-hand side at zero.
+    q_s:
+        Number of scaling-design columns (trailing ``γ`` block), included in
+        ``total_params``.  See :func:`build_constraint_matrices`: with
+        ``nonneg_lower=True`` and ``q_s > 0`` the support rule collapses to
+        ``θ_b[0] ≥ 0`` without a shift block and with a zero offset.
 
     Raises
     ------
+    TypeError
+        If ``q_s`` is not an integer.
     ValueError
         If ``X`` has invalid shape, if ``X`` columns do not match
         ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
-        but ``total_params`` is omitted, or if ``offset`` is empty, not
-        finite, or does not have one entry per row of ``X``.
+        but ``total_params`` is omitted, if ``offset`` is empty, not
+        finite, or does not have one entry per row of ``X``, or if ``q_s``
+        is negative or exceeds ``total_params - n_params``.
+    NotImplementedError
+        If ``nonneg_lower=True`` and ``q_s > 0`` together with a shift block
+        or a non-zero offset (ADR 0005 Decision 2).
 
     Returns
     -------
@@ -854,6 +992,7 @@ def build_constraints(
         nonneg_lower=nonneg_lower,
         X=X,
         offset=offset,
+        q_s=q_s,
     )
 
     if solver == "slsqp":

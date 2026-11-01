@@ -531,15 +531,21 @@ class ConditionalTransformationModel:
         if scaling is not None:
             # ADR 0002 — the non-interaction shift + scaled path supports all
             # four censoring types (#71).  ADR 0003 (#103) integrates scaling
-            # with ``InteractionBasis`` (exact data only).  Both paths reject
-            # ``"exponential"`` because its support-feasibility row becomes
-            # non-linear in γ (ADR 0002 Decision 3 / ADR 0003 Decision 5).
-            if base_distribution == "exponential":
+            # with ``InteractionBasis`` (exact data only), but rejects
+            # ``"exponential"`` there: the per-column support rows become
+            # non-linear in γ (ADR 0003 Decision 5).  On the shift basis the
+            # combination is accepted here; whether it fits depends on the
+            # shift design, known only at fit time, so ``optimize()`` rejects
+            # a shift block or a non-zero offset (ADR 0005 Decision 2) and
+            # fits the scale-only case, whose support row collapses to
+            # θ_b[0] ≥ 0 (issue #114).
+            if base_distribution == "exponential" and isinstance(
+                basis, InteractionBasis
+            ):
                 raise ValueError(
                     "scaling= is not supported with base_distribution="
-                    "'exponential' (see docs/adr/0002-scaling-terms.md, "
-                    "Decision 3, and docs/adr/0003-scaling-with-interaction.md, "
-                    "Decision 5)."
+                    "'exponential' on an InteractionBasis (see "
+                    "docs/adr/0003-scaling-with-interaction.md, Decision 5)."
                 )
             scaling_feature_names = _extract_feature_names(scaling)
             scaling_arr = np.asarray(scaling, dtype=float)
