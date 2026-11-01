@@ -1100,6 +1100,90 @@ class TestFixedParamsAuglag:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("censoring", list(CensoringType))
+@pytest.mark.parametrize(
+    "base_distribution", ["normal", "logistic", "min_extreme_value", "exponential"]
+)
+@pytest.mark.parametrize("scaled", [False, True])
+@pytest.mark.parametrize("fixed", [False, True])
+def test_trust_constr_objective_hessian(
+    monkeypatch, censoring, base_distribution, scaled, fixed
+):
+    """SciPy receives the curvature of its weighted, possibly reduced objective."""
+    basis = make_basis(order=3)
+    y = simple_data(n=20)
+    if censoring is CensoringType.RIGHT:
+        y = CensoredData.right_censored(y, y > 0.7)
+    elif censoring is CensoringType.LEFT:
+        y = CensoredData.left_censored(y, y < 0.3)
+    elif censoring is CensoringType.INTERVAL:
+        y = CensoredData.interval_censored(y - 0.01, y + 0.01)
+    x = np.linspace(-1.0, 1.0, 20)[:, None]
+    pins = {1: 0.3, 4: 0.1} if fixed else None
+
+    def minimize_with_hessian_check(fun, x0, **kwargs):
+        hess = kwargs.get("hess")
+        if base_distribution == "exponential" and censoring is CensoringType.INTERVAL:
+            # The support kink makes Newton steps unreliable on this path.
+            assert hess is None
+            return SimpleNamespace(x=x0, success=True, nit=1, message="BFGS")
+        assert callable(hess), "trust-constr must receive the NLL Hessian"
+        # Check away from the start as well: reconstruction must preserve pins.
+        theta = x0 + np.linspace(0.01, 0.04, len(x0))
+        eps = 1e-6 * np.eye(len(theta))
+        fd = np.column_stack(
+            [(fun(theta + e)[1] - fun(theta - e)[1]) / 2e-6 for e in eps]
+        )
+        np.testing.assert_allclose(hess(theta), fd, rtol=1e-5, atol=1e-6)
+        return SimpleNamespace(x=theta, success=True, nit=1, message="checked")
+
+    monkeypatch.setattr("mltpy.optimizer.minimize", minimize_with_hessian_check)
+    result = optimize(
+        basis,
+        y,
+        X=x,
+        censoring=censoring,
+        base_distribution=base_distribution,
+        weights=np.linspace(0.0, 4.0, 20),
+        offset=np.linspace(0.1, 0.2, 20),
+        scaling=x if scaled else None,
+        config=OptimizerConfig(solver="trust-constr", fixed_params=pins),
+    )
+    if pins:
+        for j, value in pins.items():
+            assert result.theta[j] == value
+
+
+@pytest.mark.parametrize("use_gradient", [True, False])
+def test_trust_constr_normal_mle(use_gradient):
+    """Analytic curvature also works with the finite-difference debug gradient."""
+    y = np.array([0.2, 0.3, 0.5, 0.7, 0.8])
+    result = optimize(
+        make_basis(order=1),
+        y,
+        config=OptimizerConfig(solver="trust-constr", use_gradient=use_gradient),
+    )
+    # A linear normal transformation is the normal location/scale MLE.
+    expected = np.array([-0.5, 0.5]) / np.sqrt(0.052)
+    assert result.converged
+    np.testing.assert_allclose(result.theta, expected, rtol=1e-6)
+
+
+def test_trust_constr_recovers_from_infeasible_fixed_start():
+    """A pin can make h' zero initially without making the fit infeasible."""
+    result = optimize(
+        make_basis(order=3),
+        np.array([0.1, 0.2, 0.4, 0.5, 0.7, 0.9]),
+        config=OptimizerConfig(
+            solver="trust-constr", fixed_params={1: 5 / 3}, random_state=0
+        ),
+    )
+    assert result.converged
+    assert result.theta[1] == 5 / 3
+    # Existing BFGS result, independently reproduced against the starting commit.
+    np.testing.assert_allclose(result.log_likelihood, -2.95272635, rtol=1e-6)
+
+
 class TestFixedParamsScipy:
     """``OptimizerConfig.fixed_params`` on the SLSQP and trust-constr paths.
 

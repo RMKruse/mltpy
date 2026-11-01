@@ -1303,14 +1303,23 @@ def _optimize_scipy(
 
     def _run(theta_try_full: NDArray[np.float64]) -> Any:
         theta_try = theta_try_full[free_idx] if free_idx is not None else theta_try_full
+        hess_try, options_try = hess_used, options
+        if hess_try is not None:
+            try:
+                obj_true_nll(theta_try_full)
+            except InfeasibleParameterError:
+                # The finite penalty lets BFGS recover from an undefined NLL;
+                # its analytic Hessian is undefined at this start too.
+                hess_try, options_try = None, _scipy_options(config)
         return _unscale_scipy_result(
             minimize(
                 obj_used,
                 theta_try,
                 method=config.solver,
                 jac=jac,
+                hess=hess_try,
                 constraints=constraints_used,
-                options=options,
+                options=options_try,
             ),
             obj_scale,
         )
@@ -1327,6 +1336,30 @@ def _optimize_scipy(
         full[free_idx] = x
         full[fixed_idx] = fixed_vals
         return full
+
+    def hess(theta: NDArray[np.float64]) -> NDArray[np.float64]:
+        H = _hessian(
+            _full_theta(theta),
+            basis,
+            y,
+            X,
+            censoring,
+            base_distribution=base_distribution,
+            weights=obj_weights,
+            offset=offset,
+            scaling=scaling,
+        )
+        return H if free_idx is None else H[np.ix_(free_idx, free_idx)]
+
+    hess_used: Callable[[NDArray[np.float64]], NDArray[np.float64]] | None = None
+    # shortcut: BFGS for exponential intervals until support-kink steps are safe.
+    if solver == "trust-constr" and not (
+        nonneg_lower and censoring is CensoringType.INTERVAL
+    ):
+        hess_used = hess
+        # Exact curvature can meet gtol before the default barrier decays,
+        # leaving a biased constrained estimate despite reporting success.
+        options["initial_barrier_parameter"] = config.tol
 
     best_scipy_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,

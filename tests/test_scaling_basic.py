@@ -29,6 +29,7 @@ import pytest
 from mltpy import MLT
 from mltpy.basis import BernsteinBasis
 from mltpy.likelihood import negative_log_likelihood
+from mltpy.optimizer import OptimizerConfig
 from mltpy.variables import CensoringType
 
 REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
@@ -93,7 +94,8 @@ def test_mlt_accepts_scaling_kwarg(scaling_ref: dict) -> None:
     )
 
 
-def test_scaling_theta_beta_gamma_match_R(scaling_ref: dict) -> None:
+@pytest.mark.parametrize("solver", ["auglag", "trust-constr"])
+def test_scaling_theta_beta_gamma_match_R(scaling_ref: dict, solver: str) -> None:
     """Fitted θ_b, β (sign-flipped), γ match R at rtol=1e-6."""
     p = scaling_ref["p"]
     q_d = scaling_ref["q_d"]
@@ -101,6 +103,7 @@ def test_scaling_theta_beta_gamma_match_R(scaling_ref: dict) -> None:
         order=p - 1,
         support=scaling_ref["support"],
         scaling=scaling_ref["x_s"],
+        optimizer_config=OptimizerConfig(solver=solver, random_state=0),  # type: ignore[arg-type]
     )
     model.fit(scaling_ref["y"], X=scaling_ref["x_d"])
     theta_b = model.theta_[:p]
@@ -114,12 +117,14 @@ def test_scaling_theta_beta_gamma_match_R(scaling_ref: dict) -> None:
     np.testing.assert_allclose(gamma, scaling_ref["gamma_r"], rtol=1e-5, atol=1e-7)
 
 
-def test_scaling_log_likelihood_matches_R(scaling_ref: dict) -> None:
+@pytest.mark.parametrize("solver", ["auglag", "trust-constr"])
+def test_scaling_log_likelihood_matches_R(scaling_ref: dict, solver: str) -> None:
     """log-lik at the fitted parameters matches R at rtol=1e-6."""
     model = MLT(
         order=scaling_ref["p"] - 1,
         support=scaling_ref["support"],
         scaling=scaling_ref["x_s"],
+        optimizer_config=OptimizerConfig(solver=solver, random_state=0),  # type: ignore[arg-type]
     )
     model.fit(scaling_ref["y"], X=scaling_ref["x_d"])
     np.testing.assert_allclose(

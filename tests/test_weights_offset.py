@@ -25,6 +25,7 @@ from mltpy.likelihood import (
     negative_log_likelihood,
     score_matrix,
 )
+from mltpy.optimizer import OptimizerConfig
 from mltpy.tram import BoxCox, Colr, Coxph
 from mltpy.variables import CensoringType
 
@@ -554,12 +555,14 @@ def _load_vcov_reference_for_weights(model_name: str) -> dict | None:
         ("coxph", Coxph, "min_extreme_value", CensoringType.RIGHT, 1.0),
     ],
 )
+@pytest.mark.parametrize("solver", ["auglag", "trust-constr"])
 def test_r_weights_parity(
     model_name: str,
     tram_cls: type,
     base_dist: str,
     censoring: CensoringType,
     beta_sign: float,
+    solver: str,
 ) -> None:
     """Weighted parity with R at both R theta and mltpy's fitted theta."""
     wref = _load_weights_reference(model_name)
@@ -589,6 +592,7 @@ def test_r_weights_parity(
         support=(float(a), float(b)),
         censoring=censoring,
         base_distribution=base_dist,  # type: ignore[arg-type]
+        optimizer_config=OptimizerConfig(solver=solver, random_state=0),  # type: ignore[arg-type]
     ).fit(y_obj, X, weights=w)
 
     assert m.theta_ is not None

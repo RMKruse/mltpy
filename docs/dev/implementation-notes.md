@@ -45,6 +45,19 @@ fires; the interaction paths omit it.
 `OptimizerConfig.max_iter` and `.tol` apply only to SLSQP / trust-constr; auglag
 has its own outer and inner budgets in `AugLagOptions`.
 
+On the shift path, trust-constr receives `likelihood.hessian` as its objective
+Hessian (#166), evaluated with the objective's weights, offset and scaling.
+With `fixed_params`, it reconstructs the full θ and returns the free/free
+block. The initial barrier parameter is `.tol`: exact curvature can otherwise
+meet the gradient stopping rule before the default barrier has decayed enough
+for R parity. Exponential interval censoring retains BFGS because Newton steps
+at its `h(lower) = 0` support kink can stall at the initial θ. Interaction
+trust-constr also retains BFGS; its Hessian is finite-difference. The decision
+and before/after sweep are in `research/trust-constr-hessian/README.md`.
+An attempt starting at an undefined NLL also retains BFGS and its original
+barrier options, so the finite objective penalty can recover from, for example,
+a fixed parameter making the initial derivative zero.
+
 Auglag can report `converged=False` with strict KKT residuals around 1e-5 on
 degenerate active sets, for example stacked monotonicity boundaries, even when
 θ matches R to many decimals. Treat the flag as informational and check

@@ -927,7 +927,9 @@ class TestSolverDispatch:
     ) -> None:
         """``q_d = 0`` with an offset is nonlinear too; scipy solvers fit it."""
         model = _model(ref, solver=solver)
-        model.fit(ref["y"], offset=ref["offset"])
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message="delta_grad == 0.0")
+            model.fit(ref["y"], offset=ref["offset"])
         g = _support_values(model, None, ref["x_s"], ref["offset"])
         assert g.min() >= -_FEAS_TOL
         assert model.result_.converged
