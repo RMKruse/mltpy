@@ -11,7 +11,7 @@ restart mechanism in ``mlt()``.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Literal, cast
 
 import numpy as np
@@ -19,9 +19,12 @@ from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import LinearConstraint, OptimizeResult, minimize
 
-from mltpy._auglag import AugLagOptions, auglag_minimize
+from mltpy._auglag import AugLagOptions, AugLagResult, auglag_minimize
 from mltpy.basis import BernsteinBasis, InteractionBasis
 from mltpy.constraints import (
+    ConstraintMatrices,
+    MonotonicityConstraint,
+    ScaledSupportConstraint,
     build_constraint_matrices,
     build_constraint_matrices_interaction,
     build_constraints,
@@ -936,10 +939,12 @@ def optimize(
         combined with ``base_distribution="exponential"``, or when
         ``config.fixed_params`` is set.  On the shift basis, when ``scaling``
         is combined with ``base_distribution="exponential"`` and a shift
-        block (``X`` with columns) or a non-zero ``offset``: the support row
-        is then non-linear in ``γ`` (ADR 0005 Decision 2).  The scale-only
-        case (no ``X``, zero or no offset) fits, its support row collapsing
-        to ``θ_b[0] ≥ 0`` (issue #114).
+        block (``X`` with columns) or a non-zero ``offset`` under
+        ``solver="slsqp"`` / ``"trust-constr"``: the support row is then
+        non-linear in ``γ`` (ADR 0005 Decision 2) and only auglag carries it
+        (issue #115; the scipy solvers are issue #116).  The scale-only
+        case (no ``X``, zero or no offset) fits on every solver, its support
+        row collapsing to ``θ_b[0] ≥ 0`` (issue #114).
     """
     # Fail fast for unsupported base distributions before entering scipy.
     dist = _get_dist(base_distribution)
@@ -986,28 +991,35 @@ def optimize(
         )
 
     q_s = scaling.shape[1] if scaling is not None else 0
-    if scaling is not None and base_distribution == "exponential":
+    if (
+        scaling is not None
+        and base_distribution == "exponential"
+        and config.solver != "auglag"
+    ):
         # ADR 0005 Decision 2 — under scaling the support rule h(a|x_i) ≥ 0
         # reads θ_b[0]·f_i + x_i·β ≥ −offset_i with f_i = exp(0.5·x_s,i·γ).
         # Without a shift block and with a zero offset it collapses to the
-        # linear row θ_b[0] ≥ 0 (issue #114) and fits on the linear paths;
-        # every other case is non-linear in γ and not implemented yet.
+        # linear row θ_b[0] ≥ 0 (issue #114) and fits on every solver.  Every
+        # other case is non-linear in γ: auglag carries it as a nonlinear
+        # inequality block (issue #115); SLSQP / trust-constr are issue #116.
         q_d = X.shape[1] if X is not None else 0
         if q_d > 0:
             raise NotImplementedError(
-                "scaling= with base_distribution='exponential' is not yet "
-                f"implemented when a shift block is present (X has {q_d} "
-                "column(s)): the support row θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0 "
-                "is non-linear in γ (see "
-                "docs/adr/0005-exponential-scaling-constraint.md, Decision 2). "
-                "Fit without X (scale-only) or drop scaling=."
+                f"scaling= with base_distribution='exponential' and a shift "
+                f"block (X has {q_d} column(s)) is not yet implemented for "
+                f"solver={config.solver!r}: the support row "
+                "θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0 is non-linear in γ and only "
+                "the default solver='auglag' carries it (issue #116; see "
+                "docs/adr/0005-exponential-scaling-constraint.md, Decision 3)."
             )
         if offset is not None and np.any(np.asarray(offset) != 0.0):
             raise NotImplementedError(
-                "scaling= with base_distribution='exponential' is not yet "
-                "implemented with a non-zero offset: the support row "
-                "θ_b[0]·exp(0.5·x_s·γ) + offset ≥ 0 is non-linear in γ (see "
-                "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+                "scaling= with base_distribution='exponential' and a non-zero "
+                "offset is not yet implemented for "
+                f"solver={config.solver!r}: the support row "
+                "θ_b[0]·exp(0.5·x_s·γ) + offset ≥ 0 is non-linear in γ and "
+                "only the default solver='auglag' carries it (issue #116; see "
+                "docs/adr/0005-exponential-scaling-constraint.md, Decision 3)."
             )
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0) + q_s
@@ -1617,6 +1629,10 @@ def _ncg_polish(
     *,
     A_ineq: NDArray[np.float64] | None = None,
     b_ineq: NDArray[np.float64] | None = None,
+    nonlinear_ineq: (
+        Callable[[NDArray[np.float64]], tuple[NDArray[np.float64], NDArray[np.float64]]]
+        | None
+    ) = None,
 ) -> NDArray[np.float64] | None:
     """Newton-CG polish: trust-ncg from auglag's θ-hat using the analytical Hessian.
 
@@ -1640,6 +1656,10 @@ def _ncg_polish(
         shift-model ``D @ theta_b >= 0`` check.
     b_ineq:
         Right-hand side paired with ``A_ineq``; zeros when ``None``.
+    nonlinear_ineq:
+        Optional nonlinear inequality block ``θ ↦ (g(θ), J(θ))``; the
+        polished θ is rejected when some ``g_i(θ) < −1e-8`` (the scaled
+        exponential support rows, issue #115).
 
     Returns
     -------
@@ -1672,7 +1692,110 @@ def _ncg_polish(
     elif n_params >= 2 and np.any(np.diff(theta_new[:n_params]) < -1e-8):
         return None
 
+    if nonlinear_ineq is not None and np.any(nonlinear_ineq(theta_new)[0] < -1e-8):
+        return None
+
     return theta_new
+
+
+def _increment_auglag(
+    obj: Callable[[NDArray[np.float64]], Any],
+    cm: ConstraintMatrices,
+    support_nl: ScaledSupportConstraint,
+    n_params: int,
+    total_params: int,
+    options: AugLagOptions,
+) -> Callable[[NDArray[np.float64]], AugLagResult]:
+    """auglag runner for the nonlinear scaled support block (issue #115).
+
+    Solves in the increment coordinates
+
+        δ = T θ,   δ_0 = θ_b[0],   δ_k = θ_b[k] − θ_b[k−1]  (k = 1, …, p−1),
+
+    identity on ``[β | γ]``, where the monotonicity rows ``D θ_b ≥ 0`` are the
+    bounds ``δ_k ≥ 0``, enforced inside every inner L-BFGS-B solve
+    (box-constrained AL, :func:`~mltpy._auglag.auglag_minimize` Notes).
+
+    Parameters
+    ----------
+    obj:
+        NLL objective in θ, returning ``(nll, ∇nll)``.
+    cm:
+        Constraint matrices in θ (monotonicity rows, equality rows) with
+        ``nonlinear_ineq = support_nl``.
+    support_nl:
+        The scaled support block ``θ ↦ (g(θ), J(θ))``.
+    n_params:
+        Number of Bernstein coefficients ``p``.
+    total_params:
+        Length of ``θ = [θ_b | β | γ]``.
+    options:
+        auglag options.
+
+    Returns
+    -------
+    Callable
+        ``θ₀ ↦ AugLagResult`` with ``theta`` mapped back to θ.  Multipliers
+        refer to the same constraint functions (``A_ineq`` rows, then the
+        support rows; equality rows; ``nu_lower[k]`` is the bound
+        ``δ_k ≥ 0``, i.e. monotonicity row ``k − 1``), so they need no
+        transformation.
+
+    Notes
+    -----
+    Under the exponential link's smooth extension ``log f(h) = −h`` (and
+    ``log S(h) = −h``) the NLL is unbounded below where ``h → −∞``.  The PHR
+    penalty on the support rows ``g_i(θ) = h(a|x_i)`` controls ``h(·|x_i)``
+    only while ``h_0`` is non-decreasing (then ``h(y|x_i) ≥ g_i`` for every
+    ``y``).  A violated monotonicity row lets ``h_0(y) < θ_b[0]`` and, through
+    ``f_i = exp(0.5·x_s,i·γ)``, the NLL fall exponentially in ``γ``, which
+    a penalty quadratic in ``Dθ_b`` cannot bound — the #114 mechanism, here
+    observed on right-censored data.  Keeping ``D θ_b ≥ 0`` as hard bounds
+    leaves every remaining violation linear in ``g_i`` against a quadratic
+    penalty.  ``T`` is unit lower-triangular on the ``θ_b`` block, so the
+    reparametrisation is exact and the fitted model is unchanged.
+    """
+    # T: θ ↦ δ (first differences on θ_b); T_inv: cumulative sums on δ_b.
+    T = np.eye(total_params, dtype=np.float64)
+    T[1:n_params, :n_params] = MonotonicityConstraint(n_params).as_matrix()
+    T_inv = np.eye(total_params, dtype=np.float64)
+    T_inv[:n_params, :n_params] = np.tril(np.ones((n_params, n_params)))
+    lb = np.full(total_params, -np.inf)
+    lb[1:n_params] = 0.0
+    box = (lb, np.full(total_params, np.inf))
+    A_d = cm.A_ineq @ T_inv
+    C_d = cm.C_eq @ T_inv
+
+    def obj_d(d: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
+        # PHR inner trial points may leave the support (h(c|x_i) < 0 on a
+        # left-/interval-censored row makes log F NaN).  The likelihood turns
+        # that NaN into InfeasibleParameterError and ``obj`` into the
+        # infeasibility penalty, so numpy's "invalid value" notice is noise.
+        with np.errstate(invalid="ignore"):
+            f, grad = obj(T_inv @ d)
+        return float(f), np.asarray(T_inv.T @ np.asarray(grad), dtype=np.float64)
+
+    def support_d(
+        d: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        values, jac = support_nl(T_inv @ d)
+        return values, jac @ T_inv
+
+    def run(t: NDArray[np.float64]) -> AugLagResult:
+        res = auglag_minimize(
+            obj_d,
+            T @ t,
+            A_ineq=A_d,
+            b_ineq=cm.b_ineq,
+            C_eq=C_d,
+            d_eq=cm.d_eq,
+            options=options,
+            bounds=box,
+            nonlinear_ineq=support_d,
+        )
+        return replace(res, theta=np.asarray(T_inv @ res.theta, dtype=np.float64))
+
+    return run
 
 
 def _optimize_auglag(
@@ -1710,7 +1833,17 @@ def _optimize_auglag(
         X=X if nonneg_lower else None,
         offset=offset if nonneg_lower else None,
         q_s=scaling.shape[1] if scaling is not None else 0,
+        X_scale=scaling if nonneg_lower else None,
     )
+    # Issue #115 — scaled exponential path with a shift block or a non-zero
+    # offset: the support rows θ_b[0]·f_i + x_i·β ≥ −offset_i are the
+    # nonlinear block cm.nonlinear_ineq (A_ineq holds monotonicity only).
+    # Unlike the collapsed row of #114 below, the PHR penalty here is on
+    # g_i = h(a|x_i) itself, which bounds every h(y_i|x_i) ≥ g_i from below
+    # (h_0 non-decreasing): the smooth extension log f(h) = −h makes the NLL
+    # fall at most linearly in a violated g_i, against a quadratic penalty, so
+    # the subproblem stays bounded without a box.
+    support_nl = cm.nonlinear_ineq
     # fixed_params (issue #85): append one equality row per pinned index.
     # Each row is e_i with rhs v_i, stacked under any existing rows from
     # lower / upper.  Indices must reference the full theta_ vector
@@ -1731,14 +1864,16 @@ def _optimize_auglag(
             extra_rows[row, idx] = 1.0
             extra_rhs[row] = float(val)
             theta_init[idx] = float(val)
-        cm = type(cm)(
-            A_ineq=cm.A_ineq,
-            b_ineq=cm.b_ineq,
+        # ``replace`` keeps the nonlinear support block (issue #115): the pins
+        # are equality rows and compose with it unchanged.
+        cm = replace(
+            cm,
             C_eq=np.vstack([cm.C_eq, extra_rows]),
             d_eq=np.concatenate([cm.d_eq, extra_rhs]),
         )
-    # Issue #114 — scaled exponential path (shift block and non-zero offset
-    # rejected in optimize()).  The support rule has collapsed to the single
+    # Issue #114 — scaled exponential path without a shift block and with a
+    # zero offset (the other cases are the nonlinear block above).  The
+    # support rule has collapsed to the single
     # row θ_b[0] ≥ 0, the last row of A_ineq, but the smooth extension
     # log f(h) = −h makes the objective unbounded below once it is violated:
     # with θ_b[0] = −t, the NLL falls like −t·Σ_i exp(0.5·x_s,i·γ),
@@ -1749,7 +1884,7 @@ def _optimize_auglag(
     # its multiplier is the bound multiplier ν_lo[0] (folded in below).
     support_box: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
     support_row: int | None = None
-    if nonneg_lower and scaling is not None:
+    if nonneg_lower and scaling is not None and support_nl is None:
         support_row = cm.A_ineq.shape[0] - 1
         e0 = np.zeros(total_params, dtype=np.float64)
         e0[0] = 1.0
@@ -1782,6 +1917,24 @@ def _optimize_auglag(
         config.auglag_options if config.auglag_options is not None else AugLagOptions()
     )
 
+    def run_linear(t: NDArray[np.float64]) -> AugLagResult:
+        return auglag_minimize(
+            obj,
+            t,
+            A_ineq=cm.A_ineq,
+            b_ineq=cm.b_ineq,
+            C_eq=cm.C_eq,
+            d_eq=cm.d_eq,
+            options=auglag_opts,
+            bounds=support_box,
+        )
+
+    run_auglag: Callable[[NDArray[np.float64]], AugLagResult] = run_linear
+    if support_nl is not None:
+        run_auglag = _increment_auglag(
+            obj, cm, support_nl, n_params, total_params, auglag_opts
+        )
+
     best_auglag_result, best_nll, n_restarts_used = _restart_loop(
         theta_init,
         config,
@@ -1792,16 +1945,7 @@ def _optimize_auglag(
             nonneg_lower=nonneg_lower,
             support_floor=support_floor,
         ),
-        lambda t: auglag_minimize(
-            obj,
-            t,
-            A_ineq=cm.A_ineq,
-            b_ineq=cm.b_ineq,
-            C_eq=cm.C_eq,
-            d_eq=cm.d_eq,
-            options=auglag_opts,
-            bounds=support_box,
-        ),
+        run_auglag,
         lambda r: bool(r.converged),
         lambda r: true_nll(r.theta),
         message_fn=lambda r: str(r.message),
@@ -1824,6 +1968,13 @@ def _optimize_auglag(
         # its force is the bound multiplier on θ_b[0].
         mu_ineq = mu_ineq.copy()
         mu_ineq[support_row] += best_auglag_result.nu_lower[0]
+    if support_nl is not None:
+        # Increment coordinates (_increment_auglag): monotonicity row k is the
+        # bound δ_{k+1} ≥ 0, whose multiplier is ν_lo[k+1]; the PHR copy of
+        # the row (the first n_params − 1 rows of A_ineq) never goes
+        # infeasible and keeps a zero multiplier.
+        mu_ineq = mu_ineq.copy()
+        mu_ineq[: n_params - 1] += best_auglag_result.nu_lower[1:n_params]
     final_theta = best_auglag_result.theta
     final_nll = best_nll
     if config.polish and cm.C_eq.shape[0] == 0 and np.all(mu_ineq < 1e-6):
@@ -1851,11 +2002,20 @@ def _optimize_auglag(
             n_params,
             A_ineq=cm.A_ineq,
             b_ineq=cm.b_ineq,
+            nonlinear_ineq=support_nl,
         )
         if theta_polished is not None:
             final_theta = theta_polished
             final_nll = true_nll(theta_polished)
 
+    # Reported inequality rows line up with ``mu_ineq`` (linear rows, then the
+    # nonlinear block).  The nonlinear rows enter as their linearisation
+    # J(θ̂) at the returned θ — the constraint normals that the KKT
+    # conditions and the active-set covariance (model._constrained_vcov_active)
+    # use.
+    a_ineq_report = cm.A_ineq
+    if support_nl is not None:
+        a_ineq_report = np.vstack([cm.A_ineq, support_nl(final_theta)[1]])
     c_eq: NDArray[np.float64] | None = cm.C_eq if cm.C_eq.shape[0] > 0 else None
     return OptimizationResult(
         theta=final_theta,
@@ -1869,6 +2029,6 @@ def _optimize_auglag(
         rho_final=best_auglag_result.rho_final,
         mu_ineq=mu_ineq,
         lambda_eq=best_auglag_result.lambda_eq,
-        constraint_A_ineq=cm.A_ineq,
+        constraint_A_ineq=a_ineq_report,
         constraint_C_eq=c_eq,
     )

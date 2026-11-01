@@ -753,6 +753,245 @@ writeLines(format(mu_es, digits = 15),
            con = file.path(out_dir, "mlt_exponential_scaling_mu.txt"))
 
 # ---------------------------------------------------------------------------
+# exponential + shift term + scaling term + offset (issue #115)
+#
+# Model: todistr = "Exponential", order-4 Bernstein in y on [0, max(y)], one
+# shift term x_d, one scaling term x_s and a per-row offset, exact data:
+#   h(y | x) = a(y)'theta_b * exp(0.5 * x_s * gamma) + x_d * beta + offset.
+# Writes:
+#   mlt_exponential_scaling_shift_y.txt       — 150 responses
+#   mlt_exponential_scaling_shift_xd.txt      — 150 shift-covariate values
+#   mlt_exponential_scaling_shift_xs.txt      — 150 scaling-covariate values
+#   mlt_exponential_scaling_shift_offset.txt  — 150 per-row offsets
+#   mlt_exponential_scaling_shift_support.txt — Bernstein support c(0, max(y))
+#   mlt_exponential_scaling_shift_theta.txt   — c(theta_b (5), beta (1),
+#                                               gamma (1)), mltpy's
+#                                               [theta_b | beta | gamma]
+#   mlt_exponential_scaling_shift_ll.txt      — mlt's own loglik at theta
+#   mlt_exponential_scaling_shift_mu.txt      — KKT multipliers in mltpy's
+#                                               mu_ineq order: D theta_b >= 0
+#                                               (4 rows), then the 150
+#                                               support rows; 0 on inactive
+#
+# mltpy's support rule (ADR 0005 Decisions 1-2) is one nonlinear row per
+# training observation,
+#   g_i(theta) = theta_b[0] * exp(0.5 * x_s,i * gamma) + x_d,i * beta
+#                + offset_i >= 0,
+# and R mlt has no support rule (it keeps support only through dexp = -Inf at
+# the observed points and stalls on shift + exponential, #126).  So, as ADR
+# 0005 Decision 4 prescribes for shift + scale, the reference is an
+# explicit-constraint alabama::auglag fit on mlt's likelihood (checked against
+# mlt's loglik / scorei) with the hin rows g_i and D theta_b >= 0 written out,
+# multi-started from feasible points.  It validates mltpy's optimiser on
+# mltpy's model, not R's modelling choice.
+#
+# Without an offset the rule pins every h(a | x_i) to 0 (beta = 0, a fully
+# degenerate active set, ADR 0005 "Known cost").  The offset breaks that
+# symmetry: two support rows bind (multipliers ~70) and no monotonicity row
+# does, with linearly independent normals and strictly positive multipliers —
+# a non-degenerate active set — and gamma ~0.42 is clearly non-zero, so the
+# gamma column of the Jacobian matters at the optimum.
+#
+# Route:
+#   1. Multi-start alabama::auglag (10 feasible starts); all converge to the
+#      same active set and objective.
+#   2. Newton on the KKT system of that active set,
+#        grad f(theta) - J_A(theta)' lambda = 0,  g_A(theta) = 0,
+#      with the analytic Hessian of the nll and the closed-form second
+#      derivatives of g_i (ADR 0005 Decision 2), to stationarity ~1e-12.
+#   3. KKT check in the full space: every row feasible, lambda > 0 on the
+#      active rows, no row with slack < 1e-8 outside the active set, and the
+#      polished objective is no worse than any auglag start.
+# ---------------------------------------------------------------------------
+
+set.seed(115)
+n_ss   <- 150L
+xd_ss  <- runif(n_ss, 0, 1)
+xs_ss  <- rnorm(n_ss)
+off_ss <- rnorm(n_ss, 0, 0.3)
+y_ss   <- rexp(n_ss) / (2 * exp(0.5 * 0.6 * xs_ss))
+d_ss   <- data.frame(y = y_ss, x_d = xd_ss, x_s = xs_ss)
+w_ss   <- rep(1, n_ss)
+sup_ss <- c(0, max(y_ss))
+p_ss   <- 5L
+k_ss   <- p_ss + 2L   # [theta_b (5) | beta | gamma]
+
+b_ss   <- Bernstein_basis(numeric_var("y", support = sup_ss, bounds = c(0, Inf)),
+                          order = 4, ui = "increasing")
+ctm_ss <- ctm(b_ss, shifting = ~ x_d, scaling = ~ x_s, data = d_ss,
+              todistr = "Exponential")
+stopifnot(identical(names(coef(ctm_ss)),
+                    c(sprintf("Bs%d(y)", 1:5), "sft_x_d", "scl_x_s")))
+mlt_ss <- mlt(ctm_ss, data = d_ss, offset = off_ss, dofit = FALSE)
+
+B_ss  <- model.matrix(b_ss, data = d_ss)
+Bp_ss <- model.matrix(b_ss, data = d_ss, deriv = c(y = 1L))
+ib_ss <- 1:p_ss
+f_ss  <- function(th) exp(0.5 * xs_ss * th[k_ss])
+# Exact-data exponential nll: sum(h_i) - sum(log h'_i), with
+# h_i = h0_i f_i + x_d,i beta + offset_i and h'_i = h0'_i f_i.
+nll_ss <- function(th) {
+  f <- f_ss(th)
+  sum(drop(B_ss %*% th[ib_ss]) * f + xd_ss * th[p_ss + 1L] + off_ss) -
+    sum(log(drop(Bp_ss %*% th[ib_ss]))) - sum(0.5 * xs_ss * th[k_ss])
+}
+grad_ss <- function(th) {
+  f  <- f_ss(th)
+  h0 <- drop(B_ss %*% th[ib_ss])
+  hp <- drop(Bp_ss %*% th[ib_ss])
+  c(colSums(B_ss * f) - colSums(Bp_ss / hp),
+    sum(xd_ss),
+    sum(0.5 * xs_ss * h0 * f) - sum(0.5 * xs_ss))
+}
+hess_ss <- function(th) {
+  f  <- f_ss(th)
+  h0 <- drop(B_ss %*% th[ib_ss])
+  hp <- drop(Bp_ss %*% th[ib_ss])
+  H  <- matrix(0, k_ss, k_ss)
+  H[ib_ss, ib_ss] <- crossprod(Bp_ss / hp)
+  H[ib_ss, k_ss]  <- H[k_ss, ib_ss] <- colSums(B_ss * (0.5 * xs_ss * f))
+  H[k_ss, k_ss]   <- sum(0.25 * xs_ss^2 * h0 * f)
+  H
+}
+
+# Constraint rows, hin(theta) >= 0: the n support rows g_i, then D theta_b.
+D_ss <- cbind(diff(diag(p_ss)), 0, 0)
+hin_ss <- function(th)
+  c(th[1L] * f_ss(th) + xd_ss * th[p_ss + 1L] + off_ss, drop(D_ss %*% th))
+hin_jac_ss <- function(th) {
+  f <- f_ss(th)
+  J <- matrix(0, n_ss, k_ss)
+  J[, 1L] <- f
+  J[, p_ss + 1L] <- xd_ss
+  J[, k_ss] <- 0.5 * th[1L] * f * xs_ss
+  rbind(J, D_ss)
+}
+# Second derivatives of g_i (ADR 0005 Decision 2): d2/dtheta0 dgamma =
+# 0.5 f x_s, d2/dgamma2 = 0.25 theta0 f x_s^2, zero elsewhere.
+hin_hess_ss <- function(th, i) {
+  f <- f_ss(th)[i]
+  G <- matrix(0, k_ss, k_ss)
+  G[1L, k_ss] <- G[k_ss, 1L] <- 0.5 * f * xs_ss[i]
+  G[k_ss, k_ss] <- 0.25 * th[1L] * f * xs_ss[i]^2
+  G
+}
+
+# The hand-written nll / score match mlt's own at a feasible check point, and
+# the Hessian and constraint Jacobian match central differences.
+th_chk_ss <- c(1, 1.5, 2, 4, 5, 0.3, 0.4)
+num_jac <- function(fn, th, eps = 1e-6) {
+  vapply(seq_along(th), function(j) {
+    e <- replace(numeric(length(th)), j, eps)
+    (fn(th + e) - fn(th - e)) / (2 * eps)
+  }, numeric(length(fn(th))))
+}
+stopifnot(
+  all(hin_ss(th_chk_ss) > 0),
+  abs(nll_ss(th_chk_ss) + mlt_ss$loglik(th_chk_ss, weights = w_ss)) < 1e-10,
+  max(abs(grad_ss(th_chk_ss) +
+          colSums(mlt_ss$scorei(th_chk_ss, weights = w_ss)))) < 1e-10,
+  max(abs(hess_ss(th_chk_ss) - num_jac(grad_ss, th_chk_ss))) < 1e-5,
+  max(abs(hin_jac_ss(th_chk_ss) - num_jac(hin_ss, th_chk_ss))) < 1e-6,
+  max(abs(hin_hess_ss(th_chk_ss, 7L) -
+          num_jac(function(t) hin_jac_ss(t)[7L, ], th_chk_ss))) < 1e-6
+)
+
+# Step 1: multi-start explicit-constraint auglag from feasible starts.
+set.seed(2115)
+feasible_start_ss <- function(beta, gamma) {
+  f <- exp(0.5 * xs_ss * gamma)
+  th0 <- max((-off_ss - xd_ss * beta) / f) + runif(1, 0.01, 1)
+  c(th0 + cumsum(c(0, rexp(p_ss - 1L))), beta, gamma)
+}
+starts_ss <- c(
+  list(c(max(-off_ss) + 0.1 + seq(0, 1, length.out = p_ss), 0, 0)),
+  Map(feasible_start_ss, runif(9, -1, 1), runif(9, -0.5, 0.5))
+)
+fits_ss <- lapply(starts_ss, function(s) suppressWarnings(alabama::auglag(
+  par = s, fn = nll_ss, gr = grad_ss,
+  hin = hin_ss, hin.jac = hin_jac_ss,
+  control.outer = list(trace = FALSE, eps = 1e-12, itmax = 500L,
+                       method = "BFGS", kkt2.check = FALSE),
+  control.optim = list(maxit = 5000L, reltol = 1e-15)
+)))
+conv_ss  <- vapply(fits_ss, `[[`, integer(1), "convergence")
+value_ss <- vapply(fits_ss, `[[`, numeric(1), "value")
+TH_ss    <- t(vapply(fits_ss, `[[`, numeric(k_ss), "par"))
+spread_ss <- max(apply(TH_ss, 2, function(z) diff(range(z))))
+act_by_start_ss <- lapply(seq_len(nrow(TH_ss)), function(k)
+  which(hin_ss(TH_ss[k, ]) < 1e-6))
+stopifnot(all(conv_ss == 0L), diff(range(value_ss)) < 1e-6,
+          all(vapply(act_by_start_ss, identical, logical(1),
+                     act_by_start_ss[[1L]])))
+act_ss <- act_by_start_ss[[1L]]
+
+# Step 2: Newton on the KKT system of the active set, from the best start.
+theta_ss <- TH_ss[which.min(value_ss), ]
+lam_ss   <- qr.solve(t(hin_jac_ss(theta_ss)[act_ss, , drop = FALSE]),
+                     grad_ss(theta_ss))
+m_act <- length(act_ss)
+for (it in 1:50) {
+  J_A <- hin_jac_ss(theta_ss)[act_ss, , drop = FALSE]
+  F_kkt <- c(grad_ss(theta_ss) - drop(crossprod(J_A, lam_ss)),
+             hin_ss(theta_ss)[act_ss])
+  if (max(abs(F_kkt)) < 1e-13) break
+  W <- hess_ss(theta_ss)
+  for (a in seq_len(m_act)) if (act_ss[a] <= n_ss)
+    W <- W - lam_ss[a] * hin_hess_ss(theta_ss, act_ss[a])
+  K <- rbind(cbind(W, -t(J_A)), cbind(J_A, matrix(0, m_act, m_act)))
+  step <- solve(K, -F_kkt)
+  theta_ss <- theta_ss + step[seq_len(k_ss)]
+  lam_ss   <- lam_ss + step[k_ss + seq_len(m_act)]
+}
+names(theta_ss) <- names(coef(ctm_ss))
+ll_ss <- mlt_ss$loglik(theta_ss, weights = w_ss)
+dpolish_ss <- max(abs(theta_ss - TH_ss[which.min(value_ss), ]))
+
+# Step 3: KKT in the full space.
+J_A_ss    <- hin_jac_ss(theta_ss)[act_ss, , drop = FALSE]
+stat_ss   <- max(abs(grad_ss(theta_ss) - drop(crossprod(J_A_ss, lam_ss))))
+slack_ss  <- hin_ss(theta_ss)
+stopifnot(all(lam_ss > 1e-3), stat_ss < 1e-9, all(slack_ss > -1e-12),
+          identical(which(slack_ss < 1e-8), act_ss),
+          qr(J_A_ss)$rank == m_act,
+          nll_ss(theta_ss) <= min(value_ss) + 1e-10,
+          dpolish_ss < 1e-4,
+          abs(ll_ss + nll_ss(theta_ss)) < 1e-10,
+          abs(theta_ss[k_ss]) > 1e-3)
+
+cat(sprintf(paste0(
+  "Exponential + shift + scaling + offset: %d/%d auglag starts converged, ",
+  "theta spread %.1e, KKT Newton moved theta %.1e; active rows {%s}, ",
+  "multipliers {%s}, stationarity %.1e\n"),
+  sum(conv_ss == 0L), length(conv_ss), spread_ss, dpolish_ss,
+  paste(act_ss, collapse = ", "), paste(sprintf("%.4g", lam_ss), collapse = ", "),
+  stat_ss))
+
+writeLines(format(y_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_y.txt"))
+writeLines(format(xd_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_xd.txt"))
+writeLines(format(xs_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_xs.txt"))
+writeLines(format(off_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_offset.txt"))
+writeLines(format(sup_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_support.txt"))
+writeLines(format(theta_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_theta.txt"))
+writeLines(format(ll_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_ll.txt"))
+# mltpy's mu_ineq order: monotonicity rows first, then the support rows.
+mu_rows_ss <- numeric(n_ss + p_ss - 1L)
+mu_rows_ss[act_ss] <- lam_ss
+mu_ss <- c(mu_rows_ss[n_ss + seq_len(p_ss - 1L)], mu_rows_ss[seq_len(n_ss)])
+writeLines(format(mu_ss, digits = 15),
+           con = file.path(out_dir, "mlt_exponential_scaling_shift_mu.txt"))
+
+cat(sprintf("Exponential + shift + scaling + offset: n=%d, ll=%.10f, theta = %s\n",
+            n_ss, ll_ss, paste(sprintf("%.8f", theta_ss), collapse = ", ")))
+
+# ---------------------------------------------------------------------------
 # Lm (normal linear regression as a CTM) reference
 #
 # tram::Lm with order=1 Bernstein + normal base is equivalent to classical

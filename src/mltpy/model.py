@@ -534,11 +534,12 @@ class ConditionalTransformationModel:
             # with ``InteractionBasis`` (exact data only), but rejects
             # ``"exponential"`` there: the per-column support rows become
             # non-linear in γ (ADR 0003 Decision 5).  On the shift basis the
-            # combination is accepted here; whether it fits depends on the
-            # shift design, known only at fit time, so ``optimize()`` rejects
-            # a shift block or a non-zero offset (ADR 0005 Decision 2) and
-            # fits the scale-only case, whose support row collapses to
-            # θ_b[0] ≥ 0 (issue #114).
+            # combination is accepted here.  The scale-only, zero-offset
+            # support row collapses to θ_b[0] ≥ 0 (issue #114) and fits on
+            # every solver; a shift block or a non-zero offset makes the rows
+            # non-linear in γ (ADR 0005 Decision 2), which auglag fits
+            # (issue #115) and ``optimize()`` rejects for SLSQP /
+            # trust-constr (issue #116).
             if base_distribution == "exponential" and isinstance(
                 basis, InteractionBasis
             ):

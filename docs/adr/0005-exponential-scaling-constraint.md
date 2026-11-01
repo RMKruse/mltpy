@@ -455,6 +455,103 @@ warning under extrapolation. That warning cannot fire on this path, because
 
 ---
 
+## Amendment (2026-11-01, [#115](https://github.com/RMKruse/mltpy/issues/115)) — Shift Block and Offset on auglag
+
+**Implemented.** Decision 2's exact rule, with the #160 offset, now fits on
+the default auglag solver whenever it does not collapse (a shift block,
+`q_d > 0`, or a non-zero offset):
+
+    g_i(θ) = θ_b[0] · f_i + x_d,i · β + offset_i ≥ 0,    f_i = exp(0.5 · x_s,i · γ).
+
+- **Solver (Decision 3).** `auglag_minimize(nonlinear_ineq=g)` takes a
+  callable `θ ↦ (g(θ), J(θ))` whose rows are stacked below `A_ineq`. Penalty,
+  multiplier update, KKT residual, feasibility and the ADR 0004 stall test
+  treat row `i` as a linear row with `A_ineq[i]` replaced by `J(θ)[i]`.
+  `mu_ineq` lists the linear rows first. Without the block the solve is
+  unchanged.
+- **Builder.** `build_scaled_support_constraint(p, X, X_scale, offset)`
+  returns a `ScaledSupportConstraint` with the Decision 2 Jacobian.
+  `build_constraint_matrices(..., X_scale=)` puts it in
+  `ConstraintMatrices.nonlinear_ineq` and keeps only the monotonicity rows in
+  `A_ineq`. At `γ = 0` it reproduces the unscaled linear rows exactly
+  (simplification 2), so the default start and the `support_floor` lift of
+  #160 are feasible unchanged. The scale-only, zero-offset case keeps the
+  #114 linear collapse and box.
+- **Guards.** `optimize()` rejects the case only for SLSQP / trust-constr
+  ([#116](https://github.com/RMKruse/mltpy/issues/116)). `fixed_params`
+  equality rows compose with the block unchanged.
+- **Reporting.** `constraint_A_ineq` holds the support rows as their Jacobian
+  `J(θ̂)`, aligned with `mu_ineq`. The active-set covariance
+  (`vcov(regularize='active')`) uses those linearised normals with the NLL
+  Hessian; the curvature term `−Σ μ_i ∇²g_i` of the Lagrangian Hessian is not
+  included, as for every other first-order constraint diagnostic here.
+
+**Problem: monotonicity must hold inside the inner solve.** The PHR penalty on
+`g_i = h(a|x_i)` bounds `h(·|x_i)` from below only while `h_0` is
+non-decreasing (then `h(y|x_i) ≥ g_i` for every `y`). When a monotonicity row
+`D θ_b ≥ 0` is violated, `h_0(y)` can fall below `θ_b[0]`. Under the smooth
+extension `log f(h) = −h`, `log S(h) = −h`, the NLL then falls like
+`(h_0(y) − θ_b[0]) · f_i`, i.e. exponentially in `γ`, against a penalty
+quadratic in `D θ_b`. This is the #114 mechanism through the monotonicity
+rows. Exact rows partly resist it through `−log h'(y_i)`, but censored rows
+carry no such barrier. On a right-censored version of the fixture the plain
+PHR fit ran off to a non-monotone `θ_b`, logLik `+1471` and `exp` overflow.
+
+**Decision: increment coordinates with a box.** On this path auglag solves in
+
+    δ = T θ,   δ_0 = θ_b[0],   δ_k = θ_b[k] − θ_b[k−1] (k ≥ 1),   identity on [β | γ],
+
+where `D θ_b ≥ 0` is the box `δ_k ≥ 0`, enforced inside every inner L-BFGS-B
+solve (the #114 box mechanism). `T` is unit lower-triangular on `θ_b`, so the
+model and the constraint functions are unchanged. The monotonicity rows stay
+in `A_ineq` for reporting with a zero PHR multiplier, and the bound multiplier
+`ν_lo[k]` is folded into row `k − 1`'s `mu_ineq` entry. With `h_0`
+non-decreasing at every inner iterate, every censoring branch's NLL falls at
+most linearly in a violated `g_i`, against the quadratic penalty. The objective
+also runs under `np.errstate(invalid="ignore")`: a left- or interval-censored
+trial point with `h(c|x_i) < 0` makes `log F` NaN, which the likelihood
+already turns into the infeasibility penalty.
+
+- **Rejected — a box on `θ_b[0]` as in #114.** With a shift block `θ_b[0]`
+  may legitimately be negative (`x_d · β + offset > 0`), so `θ_b[0] ≥ 0` would
+  over-constrain the fit.
+- **Rejected — increment coordinates on every path.** The unscaled and
+  scale-only paths are bounded without it, and their fits stay
+  byte-identical.
+
+**Validation.** R `mlt` has no support rule, so, as Decision 4 prescribes, the
+reference `reference/mlt_exponential_scaling_shift_*` (generated in
+`reference/generate_reference.R`) is a multi-start explicit-constraint
+`alabama::auglag` fit on mlt's likelihood. The hand-written NLL and score are
+checked against mlt's `loglik` / `scorei` at a feasible point, and the
+Hessian and constraint Jacobian against central differences. The `hin` rows
+are `g_i` and `D θ_b ≥ 0`. All 10 feasible starts converge to the same active
+set, which is then polished by Newton on its KKT system (with the closed-form
+`∇²g_i`) to stationarity 5.7e-14. An offset makes the active set
+non-degenerate: two support rows (multipliers ≈ 70), no monotonicity row,
+`γ ≈ 0.42`. Without an offset every row binds at `θ_b[0] = β = 0` ("Known
+cost"), which is unsuitable as a reference. `tests/test_exponential_scaling_shift.py`
+checks:
+
+| Check | Tolerance |
+|---|---|
+| logLik, θ | `rtol = 1e-6`, `atol = 1e-10` |
+| `mu_ineq` (R's KKT multipliers, same active rows) | `rtol = 1e-5`, `atol = 1e-6` |
+| full `[θ_b \| β \| γ]` gradient vs central differences at R's θ | `rtol = 1e-6` |
+| `J` vs central differences; `γ = 0` rows = linear rows | `1e-7` / `1e-14` |
+| `h(y|x_i) ≥ −1e-7` on a support grid, every training row | — |
+| right / left / interval censoring and scale-only offset vs an independent trust-constr solve with the rows written inline | logLik `rtol = 1e-5` |
+
+The tests also cover `fixed_params` (β pinned at the optimum reproduces the fit;
+`γ` pinned at 0 equals the unscaled #160 fit), the SLSQP / trust-constr
+rejection, and the reported `[D ; J(θ̂)]` rows.
+`tests/test_exponential_predict_support.py::TestScaledInsideHull` adds the
+predict-side case anticipated below: the midpoint of the two binding rows lies
+strictly inside the training `(x_d, x_s)` hull, and `h(a|x) < 0` there by the
+Jensen gap `θ_b[0] · [f(x̄_s) − (f_i + f_j)/2]`. The #157 warning names it.
+
+---
+
 ## Consequences
 
 - **ADR 0002 Decision 3 is superseded** for its exponential corner case. Its
@@ -466,7 +563,9 @@ warning under extrapolation. That warning cannot fire on this path, because
   stays, and `MLT.__init__` keeps rejecting that combination. *(#114: the
   `MLT.__init__` guard now fires only for an `InteractionBasis`; the shift
   path's remaining rejection, for a shift block or a non-zero offset, is a
-  `NotImplementedError` in `optimize()`, see the #114 amendment.)*
+  `NotImplementedError` in `optimize()`, see the #114 amendment.  #115: that
+  rejection now fires only for SLSQP / trust-constr (#116); auglag fits the
+  nonlinear block, see the #115 amendment.)*
 - **Unscaled exponential path:** no code change. Decision 1 ratifies the
   existing `nonneg_lower` rows. The unscaled `InteractionBasis` path gained
   the equivalent rows in [#158](https://github.com/RMKruse/mltpy/issues/158)
@@ -488,7 +587,10 @@ warning under extrapolation. That warning cannot fire on this path, because
   `γ ≠ 0` and `β ≠ 0`, a restart point can violate `g`. PHR tolerates
   infeasible starts, so this is not a correctness issue. Whether a
   nonlinear-aware projection is worth adding is decided in the shift-block
-  slice.
+  slice. *(#115: not needed.  `_restart_loop` perturbs the unperturbed
+  `theta_init`, whose `β = γ = 0`, so every restart sits at `γ = 0` where the
+  rows are the linear `θ_b[0] + x_d,i · β ≥ −offset_i`, and the #160
+  `support_floor` lift makes them feasible.)*
 - **Inference at an active support row.** When `g_i = 0` binds at the optimum
   (always in the scale-only case), Wald widths are unreliable along the active
   direction, as with active monotonicity rows. `confint(type="profile")` is

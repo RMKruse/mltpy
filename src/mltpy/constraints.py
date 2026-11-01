@@ -214,12 +214,262 @@ class ConstraintMatrices:
     d_eq:
         Equality right-hand side, shape (m_eq,).
         Zero-length array when there are no equality constraints.
+    nonlinear_ineq:
+        Optional smooth inequality block ``g(θ) ≥ 0`` stacked below
+        ``A_ineq`` (passed to ``auglag_minimize(nonlinear_ineq=…)``): the
+        exponential support rows under a scaling term
+        (:class:`ScaledSupportConstraint`, issue #115).  ``None`` when every
+        constraint is linear.
     """
 
     A_ineq: NDArray[np.float64]
     b_ineq: NDArray[np.float64]
     C_eq: NDArray[np.float64]
     d_eq: NDArray[np.float64]
+    nonlinear_ineq: ScaledSupportConstraint | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class ScaledSupportConstraint:
+    """Exponential support rows under a scaling term, as a nonlinear block.
+
+    Callable ``θ ↦ (g(θ), J(θ))`` for the rows (ADR 0005 Decision 2)
+
+        g_i(θ) = θ_b[0] · f_i + x_d,i · β + offset_i ≥ 0,
+        f_i = exp(0.5 · x_s,i · γ),    i = 1, …, n,
+
+    on the parameter vector ``θ = [θ_b | β | γ]``.  Build it with
+    :func:`build_scaled_support_constraint`, which validates and copies the
+    design.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients ``p`` (length of ``θ_b``).
+    X:
+        Shift design, shape ``(n, q_d)``; ``q_d = 0`` for none.
+    X_scale:
+        Scaling design, shape ``(n, q_s)`` with ``q_s ≥ 1``.
+    offset:
+        Per-observation offset, shape ``(n,)`` (zeros for none).
+
+    Notes
+    -----
+    ``h(y|x_i) = h_0(y)·f_i + x_d,i·β + offset_i`` and ``h_0`` is
+    non-decreasing with ``h_0(a) = θ_b[0]``, so ``g_i(θ) = h(a|x_i)`` is the
+    minimum of ``h(·|x_i)`` over the support (ADR 0005 Decision 1).  Rows of
+    the Jacobian ``J = ∂g/∂θ``:
+
+    ==========================  ===============================
+    Block                       Entry
+    ==========================  ===============================
+    ``∂g_i/∂θ_b[0]``            ``f_i``
+    ``∂g_i/∂θ_b[k]``, k ≥ 1     ``0``
+    ``∂g_i/∂β``                 ``x_d,i``
+    ``∂g_i/∂γ``                 ``0.5 · θ_b[0] · f_i · x_s,i``
+    ==========================  ===============================
+
+    At ``γ = 0`` (``f_i = 1``) the rows are the unscaled linear support rows
+    ``θ_b[0] + x_d,i·β ≥ −offset_i`` (ADR 0005 Decision 2, simplification 2).
+    ``f_i`` is evaluated as ``np.exp(0.5 · x_s,i · γ)``, exactly as the scaled
+    likelihood evaluates it.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> g = build_scaled_support_constraint(
+    ...     2, np.array([[1.0]]), np.array([[2.0]]), np.array([0.5])
+    ... )
+    >>> values, jac = g(np.array([1.0, 2.0, -1.0, 0.0]))  # [θ_b | β | γ]
+    >>> values.tolist()  # 1·e⁰ − 1 + 0.5
+    [0.5]
+    >>> jac.tolist()
+    [[1.0, 0.0, 1.0, 1.0]]
+    """
+
+    n_params: int
+    X: NDArray[np.float64]
+    X_scale: NDArray[np.float64]
+    offset: NDArray[np.float64]
+
+    @property
+    def n_rows(self) -> int:
+        """Number of support rows ``n`` (training observations)."""
+        return int(self.X_scale.shape[0])
+
+    @property
+    def q_d(self) -> int:
+        """Number of shift columns (length of ``β``)."""
+        return int(self.X.shape[1])
+
+    @property
+    def q_s(self) -> int:
+        """Number of scaling columns (length of ``γ``)."""
+        return int(self.X_scale.shape[1])
+
+    @property
+    def n_total(self) -> int:
+        """Full parameter length ``p + q_d + q_s``."""
+        return self.n_params + self.q_d + self.q_s
+
+    def __call__(
+        self, theta: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """Evaluate the support rows and their Jacobian at ``theta``.
+
+        Parameters
+        ----------
+        theta:
+            Parameter vector ``[θ_b | β | γ]``, shape ``(n_total,)``.
+
+        Returns
+        -------
+        values : NDArray of shape ``(n,)``
+            ``g_i(θ) = θ_b[0]·f_i + x_d,i·β + offset_i``.
+        jac : NDArray of shape ``(n, n_total)``
+            ``∂g/∂θ`` (see the class Notes).
+
+        Raises
+        ------
+        ValueError
+            If ``theta`` does not have shape ``(n_total,)``.
+        """
+        th = np.asarray(theta, dtype=np.float64)
+        if th.shape != (self.n_total,):
+            raise ValueError(
+                f"theta must have shape ({self.n_total},) = p + q_d + q_s; got "
+                f"shape {th.shape}."
+            )
+        p, q_d = self.n_params, self.q_d
+        # θ_b[0]: lower-end coefficient, β: shift block, γ: scaling block.
+        t0 = th[0]
+        beta = th[p : p + q_d]
+        gamma = th[p + q_d :]
+        f = np.exp(0.5 * (self.X_scale @ gamma))  # f_i = exp(0.5·x_s,i·γ)
+        values = t0 * f + self.X @ beta + self.offset
+        jac = np.zeros((self.n_rows, self.n_total), dtype=np.float64)
+        jac[:, 0] = f
+        jac[:, p : p + q_d] = self.X
+        jac[:, p + q_d :] = (0.5 * t0 * f)[:, None] * self.X_scale
+        return np.asarray(values, dtype=np.float64), jac
+
+
+def build_scaled_support_constraint(
+    n_params: int,
+    X: NDArray[np.float64] | None,
+    X_scale: NDArray[np.float64],
+    offset: NDArray[np.float64] | None = None,
+) -> ScaledSupportConstraint:
+    """Build the nonlinear exponential support rows under a scaling term.
+
+    Parameters
+    ----------
+    n_params:
+        Number of Bernstein coefficients ``p`` (``BernsteinBasis.order + 1``).
+    X:
+        Shift design, shape ``(n, q_d)``, or ``None`` for no shift block.
+    X_scale:
+        Scaling design, shape ``(n, q_s)`` with ``q_s ≥ 1``.
+    offset:
+        Per-observation offset, shape ``(n,)``, or ``None`` (zero).
+
+    Returns
+    -------
+    ScaledSupportConstraint
+        Callable ``θ ↦ (g(θ), J(θ))`` over ``θ = [θ_b | β | γ]`` of length
+        ``p + q_d + q_s``; the design is copied.
+
+    Raises
+    ------
+    TypeError
+        If ``n_params`` is not an integer.
+    ValueError
+        If ``n_params < 1``; if ``X_scale`` is not 2-D with at least one
+        column; if ``X`` is not 2-D or its row count differs from
+        ``X_scale``'s; if ``offset`` does not have one entry per row; or if
+        ``X``, ``X_scale`` or ``offset`` contain NaN or infinite entries.
+
+    Notes
+    -----
+    ``g_i(θ) = θ_b[0]·exp(0.5·x_s,i·γ) + x_d,i·β + offset_i``: ADR 0005
+    Decision 2's exact nonlinear constraint, offset included as in the
+    #160 amendment.  See :class:`ScaledSupportConstraint` for the Jacobian.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> g = build_scaled_support_constraint(
+    ...     3, np.array([[0.5], [1.0]]), np.array([[0.0], [1.0]])
+    ... )
+    >>> g.n_rows, g.n_total
+    (2, 5)
+    """
+    if isinstance(n_params, bool) or not isinstance(n_params, (int, np.integer)):
+        raise TypeError(
+            f"n_params must be an int (number of Bernstein coefficients); got "
+            f"{type(n_params).__name__}."
+        )
+    if n_params < 1:
+        raise ValueError(f"n_params must be at least 1; got n_params={n_params}.")
+    xs = np.array(X_scale, dtype=np.float64, copy=True)
+    if xs.ndim != 2 or xs.shape[1] == 0:
+        raise ValueError(
+            "X_scale must be a 2-D scaling design of shape (n, q_s) with "
+            f"q_s >= 1; got shape {xs.shape}."
+        )
+    n = xs.shape[0]
+    if X is None:
+        xd = np.zeros((n, 0), dtype=np.float64)
+    else:
+        xd = np.array(X, dtype=np.float64, copy=True)
+        if xd.ndim != 2:
+            raise ValueError(f"X must be 2-D (n, q_d); got shape {xd.shape}.")
+        if xd.shape[0] != n:
+            raise ValueError(
+                f"X and X_scale must have the same number of rows; got "
+                f"{xd.shape[0]} and {n}."
+            )
+    if offset is None:
+        off = np.zeros(n, dtype=np.float64)
+    else:
+        off = np.array(offset, dtype=np.float64, copy=True).ravel()
+        if off.shape[0] != n:
+            raise ValueError(
+                f"offset must have one entry per row of X_scale ({n}); got "
+                f"{off.shape[0]}."
+            )
+    for name, arr in (("X", xd), ("X_scale", xs), ("offset", off)):
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(
+                f"{name} must be finite to define the exponential support rows "
+                "h(a|x_i) >= 0; got NaN or infinite entries."
+            )
+    return ScaledSupportConstraint(n_params=int(n_params), X=xd, X_scale=xs, offset=off)
+
+
+def _scaled_support_is_nonlinear(
+    n_params: int,
+    total: int,
+    q_s: int,
+    X: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> bool:
+    """Whether the scaled exponential support rule needs the nonlinear block.
+
+    ``θ_b[0]·f_i + x_d,i·β ≥ −offset_i`` collapses to the linear row
+    ``θ_b[0] ≥ 0`` only with no shift block and a zero (or absent) offset
+    (ADR 0005 Decision 2, simplification 1; issue #114).  Shape errors are
+    left to the builders.
+    """
+    q_d = total - n_params - q_s
+    if X is not None and np.ndim(X) == 2:
+        q_d = max(q_d, int(np.shape(X)[1]))
+    if q_d > 0:
+        return True
+    if offset is None:
+        return False
+    off = np.asarray(offset, dtype=np.float64)
+    return bool(off.size > 0 and np.any(off != 0.0))
 
 
 def _validate_support_offset(
@@ -328,7 +578,10 @@ def _scaled_support_row(
     rule ``h(a|x_i) ≥ 0`` is ``θ_b[0]·f_i ≥ 0 ⇔ θ_b[0] ≥ 0`` for every ``i``
     (ADR 0005 Decision 2, simplification 1).  Otherwise the row is non-linear
     in ``γ`` (``θ_b[0] ≥ −offset_i / f_i``, or the β term), which needs the
-    nonlinear inequality block of ADR 0005 Decision 2.
+    nonlinear inequality block of ADR 0005 Decision 2.  The auglag builder
+    :func:`build_constraint_matrices` provides it (``X_scale=``, issue #115)
+    and never reaches this helper in that case; the SLSQP / trust-constr
+    builder :func:`build_constraints` has no nonlinear form yet (issue #116).
     """
     q_d = total - n_params - q_s
     n_rows: int | None = None
@@ -342,15 +595,17 @@ def _scaled_support_row(
         raise NotImplementedError(
             "The exponential support row with scaling= and a shift block "
             f"(q_d={q_d}) is θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0, which is "
-            "non-linear in γ; it is not implemented yet (see "
-            "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+            "non-linear in γ; only the auglag builder (build_constraint_matrices "
+            "with X_scale=) supports it, SLSQP / trust-constr are issue #116 "
+            "(see docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
         )
     off = _validate_support_offset(offset, n_rows)
     if off is not None and np.any(off != 0.0):
         raise NotImplementedError(
             "The exponential support row with scaling= and a non-zero offset "
             "is θ_b[0] ≥ −offset_i·exp(−0.5·x_s,i·γ), which is non-linear in "
-            "γ; it is not implemented yet (see "
+            "γ; only the auglag builder (build_constraint_matrices with "
+            "X_scale=) supports it, SLSQP / trust-constr are issue #116 (see "
             "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
         )
     rows = np.zeros((1, total), dtype=np.float64)
@@ -699,6 +954,7 @@ def build_constraint_matrices(
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     q_s: int = 0,
+    X_scale: NDArray[np.float64] | None = None,
 ) -> ConstraintMatrices:
     """Build constraint matrices for the augmented Lagrangian solver.
 
@@ -751,16 +1007,27 @@ def build_constraint_matrices(
         linear only without a shift block and with a zero offset, where it
         collapses to the single row ``[1, 0, …, 0 | 0_{q_s}]``, i.e.
         ``θ_b[0] ≥ 0`` (ADR 0005 Decision 2, simplification 1; issue #114).
+        Otherwise the rows are returned as the nonlinear block
+        ``nonlinear_ineq`` built from ``X_scale`` (issue #115).
+    X_scale:
+        Scaling design, shape ``(n, q_s)``.  Required when
+        ``nonneg_lower=True`` and ``q_s > 0`` with a shift block or a
+        non-zero offset; it defines the nonlinear support rows
+        ``θ_b[0]·exp(0.5·x_s,i·γ) + X_i·β ≥ −offset_i``
+        (:func:`build_scaled_support_constraint`).  Ignored otherwise.
 
     Returns
     -------
     ConstraintMatrices
         ``A_ineq`` is the padded forward-difference matrix D (shape
-        ``(n_params-1, total_params)``) optionally followed by the support
-        rows; ``b_ineq`` is zero on the monotonicity rows and ``−offset``
-        (or zero) on the support rows.  ``C_eq`` has 0, 1, or 2 rows
-        depending on which of ``lower``/``upper`` are provided; ``d_eq``
-        carries the corresponding right-hand-side values.
+        ``(n_params-1, total_params)``) optionally followed by the linear
+        support rows; ``b_ineq`` is zero on the monotonicity rows and
+        ``−offset`` (or zero) on the support rows.  ``C_eq`` has 0, 1, or 2
+        rows depending on which of ``lower``/``upper`` are provided; ``d_eq``
+        carries the corresponding right-hand-side values.  On the scaled
+        nonlinear case ``A_ineq`` holds the monotonicity rows only and
+        ``nonlinear_ineq`` the support rows; ``nonlinear_ineq`` is ``None``
+        otherwise.
 
     Raises
     ------
@@ -771,11 +1038,10 @@ def build_constraint_matrices(
         ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
         but ``total_params`` is omitted, if ``offset`` is empty, not
         finite, or does not have one entry per row of ``X``, or if ``q_s``
-        is negative or exceeds ``total_params - n_params``.
-    NotImplementedError
-        If ``nonneg_lower=True`` and ``q_s > 0`` together with a shift block
-        or a non-zero offset: the support row is then non-linear in ``γ``
-        (ADR 0005 Decision 2).
+        is negative or exceeds ``total_params - n_params``; or, on the scaled
+        nonlinear case, if ``X_scale`` is missing, does not have ``q_s``
+        columns, or does not match the rows of ``X`` / ``offset`` (see
+        :func:`build_scaled_support_constraint`).
 
     Examples
     --------
@@ -791,14 +1057,30 @@ def build_constraint_matrices(
     [0.0, 0.0, -0.5, 0.25]
     """
     total = total_params if total_params is not None else n_params
-    D, support_rows, support_rhs = _assemble_constraint_arrays(
-        n_params,
-        total_params=total_params,
-        nonneg_lower=nonneg_lower,
-        X=X,
-        offset=offset,
-        q_s=q_s,
-    )
+    nonlinear: ScaledSupportConstraint | None = None
+    if (
+        nonneg_lower
+        and isinstance(q_s, (int, np.integer))
+        and not isinstance(q_s, bool)
+        and q_s > 0
+        and _scaled_support_is_nonlinear(n_params, total, q_s, X, offset)
+    ):
+        # Issue #115: θ_b[0]·f_i + X_i·β ≥ −offset_i is non-linear in γ; the
+        # linear block keeps monotonicity only and the support rows become
+        # the nonlinear block (ADR 0005 Decision 3).
+        nonlinear = _scaled_support_block(n_params, total, q_s, X, X_scale, offset)
+        D, support_rows, support_rhs = _assemble_constraint_arrays(
+            n_params, total_params=total_params, nonneg_lower=False, X=None, q_s=q_s
+        )
+    else:
+        D, support_rows, support_rhs = _assemble_constraint_arrays(
+            n_params,
+            total_params=total_params,
+            nonneg_lower=nonneg_lower,
+            X=X,
+            offset=offset,
+            q_s=q_s,
+        )
 
     b_ineq = np.zeros(D.shape[0], dtype=np.float64)
     if support_rows is not None and support_rhs is not None:
@@ -833,7 +1115,61 @@ def build_constraint_matrices(
         b_ineq=b_ineq,
         C_eq=C_eq,
         d_eq=d_eq,
+        nonlinear_ineq=nonlinear,
     )
+
+
+def _scaled_support_block(
+    n_params: int,
+    total: int,
+    q_s: int,
+    X: NDArray[np.float64] | None,
+    X_scale: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+) -> ScaledSupportConstraint:
+    """Validate the layout and build the nonlinear scaled support block.
+
+    Raises
+    ------
+    ValueError
+        If ``q_s`` exceeds ``total − n_params``, ``X_scale`` is missing or
+        does not have ``q_s`` columns, ``X`` columns do not match
+        ``total − n_params − q_s``, or the design is otherwise invalid (see
+        :func:`build_scaled_support_constraint`).
+    """
+    if q_s > total - n_params:
+        raise ValueError(
+            f"q_s must lie in [0, total_params - n_params] = "
+            f"[0, {total - n_params}]; got q_s={q_s}."
+        )
+    if X_scale is None:
+        raise ValueError(
+            "X_scale must be provided when nonneg_lower=True and q_s > 0 with "
+            "a shift block or a non-zero offset: the exponential support rows "
+            "θ_b[0]·exp(0.5·x_s,i·γ) + X_i·β >= −offset_i depend on the scaling "
+            "design (docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+        )
+    xs = np.asarray(X_scale)
+    if xs.ndim != 2 or xs.shape[1] != q_s:
+        raise ValueError(
+            f"X_scale must have shape (n, q_s) with q_s={q_s}; got shape {xs.shape}."
+        )
+    q_d = total - n_params - q_s
+    if X is not None:
+        x_arr = np.asarray(X)
+        if x_arr.ndim != 2:
+            raise ValueError(f"X must be 2-D, got shape {x_arr.shape}")
+        if x_arr.shape[1] != q_d:
+            raise ValueError(
+                f"X has {x_arr.shape[1]} columns but total_params - n_params - "
+                f"q_s = {q_d}"
+            )
+    elif q_d > 0:
+        raise ValueError(
+            "X must be provided when nonneg_lower=True and total_params > "
+            "n_params + q_s so the support rows can include the shift block."
+        )
+    return build_scaled_support_constraint(n_params, X, X_scale, offset)
 
 
 # ---------------------------------------------------------------------------

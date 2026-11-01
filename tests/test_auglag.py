@@ -967,3 +967,212 @@ class TestBoxBounds:
                 bounds=(np.zeros(2), np.ones(2)),
                 options=AugLagOptions(inner_method="BFGS"),
             )
+
+
+# ---------------------------------------------------------------------------
+# Nonlinear inequality block (issue #115, ADR 0005 Decision 3)
+# ---------------------------------------------------------------------------
+
+
+def _disc(
+    radius: float = 1.0,
+) -> Callable[[NDArray[np.float64]], tuple[NDArray[np.float64], NDArray[np.float64]]]:
+    """``g(x) = r² − ‖x‖² ≥ 0`` with Jacobian ``−2xᵀ``."""
+
+    def g(
+        theta: NDArray[np.float64],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        return (
+            np.array([radius**2 - float(theta @ theta)]),
+            (-2.0 * theta)[None, :],
+        )
+
+    return g
+
+
+class TestNonlinearInequality:
+    """``nonlinear_ineq`` stacks smooth rows ``g(θ) ≥ 0`` below ``A_ineq``.
+
+    PHR treats row ``i`` like a linear row with ``A_ineq[i]`` replaced by
+    ``J(θ)[i]`` at the current iterate (ADR 0005 Decision 3).
+    """
+
+    @pytest.mark.parametrize(
+        ("center", "expected", "mu"),
+        [
+            # Projection of (2, 0) onto the unit disc: x* = (1, 0).
+            # ∇f = x* − c = (−1, 0) = μ ∇g = μ (−2, 0)  ⇒  μ = 1/2.
+            ([2.0, 0.0], [1.0, 0.0], 0.5),
+            # (0, −3): x* = (0, −1), ∇f = (0, 2) = μ (0, 2)  ⇒  μ = 1.
+            ([0.0, -3.0], [0.0, -1.0], 1.0),
+            # Interior optimum: row inactive, multiplier 0.
+            ([0.3, -0.2], [0.3, -0.2], 0.0),
+        ],
+    )
+    def test_disc_projection(
+        self, center: list[float], expected: list[float], mu: float
+    ) -> None:
+        result = auglag_minimize(
+            quadratic_obj(np.array(center)),
+            np.zeros(2),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=_disc(),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, expected, atol=1e-6)
+        assert result.mu_ineq.shape == (1,)
+        np.testing.assert_allclose(result.mu_ineq, [mu], atol=1e-5)
+        assert result.kkt_residual < 1e-6
+
+    def test_stacked_below_linear_rows(self) -> None:
+        """min ½‖x − (2, 2)‖² s.t. x₀ − x₁ ≥ 0.5 (linear), ‖x‖² ≤ 1.
+
+        Both rows bind: x* on the unit circle with x₀ − x₁ = 0.5.
+        """
+        A = np.array([[1.0, -1.0]])
+        b = np.array([0.5])
+        result = auglag_minimize(
+            quadratic_obj(np.array([2.0, 2.0])),
+            np.array([0.5, -0.5]),
+            A_ineq=A,
+            b_ineq=b,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=_disc(),
+        )
+        assert result.converged
+        x = result.theta
+        # x₀ = (0.5 + √1.75)/2, x₁ = x₀ − 0.5.
+        x0 = (0.5 + np.sqrt(1.75)) / 2.0
+        np.testing.assert_allclose(x, [x0, x0 - 0.5], atol=1e-6)
+        assert result.mu_ineq.shape == (2,)
+        # Stationarity: ∇f = μ_lin A₀ + μ_nl (−2x).
+        grad_f = x - np.array([2.0, 2.0])
+        resid = grad_f - result.mu_ineq[0] * A[0] - result.mu_ineq[1] * (-2.0 * x)
+        np.testing.assert_allclose(resid, 0.0, atol=1e-5)
+        assert np.all(result.mu_ineq > 0.0)
+
+    def test_linear_row_as_callable_matches_linear_path(self) -> None:
+        """A linear row passed as a callable reproduces the ``A_ineq`` fit."""
+        A = np.array([[1.0, 1.0]])
+        b = np.array([1.0])
+        obj = quadratic_obj(np.array([-1.0, 0.0]))
+        lin = auglag_minimize(
+            obj, np.array([1.0, 1.0]), A_ineq=A, b_ineq=b, C_eq=None, d_eq=None
+        )
+        nl = auglag_minimize(
+            obj,
+            np.array([1.0, 1.0]),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=lambda t: (A @ t - b, A),
+        )
+        assert lin.converged and nl.converged
+        np.testing.assert_allclose(nl.theta, lin.theta, atol=1e-10)
+        np.testing.assert_allclose(nl.mu_ineq, lin.mu_ineq, atol=1e-8)
+
+    def test_none_is_byte_identical(self) -> None:
+        """``nonlinear_ineq=None`` leaves the linear path untouched."""
+        obj = quadratic_obj(np.array([-1.0, 2.0]))
+        A = np.array([[1.0, 0.0], [-1.0, 1.0]])
+        a = auglag_minimize(
+            obj, np.ones(2), A_ineq=A, b_ineq=None, C_eq=None, d_eq=None
+        )
+        b = auglag_minimize(
+            obj,
+            np.ones(2),
+            A_ineq=A,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=None,
+        )
+        np.testing.assert_array_equal(a.theta, b.theta)
+        np.testing.assert_array_equal(a.mu_ineq, b.mu_ineq)
+        assert a.kkt_residual == b.kkt_residual
+        assert a.n_inner_iter == b.n_inner_iter
+
+    def test_with_equality(self) -> None:
+        """Equality x₀ = x₁ plus the disc: x* = (1/√2)(1, 1) from c = (3, 3)."""
+        result = auglag_minimize(
+            quadratic_obj(np.array([3.0, 3.0])),
+            np.zeros(2),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=np.array([[1.0, -1.0]]),
+            d_eq=None,
+            nonlinear_ineq=_disc(),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, [np.sqrt(0.5)] * 2, atol=1e-6)
+
+    def test_infeasible_start(self) -> None:
+        """PHR tolerates a start outside the nonlinear feasible set."""
+        result = auglag_minimize(
+            quadratic_obj(np.array([2.0, 0.0])),
+            np.array([5.0, 5.0]),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=_disc(),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, [1.0, 0.0], atol=1e-6)
+
+    @pytest.mark.parametrize(
+        ("values", "jac", "match"),
+        [
+            (np.zeros((1, 1)), np.zeros((1, 2)), "values"),
+            (np.zeros(1), np.zeros((1, 3)), "Jacobian"),
+            (np.zeros(2), np.zeros((1, 2)), "Jacobian"),
+        ],
+    )
+    def test_bad_shapes_raise(
+        self, values: NDArray[np.float64], jac: NDArray[np.float64], match: str
+    ) -> None:
+        with pytest.raises(ValueError, match=match):
+            auglag_minimize(
+                quadratic_obj(np.zeros(2)),
+                np.zeros(2),
+                A_ineq=None,
+                b_ineq=None,
+                C_eq=None,
+                d_eq=None,
+                nonlinear_ineq=lambda t: (values, jac),
+            )
+
+    def test_non_callable_raises(self) -> None:
+        with pytest.raises(TypeError, match="nonlinear_ineq"):
+            auglag_minimize(
+                quadratic_obj(np.zeros(2)),
+                np.zeros(2),
+                A_ineq=None,
+                b_ineq=None,
+                C_eq=None,
+                d_eq=None,
+                nonlinear_ineq=np.zeros(2),  # type: ignore[arg-type]
+            )
+
+    def test_stall_working_set_uses_jacobian(self) -> None:
+        """At a stalled feasible point the stall test explains ∇f with ``J(θ)``.
+
+        Starting on the optimum makes θ stop moving after one outer step; the
+        disc row's linearisation must absorb ∇f for ``converged=True``.
+        """
+        result = auglag_minimize(
+            quadratic_obj(np.array([2.0, 0.0])),
+            np.array([1.0, 0.0]),
+            A_ineq=None,
+            b_ineq=None,
+            C_eq=None,
+            d_eq=None,
+            nonlinear_ineq=_disc(),
+        )
+        assert result.converged
+        np.testing.assert_allclose(result.theta, [1.0, 0.0], atol=1e-6)

@@ -9,8 +9,9 @@ term and no shift block (``q_d = 0``)::
 so the rule collapses to the single linear row ``θ_b[0] ≥ 0`` (ADR 0005
 Decision 2, simplification 1) and the existing linear solver paths fit the
 model unchanged.  A shift block (or a non-zero offset) makes the row
-non-linear in ``γ``; that case still raises ``NotImplementedError`` until the
-nonlinear-constraint slice lands.
+non-linear in ``γ``: auglag fits it through its nonlinear inequality block
+(issue #115, ``tests/test_exponential_scaling_shift.py``), while SLSQP and
+trust-constr still raise ``NotImplementedError`` (issue #116).
 
 R reference (``reference/mlt_exponential_scaling_*.txt``, generated in
 ``reference/generate_reference.R``): ``mlt(ctm(Bernstein, scaling = ~x_s,
@@ -138,7 +139,12 @@ def _h_grid(
 
 
 class TestGuards:
-    """``MLT.__init__`` and ``optimize()`` reject only the non-linear cases."""
+    """``MLT.__init__`` and ``optimize()`` reject only the non-linear cases.
+
+    Since issue #115 the default auglag solver fits the non-linear cases (a
+    shift block or a non-zero offset); the rejection tests below therefore
+    run on SLSQP / trust-constr, which still raise (issue #116).
+    """
 
     def test_init_accepts_scale_only(self, ref: dict[str, object]) -> None:
         model = MLT(
@@ -149,9 +155,10 @@ class TestGuards:
         )
         assert model.scaling is not None
 
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
     @pytest.mark.parametrize("q_d", [1, 2])
     def test_fit_with_shift_block_raises(
-        self, ref: dict[str, object], q_d: int
+        self, ref: dict[str, object], q_d: int, solver: str
     ) -> None:
         y = ref["y"]
         X = np.random.default_rng(q_d).normal(size=(len(y), q_d))  # type: ignore[arg-type]
@@ -160,13 +167,18 @@ class TestGuards:
             support=ref["support"],  # type: ignore[arg-type]
             base_distribution="exponential",
             scaling=ref["x_s"],  # type: ignore[arg-type]
+            optimizer_config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
         )
         with pytest.raises(NotImplementedError, match="shift") as exc:
             model.fit(y, X=X)  # type: ignore[arg-type]
         assert "0005" in str(exc.value)
+        assert "#116" in str(exc.value)
         assert not model.is_fitted_
 
-    def test_optimize_with_shift_block_raises(self, ref: dict[str, object]) -> None:
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_optimize_with_shift_block_raises(
+        self, ref: dict[str, object], solver: str
+    ) -> None:
         y = ref["y"]
         X = np.ones((len(y), 1))  # type: ignore[arg-type]
         with pytest.raises(NotImplementedError, match="shift"):
@@ -176,11 +188,13 @@ class TestGuards:
                 X,
                 base_distribution="exponential",
                 scaling=ref["x_s"],  # type: ignore[arg-type]
+                config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
             )
 
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
     @pytest.mark.parametrize("value", [0.3, -0.3])
     def test_fit_with_nonzero_offset_raises(
-        self, ref: dict[str, object], value: float
+        self, ref: dict[str, object], value: float, solver: str
     ) -> None:
         """``θ_b[0]·f_i ≥ −offset_i`` is non-linear in γ for a non-zero offset."""
         y = ref["y"]
@@ -190,9 +204,21 @@ class TestGuards:
             support=ref["support"],  # type: ignore[arg-type]
             base_distribution="exponential",
             scaling=ref["x_s"],  # type: ignore[arg-type]
+            optimizer_config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
         )
         with pytest.raises(NotImplementedError, match="offset"):
             model.fit(y, offset=offset)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("value", [0.3, -0.3])
+    def test_auglag_fits_nonzero_offset(
+        self, ref: dict[str, object], value: float
+    ) -> None:
+        """auglag fits the non-linear rows (issue #115): h(a|x_i) ≥ 0."""
+        y = ref["y"]
+        offset = np.full(len(y), value)  # type: ignore[arg-type]
+        model = _fit(ref, offset=offset)
+        f = np.exp(0.5 * (ref["x_s"] @ model.gamma_))  # type: ignore[operator]
+        assert np.min(model.theta_[0] * f + value) >= -_FEAS_TOL
 
     def test_zero_offset_matches_no_offset(
         self, ref: dict[str, object], fitted_auglag: MLT
@@ -275,8 +301,12 @@ class TestConstraintRows:
         )
         assert cm.b_ineq[-1] == 0.0
 
-    def test_shift_block_with_scaling_rejected(self) -> None:
-        with pytest.raises(NotImplementedError, match="shift"):
+    def test_shift_block_with_scaling_needs_x_scale(self) -> None:
+        """Issue #115: the auglag builder carries the shift-block rows as a
+        nonlinear block, which needs the scaling design (formerly a
+        ``NotImplementedError``; covered in ``test_exponential_scaling_shift``).
+        """
+        with pytest.raises(ValueError, match="X_scale"):
             build_constraint_matrices(
                 _P,
                 total_params=_P + 2,

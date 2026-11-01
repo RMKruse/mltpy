@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `scaling=` with `base_distribution="exponential"` **with a shift block or a
+  non-zero offset** on the default auglag solver
+  (`MLT(..., base_distribution="exponential", scaling=X_s).fit(y, X=X_d,
+  offset=o)`). The support rule `h(a|x_i) ≥ 0` is enforced exactly as one
+  nonlinear row per training observation,
+  `θ_b[0]·exp(0.5·x_s,i·γ) + x_d,i·β + offset_i ≥ 0` (ADR 0005 Decisions 2–3),
+  for all four censoring types. R `mlt` has no support rule, so the reference
+  (`reference/mlt_exponential_scaling_shift_*`) is a multi-start
+  explicit-constraint `alabama::auglag` fit on mlt's likelihood, polished by
+  Newton on its non-degenerate KKT system; θ, logLik and the multipliers
+  match at `rtol=1e-6`. SLSQP and trust-constr still raise
+  `NotImplementedError` for this case (#116). (#115)
+- `auglag_minimize(..., nonlinear_ineq=g)`: an optional smooth inequality
+  block `g(θ) ≥ 0`, `g: θ ↦ (values, Jacobian)`, stacked below the linear rows
+  with the same PHR penalty, multiplier update, KKT residual and ADR 0004
+  stall test (working-set normals from `J(θ)`). `mu_ineq` lists the linear
+  rows first. Without it the solve is unchanged. (#115)
+- `ScaledSupportConstraint` / `build_scaled_support_constraint(p, X, X_scale,
+  offset)` in `mltpy.constraints`: the scaled exponential support rows with
+  their analytic Jacobian; `build_constraint_matrices(..., X_scale=)` returns
+  them as `ConstraintMatrices.nonlinear_ineq`. On this path auglag solves in
+  increment coordinates `δ = (θ_b[0], Δθ_b, β, γ)`, so `D θ_b ≥ 0` is a box
+  enforced inside every inner solve: censored rows carry no `log h'` barrier,
+  and a violated monotonicity row lets the smooth exponential extension fall
+  exponentially in `γ` (a right-censored fit ran off to logLik `+1.5·10³`
+  without it). The reported `constraint_A_ineq` holds the support rows as
+  their Jacobian `J(θ̂)`. (#115)
 - `scaling=` with `base_distribution="exponential"` on the shift basis when
   there is no shift block (`MLT(..., base_distribution="exponential",
   scaling=X_s).fit(y)`). The support rule `h(a|x_i) ≥ 0` collapses to the
@@ -17,8 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   = 0))` (cross-checked against `tram::Aareg(y ~ 0 | x_s)`; fixture
   `reference/mlt_exponential_scaling_*`). `MLT.__init__` now rejects the
   combination only on an `InteractionBasis`. A shift block (`X` with columns)
-  or a non-zero `offset` makes the row non-linear in `γ`, so `fit` raises
-  `NotImplementedError` in those cases. (#114)
+  or a non-zero `offset` makes the row non-linear in `γ`; auglag fits that
+  case since #115, SLSQP / trust-constr raise `NotImplementedError` (#116).
+  (#114)
 - `auglag_minimize(..., bounds=(lb, ub))`: optional box bounds enforced inside
   every inner L-BFGS-B solve (box-constrained augmented Lagrangian, Birgin &
   Martínez 2014). Bound multipliers are returned as `nu_lower` / `nu_upper`,

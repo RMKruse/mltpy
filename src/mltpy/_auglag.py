@@ -1,10 +1,17 @@
-"""Augmented Lagrangian (PHR) optimiser for linear equality/inequality constraints.
+"""Augmented Lagrangian (PHR) optimiser for equality/inequality constraints.
 
 Implements the Penalty-Homotopy-Relaxation (PHR) augmented Lagrangian
-algorithm of Birgin & Martínez (2014).  All constraints must be linear:
+algorithm of Birgin & Martínez (2014).  Equality constraints are linear;
+inequalities are linear rows, optionally followed by a block of smooth
+nonlinear rows (issue #115, ADR 0005 Decision 3):
 
-    A_ineq @ theta >= b_ineq   (inequality)
+    A_ineq @ theta >= b_ineq   (linear inequality)
+    g_nl(theta)    >= 0        (nonlinear inequality, Jacobian J_nl(theta))
     C_eq   @ theta  = d_eq     (equality)
+
+The two inequality blocks are stacked, ``g = [A θ − b ; g_nl(θ)]`` with
+Jacobian ``[A ; J_nl(θ)]``; every formula below reads ``A`` as that stacked
+Jacobian at the current iterate.
 
 The augmented Lagrangian is:
 
@@ -36,6 +43,11 @@ import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
 from scipy.optimize import Bounds, minimize, nnls
+
+# A smooth inequality block g(θ) ≥ 0: θ ↦ (g(θ) of shape (m,), J(θ) of shape (m, n)).
+NonlinearInequality = Callable[
+    [NDArray[np.float64]], tuple[NDArray[np.float64], NDArray[np.float64]]
+]
 
 
 @dataclass
@@ -137,7 +149,9 @@ class AugLagResult:
     lambda_eq:
         Final equality multipliers, shape (m_eq,).
     mu_ineq:
-        Final inequality multipliers (≥ 0), shape (m_ineq,).
+        Final inequality multipliers (≥ 0), shape (m_ineq + m_nl,): the
+        linear rows of ``A_ineq`` first, then the rows of ``nonlinear_ineq``
+        (``m_nl = 0`` without one).
     rho_final:
         Final penalty parameter ρ.
     nu_lower:
@@ -180,14 +194,20 @@ def _make_auglag_obj(
     d_eq: NDArray[np.float64],
     m_ineq: int,
     m_eq: int,
+    nonlinear_ineq: NonlinearInequality | None = None,
+    m_nl: int = 0,
 ) -> Callable[[NDArray[np.float64]], tuple[float, NDArray[np.float64]]]:
     """Factory: return the augmented Lagrangian closure for one outer iteration.
 
     Copies multipliers by value so updates in the outer loop do not bleed
-    into an already-dispatched inner solve.
+    into an already-dispatched inner solve.  ``mu_ineq`` holds the ``m_ineq``
+    linear-row multipliers followed by the ``m_nl`` nonlinear-row ones; the
+    nonlinear rows add ``(1/(2ρ))·Σ[φᵢ² − μᵢ²]`` with
+    ``φ = max(0, μ − ρ g_nl(θ))`` and gradient ``−J_nl(θ)ᵀ φ``.
     """
     lam = lambda_eq.copy()
-    mu = mu_ineq.copy()
+    mu = mu_ineq[:m_ineq].copy()
+    mu_nl = mu_ineq[m_ineq:].copy()
     rho_ = float(rho)
 
     def obj(theta: NDArray[np.float64]) -> tuple[float, NDArray[np.float64]]:
@@ -206,9 +226,63 @@ def _make_auglag_obj(
             L_A += (0.5 / rho_) * (float(phi @ phi) - float(mu @ mu))
             grad = grad - A_ineq.T @ phi
 
+        if m_nl > 0 and nonlinear_ineq is not None:
+            g_nl, J_nl = _eval_nonlinear(nonlinear_ineq, theta, theta.size, m_nl)
+            phi_nl = np.maximum(0.0, mu_nl - rho_ * g_nl)
+            L_A += (0.5 / rho_) * (float(phi_nl @ phi_nl) - float(mu_nl @ mu_nl))
+            grad = grad - J_nl.T @ phi_nl
+
         return L_A, grad
 
     return obj
+
+
+def _eval_nonlinear(
+    nonlinear_ineq: NonlinearInequality,
+    theta: NDArray[np.float64],
+    n: int,
+    m_nl: int | None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Evaluate a nonlinear inequality block and check its shapes.
+
+    Parameters
+    ----------
+    nonlinear_ineq:
+        Callable ``θ ↦ (g(θ), J(θ))``.
+    theta:
+        Point of evaluation, shape (n,).
+    n:
+        Number of parameters.
+    m_nl:
+        Expected number of rows, or ``None`` on the first call (any
+        ``m ≥ 0`` accepted).
+
+    Returns
+    -------
+    tuple[NDArray, NDArray]
+        ``g`` of shape (m,) and ``J`` of shape (m, n), as ``float64``.
+
+    Raises
+    ------
+    ValueError
+        If ``g`` is not 1-D (or changes length between calls), or ``J`` does
+        not have shape (len(g), n).
+    """
+    values, jac = nonlinear_ineq(theta)
+    g = np.asarray(values, dtype=np.float64)
+    J = np.asarray(jac, dtype=np.float64)
+    if g.ndim != 1 or (m_nl is not None and g.shape[0] != m_nl):
+        expected = "(m,)" if m_nl is None else f"({m_nl},)"
+        raise ValueError(
+            f"nonlinear_ineq must return values of shape {expected}; got "
+            f"shape {g.shape}."
+        )
+    if J.shape != (g.shape[0], n):
+        raise ValueError(
+            "nonlinear_ineq must return a Jacobian of shape (len(values), n) = "
+            f"({g.shape[0]}, {n}); got shape {J.shape}."
+        )
+    return g, J
 
 
 def _projected_stationarity(
@@ -415,8 +489,9 @@ def auglag_minimize(
     d_eq: NDArray[np.float64] | None,
     options: AugLagOptions | None = None,
     bounds: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None,
+    nonlinear_ineq: NonlinearInequality | None = None,
 ) -> AugLagResult:
-    """Minimise a smooth objective subject to linear equality/inequality constraints.
+    """Minimise a smooth objective subject to equality/inequality constraints.
 
     Parameters
     ----------
@@ -444,6 +519,11 @@ def auglag_minimize(
         Optional box ``(lb, ub)``, each of shape (n,), with ``±inf`` for an
         absent bound, enforced inside every inner solve (see Notes).
         ``None`` (default) leaves the inner solve unconstrained.
+    nonlinear_ineq:
+        Optional smooth inequality block ``g(θ) ≥ 0``: a callable returning
+        ``(g(θ), J(θ))`` with shapes (m_nl,) and (m_nl, n), ``J = ∂g/∂θ``.
+        Its rows are stacked below ``A_ineq`` (see Notes).  ``None``
+        (default) leaves the solve exactly as with linear rows only.
 
     Returns
     -------
@@ -455,7 +535,10 @@ def auglag_minimize(
     ------
     ValueError
         If ``bounds`` is malformed (see :func:`_validate_bounds`) or
-        ``options.inner_method`` cannot take box bounds.
+        ``options.inner_method`` cannot take box bounds, or if
+        ``nonlinear_ineq`` returns arrays of the wrong shape.
+    TypeError
+        If ``nonlinear_ineq`` is neither ``None`` nor callable.
 
     Notes
     -----
@@ -478,6 +561,16 @@ def auglag_minimize(
     stall test adds the active bounds to its working set.  A bound may also
     be listed as a row of ``A_ineq``; that row then stays feasible, keeps a
     zero PHR multiplier and leaves the force to ``ν``.
+
+    **Nonlinear inequalities.**  With ``nonlinear_ineq`` the PHR treatment of
+    a row ``g_i(θ) ≥ 0`` is the linear one with the constant row
+    ``A_ineq[i]`` replaced by ``J(θ)[i]`` at the current iterate (ADR 0005
+    Decision 3; ``alabama::auglag``'s ``hin`` / ``hin.jac``): the penalty and
+    the multiplier update ``μ ← max(0, μ − ρ g(θ⁺))`` use ``g_i(θ)``, the
+    gradient contribution is ``−J(θ)ᵀφ``, the KKT residual and feasibility
+    include the rows, and the stall test takes their working-set normals
+    from ``J(θ)``, i.e. it checks first-order stationarity of the
+    linearisation at θ.  ``mu_ineq`` lists the linear rows first.
 
     References
     ----------
@@ -522,8 +615,19 @@ def auglag_minimize(
             else np.asarray(d_eq, dtype=np.float64)
         )
 
+    m_nl = 0
+    if nonlinear_ineq is not None:
+        if not callable(nonlinear_ineq):
+            raise TypeError(
+                "nonlinear_ineq must be a callable θ ↦ (values, Jacobian) or "
+                f"None; got {type(nonlinear_ineq).__name__}."
+            )
+        m_nl = _eval_nonlinear(nonlinear_ineq, x0_arr, n, None)[0].shape[0]
+    # Inequality rows: the m_ineq linear rows, then the m_nl nonlinear ones.
+    m_all = m_ineq + m_nl
+
     lambda_eq = np.zeros(m_eq, dtype=np.float64)
-    mu_ineq = np.zeros(m_ineq, dtype=np.float64)
+    mu_ineq = np.zeros(m_all, dtype=np.float64)
     rho = float(options.rho_init)
 
     theta = x0_arr.copy()
@@ -551,7 +655,18 @@ def auglag_minimize(
         n_outer_iter = outer_iter + 1
 
         inner_obj = _make_auglag_obj(
-            fun, lambda_eq, mu_ineq, rho, A_, b_, C_, d_, m_ineq, m_eq
+            fun,
+            lambda_eq,
+            mu_ineq,
+            rho,
+            A_,
+            b_,
+            C_,
+            d_,
+            m_ineq,
+            m_eq,
+            nonlinear_ineq=nonlinear_ineq,
+            m_nl=m_nl,
         )
         try:
             result = minimize(
@@ -573,15 +688,21 @@ def auglag_minimize(
         # Constraint residuals at new θ
         h = C_ @ theta - d_ if m_eq > 0 else np.zeros(0, dtype=np.float64)
         g = A_ @ theta - b_ if m_ineq > 0 else np.zeros(0, dtype=np.float64)
+        # Stacked inequality Jacobian at θ: A_ itself without nonlinear rows.
+        A_cur = A_
+        if m_nl > 0 and nonlinear_ineq is not None:
+            g_nl, J_nl = _eval_nonlinear(nonlinear_ineq, theta, n, m_nl)
+            g = np.concatenate([g, g_nl])
+            A_cur = np.vstack([A_, J_nl])
 
         # Gradient of L_A at new θ with current multipliers
         f_val, grad_f = fun(theta)
         grad_L_A = np.array(grad_f, dtype=np.float64)
         if m_eq > 0:
             grad_L_A = grad_L_A - C_.T @ lambda_eq + rho * (C_.T @ h)
-        if m_ineq > 0:
+        if m_all > 0:
             phi = np.maximum(0.0, mu_ineq - rho * g)
-            grad_L_A = grad_L_A - A_.T @ phi
+            grad_L_A = grad_L_A - A_cur.T @ phi
 
         # Box bounds (Notes): multipliers read off ∇L_A on active coordinates;
         # stationarity is measured on the box-projected gradient.
@@ -602,9 +723,9 @@ def auglag_minimize(
         # (no complementarity), used by the penalty update and the stall test.
         eq_viol = float(np.max(np.abs(h))) if m_eq > 0 else 0.0
         ineq_kkt = (
-            float(np.max(np.abs(np.minimum(g, mu_ineq / rho)))) if m_ineq > 0 else 0.0
+            float(np.max(np.abs(np.minimum(g, mu_ineq / rho)))) if m_all > 0 else 0.0
         )
-        ineq_viol = float(np.max(np.maximum(0.0, -g))) if m_ineq > 0 else 0.0
+        ineq_viol = float(np.max(np.maximum(0.0, -g))) if m_all > 0 else 0.0
         stationarity = float(np.max(np.abs(grad_L_A)))
         kkt_residual = max(eq_viol, ineq_kkt, stationarity)
         feasibility = max(eq_viol, ineq_viol, box_viol)
@@ -662,7 +783,7 @@ def auglag_minimize(
             )
             # Active box bounds join the working set as rows ±e_j with
             # slacks θ_j − lb_j (lower) and ub_j − θ_j (upper).
-            A_work = A_[working]
+            A_work = A_cur[working]
             g_work = g[working]
             if box is not None and (active_lower.any() or active_upper.any()):
                 eye = np.eye(n, dtype=np.float64)
@@ -706,7 +827,7 @@ def auglag_minimize(
         # Multiplier updates
         if m_eq > 0:
             lambda_eq = lambda_eq - rho * h
-        if m_ineq > 0:
+        if m_all > 0:
             mu_ineq = np.maximum(0.0, mu_ineq - rho * g)
 
         # Penalty update: grow ρ only when the iterate is still infeasible AND

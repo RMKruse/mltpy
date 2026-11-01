@@ -9,11 +9,11 @@ gradient of ``-ℓ`` agrees with a central-difference reference at the fitted
 issue #71: "All seven base distributions tested under scaling for at least
 one censoring type each."
 
-``"exponential"`` × scaling fits only without a shift block (issue #114,
-ADR 0005 Decision 2): with ``x_d`` present, as in this module's datasets, the
-support row is non-linear in ``γ`` and ``fit`` raises ``NotImplementedError``.
-The scale-only case has its own R-parity tests in
-:mod:`tests.test_exponential_scaling_no_shift`.
+``"exponential"`` × scaling has its own R-parity tests: the scale-only case
+in :mod:`tests.test_exponential_scaling_no_shift` (issue #114) and the
+shift-block case, whose support row is non-linear in ``γ`` (ADR 0005
+Decision 2), in :mod:`tests.test_exponential_scaling_shift` (issue #115,
+auglag only; SLSQP / trust-constr still raise ``NotImplementedError``, #116).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import pytest
 from mltpy import MLT
 from mltpy.basis import BernsteinBasis
 from mltpy.likelihood import negative_log_likelihood
+from mltpy.optimizer import OptimizerConfig
 from mltpy.variables import CensoredData, CensoringType
 
 
@@ -245,8 +246,10 @@ def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
     scale-only model fits (its support row collapses to ``θ_b[0] ≥ 0``), so
     ``__init__`` now accepts the combination, and the shift design, which
     only arrives at ``fit``, decides.  With a shift block the support row
-    ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β ≥ 0`` is non-linear in ``γ`` and not yet
-    implemented.
+    ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β ≥ 0`` is non-linear in ``γ``.  Issue #115
+    fits it on the default auglag solver
+    (``tests/test_exponential_scaling_shift.py``); SLSQP and trust-constr
+    still reject it (issue #116), which this test now pins.
     """
     y, x_d, x_s, _ = _make_dataset()
     y_pos = y - y.min() + 0.01
@@ -256,6 +259,7 @@ def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
         support=sup,
         base_distribution="exponential",
         scaling=x_s,
+        optimizer_config=OptimizerConfig(solver="slsqp"),
     )
     with pytest.raises(NotImplementedError, match="shift block"):
         model.fit(y_pos, X=x_d)

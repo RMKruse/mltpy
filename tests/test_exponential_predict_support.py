@@ -7,14 +7,15 @@ the CDF near ``a`` is negative.  ADR 0005 consequence 4: warn with a
 ``UserWarning`` naming the offending rows and return the raw values (no
 clamping at ``max(h, 0)``, no raising).
 
-Follow-up note — scaled path: ``scaling=`` with the exponential link fits
-only without a shift block so far (#114).  There ``h(a|x) = θ_b[0]·f(x) ≥ 0``
-for every ``x``, so the warning cannot fire
+Scaled path: without a shift block and offset (#114)
+``h(a|x) = θ_b[0]·f(x) ≥ 0`` for every ``x``, so the warning cannot fire
 (``tests/test_exponential_scaling_no_shift.py`` checks it stays silent under
-extrapolation).  The predict-side check already uses the scaled form
-``θ_b[0]·exp(0.5·x_s·γ) + x_d·β + offset``; a scaled, inside-the-hull case
-should be added once the shift + scale slice (#115, map #117) makes that fit
-possible.
+extrapolation).  With a shift block (#115) the predict-side check uses
+``h(a|x) = θ_b[0]·exp(0.5·x_s·γ) + x_d·β + offset``, which is convex in
+``x_s`` when ``θ_b[0] > 0``: ``h(a|x) < 0`` can occur strictly *inside* the
+convex hull of the training rows, unlike the affine unscaled case.
+``TestScaledInsideHull`` builds such a point from the R fixture
+``reference/mlt_exponential_scaling_shift_*``.
 
 Fixture
 -------
@@ -28,14 +29,18 @@ range ``x ∈ [0, 1]`` and ``h(a|2) ≈ −0.69``.
 
 from __future__ import annotations
 
+import pathlib
 import warnings
 
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from scipy.spatial import Delaunay
 
+from mltpy import MLT
 from mltpy.basis import BernsteinBasis
 from mltpy.model import ConditionalTransformationModel
+from mltpy.optimizer import OptimizerConfig
 from mltpy.variables import CensoredData, CensoringType
 
 ExpoFit = tuple[ConditionalTransformationModel, NDArray[np.float64]]
@@ -395,3 +400,135 @@ class TestSimulateSupportAtom:
         (hit,) = _atom_hits(rec)
         assert hit.filename == __file__
         assert "point(s)" in str(hit.message)
+
+
+# ---------------------------------------------------------------------------
+# Scaled path (#115): h(a|x) < 0 strictly inside the training hull
+# ---------------------------------------------------------------------------
+
+_REF_DIR = pathlib.Path(__file__).parent.parent / "reference"
+ScaledFit = tuple[MLT, dict[str, NDArray[np.float64]]]
+
+
+def _load_ss(name: str) -> NDArray[np.float64]:
+    return np.loadtxt(_REF_DIR / f"mlt_exponential_scaling_shift_{name}.txt")
+
+
+@pytest.fixture(scope="module")
+def scaled_fit() -> ScaledFit:
+    """Shift + scale + offset exponential fit on the #115 R fixture."""
+    data = {
+        "y": _load_ss("y"),
+        "x_d": _load_ss("xd").reshape(-1, 1),
+        "x_s": _load_ss("xs").reshape(-1, 1),
+        "offset": _load_ss("offset"),
+    }
+    sup = _load_ss("support")
+    model = MLT(
+        order=4,
+        support=(float(sup[0]), float(sup[1])),
+        base_distribution="exponential",
+        scaling=data["x_s"],
+        optimizer_config=OptimizerConfig(random_state=0),
+    )
+    model.fit(data["y"], X=data["x_d"], offset=data["offset"])
+    return model, data
+
+
+def _h_lower(
+    model: MLT,
+    x_d: NDArray[np.float64],
+    x_s: NDArray[np.float64],
+    offset: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """``h(a|x) = θ_b[0]·exp(0.5·x_s·γ) + x_d·β + offset`` (θ = [θ_b(5)|β|γ])."""
+    th = model.theta_
+    return np.asarray(
+        th[0] * np.exp(0.5 * x_s[:, 0] * th[-1]) + x_d[:, 0] * th[5] + offset
+    )
+
+
+def _binding_rows(model: MLT, data: dict[str, NDArray[np.float64]]) -> list[int]:
+    """The two training rows with ``h(a|x_i) = 0`` (active support rows)."""
+    h_a = _h_lower(model, data["x_d"], data["x_s"], data["offset"])
+    i, j = (int(k) for k in np.argsort(h_a)[:2])
+    assert abs(h_a[i]) < 1e-6 and abs(h_a[j]) < 1e-6
+    assert data["x_s"][i, 0] != data["x_s"][j, 0]
+    return [i, j]
+
+
+def _midpoint(
+    model: MLT, data: dict[str, NDArray[np.float64]]
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Midpoint ``(x_d, x_s, offset)`` of the two binding training rows."""
+    rows = _binding_rows(model, data)
+
+    def mid(a: NDArray[np.float64]) -> NDArray[np.float64]:
+        return np.asarray(a[rows].mean(axis=0, keepdims=True), dtype=np.float64)
+
+    return mid(data["x_d"]), mid(data["x_s"]), mid(data["offset"])
+
+
+class TestScaledInsideHull:
+    """ADR 0005 Consequences: scaled ``h(a|x)`` can dip below 0 inside the hull."""
+
+    def test_midpoint_is_inside_training_hull(self, scaled_fit: ScaledFit) -> None:
+        model, data = scaled_fit
+        x_d, x_s, _ = _midpoint(model, data)
+        hull = Delaunay(np.column_stack([data["x_d"][:, 0], data["x_s"][:, 0]]))
+        assert hull.find_simplex(np.array([[x_d[0, 0], x_s[0, 0]]]))[0] >= 0
+
+    def test_h_lower_is_negative_by_convexity(self, scaled_fit: ScaledFit) -> None:
+        """``h(a|x_mid) = θ_b[0]·[f(x̄_s) − (f_i + f_j)/2] < 0`` (Jensen)."""
+        model, data = scaled_fit
+        x_d, x_s, off = _midpoint(model, data)
+        h_mid = _h_lower(model, x_d, x_s, off)[0]
+        assert model.theta_[0] > 0.0 and model.gamma_[0] != 0.0
+        i, j = _binding_rows(model, data)
+        f = np.exp(0.5 * data["x_s"][[i, j], 0] * model.gamma_[0])
+        jensen = model.theta_[0] * (
+            np.exp(0.5 * x_s[0, 0] * model.gamma_[0]) - f.mean()
+        )
+        # The binding rows have h(a|x) = 0, so h(a|x_mid) is the Jensen gap.
+        np.testing.assert_allclose(h_mid, jensen, atol=1e-6)
+        assert h_mid < -1e-4
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            trafo = model.predict(
+                np.zeros(1), X_new=x_d, what="trafo", offset_new=off, X_scale_new=x_s
+            )
+        np.testing.assert_allclose(trafo, [h_mid], rtol=1e-10)
+
+    @pytest.mark.parametrize("what", ["distribution", "trafo", "quantile", "density"])
+    def test_inside_hull_warns(self, scaled_fit: ScaledFit, what: str) -> None:
+        model, data = scaled_fit
+        x_d, x_s, off = _midpoint(model, data)
+        # Row 0: a training row (silent); row 1: the in-hull midpoint.
+        X_new = np.vstack([data["x_d"][:1], x_d])
+        Xs_new = np.vstack([data["x_s"][:1], x_s])
+        off_new = np.concatenate([data["offset"][:1], off])
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.predict(
+                _y_for(what, 2),
+                X_new=X_new,
+                what=what,  # type: ignore[arg-type]
+                offset_new=off_new,
+                X_scale_new=Xs_new,
+            )
+        msgs = _support_warnings(rec)
+        assert len(msgs) == 1
+        assert "[1]" in msgs[0]
+
+    def test_training_rows_silent(self, scaled_fit: ScaledFit) -> None:
+        model, data = scaled_fit
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            model.predict(
+                data["y"],
+                X_new=data["x_d"],
+                what="distribution",
+                offset_new=data["offset"],
+                X_scale_new=data["x_s"],
+            )
+        assert _support_warnings(rec) == []
