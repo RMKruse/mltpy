@@ -546,6 +546,7 @@ def _initial_theta(
     lower: float | None = None,
     upper: float | None = None,
     q_s: int = 0,
+    support_floor: float = 0.0,
 ) -> NDArray[np.float64]:
     """Default starting point: linearly spaced basis coefficients and zero
     beta components.
@@ -565,6 +566,13 @@ def _initial_theta(
         is shifted so that side matches but the spacing is unchanged.
     upper : float | None, default=None
         See ``lower``.
+    q_s : int, default=0
+        Number of scaling columns; their γ entries start at zero.
+    support_floor : float, default=0.0
+        Exponential support floor ``c = max(0, max_i(−offset_i))`` from
+        :func:`_support_floor`.  When ``lower`` is not pinned and
+        ``theta_b[0] < c``, the basis coefficients are lifted so
+        ``theta_b[0] = c`` while staying strictly increasing (see Notes).
 
     Returns
     -------
@@ -575,6 +583,23 @@ def _initial_theta(
         provided the starting point also satisfies the boundary equality
         constraints, sparing the augmented-Lagrangian penalty an unnecessary
         initial gradient swing.
+
+    Notes
+    -----
+    The support lift is a parallel shift, ``theta_b + (c − theta_b[0])``,
+    which keeps the spacing of the default start (the same lift as
+    :func:`_perturb_and_project` and the interaction path's column lift).
+    With ``upper`` pinned it is ``linspace(c, max(c, upper), p)`` instead, so
+    the pin holds whenever ``c ≤ upper``; for ``c > upper`` no feasible
+    increasing start exists and the start is flat at ``c``.
+
+    A lift by ``np.maximum(theta_b, c)`` would set the leading coefficients
+    equal.  With order ``M = p − 1`` and ``ỹ = (y − a)/(b − a)``,
+    ``h'(y) = M/(b − a) · Σ_{k<M} Δθ_k B_{k,M−1}(ỹ)``; zero leading
+    ``Δθ_k`` make it vanish to high order at the lower support end, so
+    ``∂ log h'(y_i)/∂θ_b`` is huge for small ``y_i`` (‖∇ℓ‖ ~8e7 on the #115
+    fixture against ~5e2 here); SLSQP's first quasi-Newton step, taken with
+    ``B = I``, then lands far outside the useful region (issue #165).
     """
     if lower is not None and upper is not None:
         theta_b = np.linspace(float(lower), float(upper), n_params)
@@ -584,6 +609,13 @@ def _initial_theta(
         theta_b = np.linspace(0.0, 1.0, n_params) + (float(upper) - 1.0)
     else:
         theta_b = np.linspace(0.0, 1.0, n_params)
+    if lower is None and theta_b[0] < support_floor:
+        if upper is None:
+            theta_b = theta_b + (support_floor - theta_b[0])
+        else:
+            theta_b = np.linspace(
+                support_floor, max(support_floor, float(upper)), n_params
+            )
     parts: list[NDArray[np.float64]] = [theta_b]
     if X is not None:
         parts.append(np.zeros(X.shape[1]))
@@ -1021,16 +1053,19 @@ def optimize(
     else:
         rng = np.random.default_rng(config.random_state)
 
-    theta_init = _initial_theta(
-        n_params, X, lower=config.lower, upper=config.upper, q_s=q_s
-    )
     # Exponential support rows read θ_b[0] + x_i·β ≥ −offset_i (issue #160).
     # At the default β = 0 they all hold once θ_b[0] ≥ c = max(0,
-    # max_i(−offset_i)); lift the start there (np.maximum keeps it monotone
-    # and leaves an upper pin intact) unless θ_b[0] is pinned by ``lower``.
+    # max_i(−offset_i)); the start is lifted there in parallel, keeping θ_b
+    # strictly increasing (issue #165), unless θ_b[0] is pinned by ``lower``.
     support_floor = _support_floor(nonneg_lower, offset)
-    if support_floor > 0.0 and config.lower is None:
-        theta_init[:n_params] = np.maximum(theta_init[:n_params], support_floor)
+    theta_init = _initial_theta(
+        n_params,
+        X,
+        lower=config.lower,
+        upper=config.upper,
+        q_s=q_s,
+        support_floor=support_floor,
+    )
 
     if config.solver == "auglag":
         return _optimize_auglag(

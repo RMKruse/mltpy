@@ -126,6 +126,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `base_distribution="exponential"` with an offset on the shift path:
+  `optimize()` lifted the start to the support floor `c = max(0,
+  max_i(−offset_i))` with `np.maximum(θ_b, c)`, which flattened the leading
+  Bernstein coefficients. Then `h'` vanished at the lower support end and
+  ‖∇ℓ‖ was ~8e7 at the start, against ~5e2 at the parallel lift. On the #115
+  fixture, SLSQP's first step overflowed `exp(0.5·x_s·γ)` (numpy
+  `RuntimeWarning`; no fit with `max_restarts=0`). Unscaled, both SLSQP and
+  trust-constr reached their iteration limits. The start now lifts in
+  parallel (`_initial_theta(..., support_floor=c)`), as the restarts already
+  did, keeping an `upper` pin. Every solver converges on its first attempt.
+  SLSQP's θ now lands 3.5e-6 from the reference instead of 3e-5, and its test
+  tolerance tightens from 1e-4 to 1e-5. Fits without an offset, or with
+  `offset ≥ 0`, are unchanged. (#165)
 - `base_distribution="exponential"`: a both-finite interval row whose lower
   endpoint lies below the support (`h(l|x) < 0`) now scores R's `pexp` value.
   It is `log F(h(u|x))`, or `−inf` once `h(u|x) ≤ 0`, matching mlt's

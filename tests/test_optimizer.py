@@ -184,6 +184,90 @@ class TestInitialTheta:
         np.testing.assert_allclose(theta, np.linspace(0, 1, 5))
 
 
+class TestInitialThetaSupportFloor:
+    """Exponential support floor ``c`` lifts θ_b without flattening it (#165).
+
+    The lift used to be ``np.maximum(θ_b, c)``, which for ``c`` above the
+    first spacing makes the leading coefficients equal: h' then vanishes to
+    high order at the lower support end, ∂log h'/∂θ_b is ~8e7 at the start,
+    and SLSQP's first quasi-Newton step (B = I) leaves for overflow.
+    """
+
+    @pytest.mark.parametrize("floor", [0.1, 0.743, 1.0, 2.0, 25.0])
+    def test_lift_is_parallel(self, floor: float) -> None:
+        theta = _initial_theta(5, None, support_floor=floor)
+        np.testing.assert_allclose(theta, np.linspace(0.0, 1.0, 5) + floor)
+        assert np.all(np.diff(theta) > 0.0)
+
+    @pytest.mark.parametrize("floor", [0.0, -1.0])
+    def test_no_lift_at_or_below_start(self, floor: float) -> None:
+        np.testing.assert_array_equal(
+            _initial_theta(5, None, support_floor=floor), np.linspace(0.0, 1.0, 5)
+        )
+
+    def test_covariate_and_scale_blocks_stay_zero(self) -> None:
+        theta = _initial_theta(4, np.ones((10, 2)), q_s=1, support_floor=0.5)
+        np.testing.assert_allclose(theta[:4], np.linspace(0.0, 1.0, 4) + 0.5)
+        np.testing.assert_array_equal(theta[4:], 0.0)
+
+    def test_upper_pin_kept(self) -> None:
+        """θ_b spans [c, upper]: the pin holds and θ_b stays increasing."""
+        theta = _initial_theta(5, None, upper=1.5, support_floor=0.74)
+        np.testing.assert_allclose(theta, np.linspace(0.74, 1.5, 5))
+        assert theta[-1] == 1.5
+        assert np.all(np.diff(theta) > 0.0)
+
+    def test_upper_pin_already_above_floor_unchanged(self) -> None:
+        np.testing.assert_array_equal(
+            _initial_theta(5, None, upper=3.0, support_floor=1.5),
+            _initial_theta(5, None, upper=3.0),
+        )
+
+    @pytest.mark.parametrize("floor", [1.5, 2.0])
+    def test_upper_pin_at_or_below_floor_is_flat(self, floor: float) -> None:
+        """No increasing θ_b has θ_b[0] ≥ c ≥ upper; the start is flat at c."""
+        theta = _initial_theta(5, None, upper=1.5, support_floor=floor)
+        np.testing.assert_array_equal(theta, np.full(5, floor))
+
+    @pytest.mark.parametrize("upper", [None, 3.0])
+    def test_lower_pin_not_lifted(self, upper: float | None) -> None:
+        """A pinned θ_b[0] is the caller's choice; the floor does not move it."""
+        np.testing.assert_array_equal(
+            _initial_theta(5, None, lower=0.2, upper=upper, support_floor=0.9),
+            _initial_theta(5, None, lower=0.2, upper=upper),
+        )
+
+    def test_single_coefficient(self) -> None:
+        np.testing.assert_array_equal(_initial_theta(1, None, support_floor=0.7), [0.7])
+
+    @pytest.mark.parametrize("solver", ["auglag", "slsqp", "trust-constr"])
+    def test_optimize_passes_parallel_lifted_start(
+        self, solver: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``optimize()`` hands every shift solver the parallel-lifted start."""
+        import mltpy.optimizer as optimizer_module
+
+        seen: dict[str, np.ndarray] = {}
+
+        def capture(**kwargs: object) -> None:
+            seen["theta_init"] = np.array(kwargs["theta_init"])
+
+        target = "_optimize_auglag" if solver == "auglag" else "_optimize_scipy"
+        monkeypatch.setattr(optimizer_module, target, capture)
+        rng = np.random.default_rng(0)
+        optimize(
+            make_basis(),
+            rng.uniform(0.05, 0.95, 40),
+            rng.uniform(0.0, 1.0, (40, 1)),
+            base_distribution="exponential",
+            offset=np.linspace(-2.0, 1.0, 40),
+            config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
+        )
+        np.testing.assert_allclose(
+            seen["theta_init"], np.r_[np.linspace(0.0, 1.0, 4) + 2.0, 0.0]
+        )
+
+
 class TestPerturbAndProject:
     def test_output_is_feasible(self):
         rng = np.random.default_rng(42)

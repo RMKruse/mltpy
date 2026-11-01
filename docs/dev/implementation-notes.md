@@ -222,10 +222,15 @@ The rule is nonlinear in γ: `θ_b[0]·exp(0.5·x_s,i·γ) + x_d,i·β + offset_
   rows natively: an SLSQP `ineq` dict, or a trust-constr
   `NonlinearConstraint` with `jac=J` and the closed-form
   `hess=ScaledSupportConstraint.hessian`. The BFGS default for the constraint
-  Hessian stalled and warned `delta_grad == 0.0`. SLSQP's θ stops about 3e-5
-  relative short along the flat `θ_b[1:]` direction, so tests compare it at
-  1e-4. Its first attempt from the default start overflows `exp(0.5·x_s·γ)`
-  and is recovered by a restart, as for the unscaled exponential shift fit.
+  Hessian stalled and warned `delta_grad == 0.0`. SLSQP's θ stops about
+  3.5e-6 relative short along the flat `θ_b[1:]` direction, so tests compare
+  it at 1e-5.
+- **Start (#165):** `_initial_theta(..., support_floor=c)` lifts `θ_b` in
+  parallel to `θ_b[0] = c = max(0, max_i(−offset_i))`. The old
+  `np.maximum(θ_b, c)` flattened the leading coefficients, so `h'` vanished
+  at `a` and ‖∇ℓ‖ was ~8e7. SLSQP's first step then overflowed
+  `exp(0.5·x_s·γ)`, and unscaled SLSQP and trust-constr reached their
+  iteration limits. Both scipy solvers now converge on their first attempt.
 - **R parity:** R `mlt` has no support rule, so the parity fixture
   `mlt_exponential_scaling_shift_*` is an explicit-constraint `alabama::auglag`
   reference.

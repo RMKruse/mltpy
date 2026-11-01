@@ -812,12 +812,13 @@ _SCIPY_SOLVERS = ("slsqp", "trust-constr")
 # θ tolerances against the reference.  logLik is held to CLAUDE.md's
 # rtol=1e-6 by every solver, and auglag and trust-constr (with the analytic
 # constraint Hessian) meet rtol=1e-6, atol=1e-10 on θ too.  SLSQP stops on
-# its line search ~3e-5 relative short along the flat y-shape direction
-# θ_b[1:] (logLik within 5e-8; a tighter ``tol`` does not move it), the same
-# behaviour and tolerance as tests/test_exponential_scaling_no_shift.py.
+# its line search ~3.5e-6 relative short along the flat y-shape direction
+# θ_b[1:] (logLik within 5e-8).  Before #165 it started from a flattened θ_b,
+# failed its first attempt and ended ~3e-5 short from a restart, which needed
+# 1e-4 here (as tests/test_exponential_scaling_no_shift.py still uses).
 _THETA_TOL: dict[str, dict[str, float]] = {
     "auglag": {"rtol": 1e-6, "atol": 1e-10},
-    "slsqp": {"rtol": 1e-4, "atol": 1e-4},
+    "slsqp": {"rtol": 1e-5, "atol": 1e-5},
     "trust-constr": {"rtol": 1e-6, "atol": 1e-10},
 }
 
@@ -1006,6 +1007,50 @@ class TestSolverDispatch:
         assert model.result_.n_restarts == 0
         np.testing.assert_allclose(model.theta_, ref["theta"], rtol=1e-6, atol=1e-10)
 
+    @pytest.mark.parametrize("scaled", [True, False])
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_first_attempt_converges_warning_free(
+        self, ref: dict[str, NDArray[np.float64]], solver: str, scaled: bool
+    ) -> None:
+        """Both scipy solvers converge from the default start (issue #165).
+
+        The support floor ``c = max(−offset) ≈ 0.74`` used to flatten the
+        start to ``θ_b = [c, c, c, 0.75, 1]``: h' vanished to second order at
+        the lower end, ‖∇ℓ‖ was ~8e7, and SLSQP's first step overflowed
+        ``exp(0.5·x_s·γ)``.  Unscaled, both solvers ran out of iterations.
+        The parallel lift keeps ‖∇ℓ‖ ~5e2, as on the other links.
+        """
+        sup = ref["support"]
+        basis = BernsteinBasis(order=_ORDER, support=(float(sup[0]), float(sup[1])))
+        x_s = ref["x_s"] if scaled else None
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            res = optimize(
+                basis,
+                ref["y"],
+                ref["x_d"],
+                base_distribution="exponential",
+                offset=ref["offset"],
+                scaling=x_s,
+                config=OptimizerConfig(random_state=0, solver=solver, max_restarts=0),  # type: ignore[arg-type]
+            )
+        assert res.converged
+        assert res.n_restarts == 0
+        if scaled:
+            expected = float(ref["ll"][0])
+        else:
+            # No R fixture for the unscaled fit; auglag is the reference
+            # solver (test_fixed_gamma_zero_equals_unscaled_fit uses the same).
+            expected = optimize(
+                basis,
+                ref["y"],
+                ref["x_d"],
+                base_distribution="exponential",
+                offset=ref["offset"],
+                config=OptimizerConfig(random_state=0),
+            ).log_likelihood
+        np.testing.assert_allclose(res.log_likelihood, expected, rtol=1e-6, atol=1e-10)
+
     @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
     def test_restarts_stay_feasible(
         self, ref: dict[str, NDArray[np.float64]], solver: str
@@ -1047,12 +1092,23 @@ class TestComposition:
     def test_fixed_beta_at_optimum_reproduces_fit(
         self, ref: dict[str, NDArray[np.float64]]
     ) -> None:
-        """Pinning β at R's value is an equality row next to the block."""
+        """Pinning β at R's value is an equality row next to the block.
+
+        The fit stops at auglag's KKT floor (residual ≈ 1.5e-5, ADR 0004) on
+        the flat ``θ_b[1:]`` direction, and with two active support rows the
+        Newton-CG polish does not run.  logLik is held to CLAUDE.md's
+        tolerance (measured 1.4e-7 short); θ lands ≈ 9e-6 relative off R's.
+        Stopping closer depended on the start: the flattened pre-#165 start
+        happened to stop 2e-7 away.
+        """
         beta = float(ref["theta"][_BETA])
         model = _model(ref, fixed_params={_BETA: beta})
         model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
         assert model.theta_[_BETA] == pytest.approx(beta, abs=1e-8)
-        np.testing.assert_allclose(model.theta_, ref["theta"], rtol=1e-6, atol=1e-10)
+        np.testing.assert_allclose(
+            model.result_.log_likelihood, ref["ll"][0], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(model.theta_, ref["theta"], rtol=5e-5, atol=1e-10)
         assert model.result_.constraint_C_eq is not None
 
     def test_fixed_gamma_zero_equals_unscaled_fit(

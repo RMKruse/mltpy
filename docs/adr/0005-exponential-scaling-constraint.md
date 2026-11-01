@@ -341,7 +341,9 @@ right-hand side next to the rows, and `build_constraint_matrices` /
 dict returns `S θ − b`, and trust-constr uses `lb = b`. The `fixed_params`
 reductions carry the non-zero right-hand side through unchanged. The start
 point and every perturb-and-project restart lift `θ_b[0]` to
-`max(0, max_i(−offset_i))`, which makes every row feasible at `β = 0`. The
+`max(0, max_i(−offset_i))`, which makes every row feasible at `β = 0`
+*(#165: the start lifts in parallel, as the restarts do, rather than by
+`np.maximum`)*. The
 auglag Newton-CG polish now checks `A_ineq θ ≥ b_ineq` (support rows
 included) instead of monotonicity alone. With `offset=None` the right-hand
 side is zero and the lift is the old `θ_b[0] ≥ 0`, so existing fits are
@@ -799,7 +801,8 @@ This is not new with the nonlinear block. The unscaled exponential
 shift + offset fit fails its first SLSQP and trust-constr attempt on the same
 data as well (iteration limit). Scaled normal, logistic and minimum-extreme-
 value fits converge first time. Silencing the overflow means touching every
-scaled likelihood kernel, so it is left to a follow-up.
+scaled likelihood kernel, so it is left to a follow-up. *(#165: resolved.
+The cause was a flattened start, not the overflow; see the #165 amendment.)*
 
 ---
 
@@ -933,6 +936,90 @@ follow-up.
 `TestNoSpuriousRuntimeWarnings::test_outside_support_interval_is_finite_and_quiet`
 now checks the `pexp` value. It also checks that ℓ is below its value at the
 feasible `θ_b[0] = 0`.
+
+---
+
+## Amendment (2026-11-01, [#165](https://github.com/RMKruse/mltpy/issues/165)) — The Support-Floor Start Was Flat
+
+**Problem.** The #116 amendment left one gap open ("Not changed: SLSQP's
+first attempt"). On the #115 fixture (order 4, offsets in [−0.743, 0.729]),
+four first attempts failed:
+
+- **SLSQP, scaled:** overflowed `exp(0.5·x_s·γ)` and ended at an infeasible
+  `θ`.
+- **SLSQP, unscaled:** reached its iteration limit at logLik ≈ −3657.
+- **trust-constr, unscaled:** reached its iteration limit at logLik ≈ −325.
+- **trust-constr, scaled:** converged, but needed 111 iterations.
+
+**Cause: the start, not the link.** `optimize()` lifted the shift-path
+start to the #160 support floor `c = max(0, max_i(−offset_i))` with
+`np.maximum(θ_b, c)`. For `c` above the first spacing of
+`linspace(0, 1, p)`, this sets the leading coefficients equal. The fixture's
+start was `θ_b = [0.743, 0.743, 0.743, 0.75, 1]`. With order `M` and
+`ỹ = (y − a)/(b − a)`,
+
+    h'(y) = M/(b − a) · Σ_{k<M} Δθ_k B_{k,M−1}(ỹ),
+
+and `Δθ_0 = Δθ_1 = 0` leave `h'(y) = O(ỹ²)` at the lower end. The
+`log h'(y_i)` terms of the smallest observations (`y_min = 0.003`) then
+dominate the gradient: ‖∇ℓ‖ was 7.7·10⁷ at that start, against 486 at
+`linspace(0, 1, p) + c`. The normal, logistic and minimum-extreme-value
+starts have no floor, so their ‖∇ℓ‖ is ≈ 430. SLSQP's first quasi-Newton
+step uses `B = I`, so it is roughly the raw gradient. That step sent `γ`
+far enough to overflow `f = exp(0.5·x_s·γ)`. The smooth extension
+`log f(h) = −h` plays no part, because every row has `h ≥ 0` at the start.
+The restart path (`_perturb_and_project`) and the interaction column lift
+already lifted in parallel. Only the default shift start flattened `θ_b`.
+
+**Decision.** `_initial_theta(..., support_floor=c)` lifts `θ_b` so that
+`θ_b[0] = c` without changing its spacing:
+
+- **No pins:** a parallel shift, `θ_b + (c − θ_b[0])`.
+- **`upper` pinned:** `linspace(c, max(c, upper), p)`, so the pin holds
+  whenever `c ≤ upper`. For `c > upper` no increasing start is feasible, and
+  the start is flat at `c`, as before.
+- **`lower` pinned, or `θ_b[0] ≥ c` already:** unchanged.
+
+`optimize()` passes the floor in place of its `np.maximum` line. The start
+stays feasible for every support row at `β = 0`, `γ = 0`.
+
+**The issue's other two options are not taken.**
+
+- **Silencing the overflow at the source:** not needed, since the trial
+  point that overflowed is no longer reached. An overflowed `f` still gives a
+  non-finite ℓ and an `InfeasibleParameterError`, and #163's "overflow at a
+  finite ℓ still warns" stands.
+- **Rescaling the SLSQP problem:** not needed. With the parallel start, the
+  gradient scale matches the other links.
+
+**Effect** (`max_restarts = 0`, #115 fixture):
+
+| fit | before | after |
+|---|---|---|
+| SLSQP, scaled | infeasible, overflow warnings | converged, 15 iterations, logLik −144.805007 |
+| SLSQP, unscaled | iteration limit, −3656.54 | converged, 14 iterations, −150.507881 |
+| trust-constr, scaled | converged, 111 iterations | converged, 58 iterations |
+| trust-constr, unscaled | iteration limit, −324.74 | converged, 56 iterations |
+
+With the default restarts:
+
+- **SLSQP's θ** now ends ≈ 3.5·10⁻⁶ relative from the reference, down from
+  3·10⁻⁵ after a restart. Its test tolerance tightens from `1e-4` to `1e-5`.
+- **auglag shares the start.** Its R-parity results are unchanged within
+  `rtol = 1e-6`. The `β`-pinned fit (an equality row next to the block, two
+  active support rows, so no Newton-CG polish) stops at the ADR 0004 KKT
+  floor ≈ 1.5·10⁻⁵ either way. From the old start it happened to land
+  2·10⁻⁷ from R's `θ`; from the new one it lands 9·10⁻⁶ away, with logLik
+  1.4·10⁻⁷ short. That test now holds logLik at `rtol = 1e-6` and `θ` at
+  `rtol = 5e-5`.
+- **#160's `offset = −25` case:** auglag no longer needs a restart, and
+  SLSQP needs one instead of two.
+
+**Tests.** `TestInitialThetaSupportFloor` in `tests/test_optimizer.py`
+covers the lift rules and checks that `optimize()` hands every solver the
+lifted start. `test_first_attempt_converges_warning_free` in
+`tests/test_exponential_scaling_shift.py` fits both scipy solvers, scaled and
+unscaled, with `max_restarts = 0` and warnings raised as errors.
 
 ---
 
