@@ -49,6 +49,7 @@ observations. The methodology is described in Hothorn, Kneib & Bühlmann
    adr/0002-scaling-terms
    adr/0003-scaling-with-interaction
    adr/0004-auglag-stall-acceptance
+   adr/0005-exponential-scaling-constraint
 
 .. toctree::
    :maxdepth: 1

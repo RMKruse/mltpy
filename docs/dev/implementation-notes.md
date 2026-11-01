@@ -206,8 +206,14 @@ The rule is nonlinear in γ: `θ_b[0]·exp(0.5·x_s,i·γ) + x_d,i·β + offset_
   `δ = (θ_b[0], Δθ_b, β, γ)`, so `D θ_b ≥ 0` is a hard box in every inner solve.
   Without this, censored rows (which have no `log h'` barrier) let the NLL fall
   exponentially in γ once monotonicity is violated.
-- **Other solvers:** SLSQP and trust-constr raise `NotImplementedError` in
-  `optimize()` (#116).
+- **Other solvers (#116):** `build_constraints(..., X_scale=)` passes the same
+  rows natively: an SLSQP `ineq` dict, or a trust-constr
+  `NonlinearConstraint` with `jac=J` and the closed-form
+  `hess=ScaledSupportConstraint.hessian`. The BFGS default for the constraint
+  Hessian stalled and warned `delta_grad == 0.0`. SLSQP's θ stops about 3e-5
+  relative short along the flat `θ_b[1:]` direction, so tests compare it at
+  1e-4. Its first attempt from the default start overflows `exp(0.5·x_s·γ)`
+  and is recovered by a restart, as for the unscaled exponential shift fit.
 - **R parity:** R `mlt` has no support rule, so the parity fixture
   `mlt_exponential_scaling_shift_*` is an explicit-constraint `alabama::auglag`
   reference.

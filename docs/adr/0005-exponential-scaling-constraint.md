@@ -212,7 +212,8 @@ runs exactly as today.
 **trust-constr.** The block is passed natively as
 `NonlinearConstraint(g, 0, ∞, jac=J)` next to the linear rows. Whether to pass
 the closed-form constraint Hessian above or a quasi-Newton approximation is
-decided in the slice that lands trust-constr support.
+decided in the slice that lands trust-constr support. *(#116: the closed-form
+Hessian; the quasi-Newton default stalled. See the #116 amendment.)*
 
 **Scope.** Shift basis only, all four censoring types. `g` does not depend on
 `y`, so censoring changes nothing about the constraint.
@@ -482,7 +483,8 @@ the default auglag solver whenever it does not collapse (a shift block,
   #114 linear collapse and box.
 - **Guards.** `optimize()` rejects the case only for SLSQP / trust-constr
   ([#116](https://github.com/RMKruse/mltpy/issues/116)). `fixed_params`
-  equality rows compose with the block unchanged.
+  equality rows compose with the block unchanged. *(#116: no longer
+  rejected; see the #116 amendment.)*
 - **Reporting.** `constraint_A_ineq` holds the support rows as their Jacobian
   `J(θ̂)`, aligned with `mu_ineq`. The active-set covariance
   (`vcov(regularize='active')`) uses those linearised normals with the NLL
@@ -740,6 +742,65 @@ needs a design that reaches it, and a guard for unbounded likelihoods (R
 reports convergence on the flipped data as well). Both would be new
 decisions.
 
+## Amendment (2026-11-01, [#116](https://github.com/RMKruse/mltpy/issues/116)) — SLSQP and trust-constr
+
+**Implemented.** The scaled support rows of Decision 2 (shift block or
+non-zero offset) now fit on all three solvers. `build_constraints(...,
+X_scale=)` builds the same `ScaledSupportConstraint` as the auglag builder,
+through one shared split (`_split_support`). It passes the block natively, as
+Decision 3 planned, in place of the linear support rows (after monotonicity,
+before the `lower` / `upper` pins):
+
+- **SLSQP:** `{"type": "ineq", "fun": g, "jac": J}`.
+- **trust-constr:** `NonlinearConstraint(g, 0, ∞, jac=J, hess=H)`, where
+  `H(θ, v) = Σ_i v_i ∇²g_i(θ)` is `ScaledSupportConstraint.hessian`. Its only
+  nonzero blocks are `∂²/∂θ_b[0]∂γ = 0.5 · Σ v_i f_i x_s,i` and
+  `∂²/∂γ∂γᵀ = 0.25 · θ_b[0] · Σ v_i f_i x_s,i x_s,iᵀ`. It is checked
+  against central differences of `vᵀJ`.
+- **`fixed_params`:** the issue-#86 reduction evaluates `g`, `J` and `H` on
+  the reconstructed full `θ` and keeps the free columns (and the free block of
+  `H`).
+- **Guards:** `optimize()` no longer rejects the case for any solver.
+
+**Decision 3's open question: closed-form constraint Hessian.** scipy's
+default for a `NonlinearConstraint` is a BFGS approximation, and that default
+failed on the fixture. `g` is linear in `θ_b[1:]` and `β`, so many steps leave
+`J` unchanged, and BFGS warned `delta_grad == 0.0`. From the default start,
+trust-constr reached its 1000-iteration limit twice at logLik ≈ −239 (the
+optimum is −144.805) and converged only on the third restart. With the
+closed-form `H` it converges on the first attempt in 111 iterations, with no
+warning. The objective keeps trust-constr's BFGS as before.
+
+**Validation** (`tests/test_exponential_scaling_shift.py`, same fixture as
+#115):
+
+- **logLik:** every solver matches the `alabama::auglag` reference at
+  `rtol = 1e-6, atol = 1e-10`.
+- **θ, trust-constr:** within `rtol = 1e-6, atol = 1e-10` of the reference
+  (measured ≈ 2·10⁻⁸ relative).
+- **θ, SLSQP:** ends ≈ 3·10⁻⁵ relative short along the flat `θ_b[1:]`
+  direction. Its logLik is within 5·10⁻⁸, and its support rows are within
+  −4·10⁻¹⁰ of the boundary. A tighter `tol` does not move it; SLSQP then stops
+  on "Positive directional derivative for linesearch". So SLSQP's θ is
+  compared at `rtol = atol = 1e-4`, the tolerance and reason the #114 tests
+  already use.
+- **Coverage:** the censored, scale-only-offset, `fixed_params` and restart
+  cases are checked on both scipy solvers.
+
+**Not changed: SLSQP's first attempt.** From the default start, SLSQP's first
+quasi-Newton step sends `γ` far enough that `exp(0.5 · x_s · γ)` overflows.
+That attempt ends at an infeasible `θ` and is discarded, and the first
+restart converges. Two things are visible to users:
+
+- numpy's `overflow` RuntimeWarning from that trial point;
+- with `max_restarts = 0`, no SLSQP fit of this case at all.
+
+This is not new with the nonlinear block. The unscaled exponential
+shift + offset fit fails its first SLSQP and trust-constr attempt on the same
+data as well (iteration limit). Scaled normal, logistic and minimum-extreme-
+value fits converge first time. Silencing the overflow means touching every
+scaled likelihood kernel, so it is left to a follow-up.
+
 ---
 
 ## Consequences
@@ -755,7 +816,8 @@ decisions.
   path's remaining rejection, for a shift block or a non-zero offset, is a
   `NotImplementedError` in `optimize()`, see the #114 amendment.  #115: that
   rejection now fires only for SLSQP / trust-constr (#116); auglag fits the
-  nonlinear block, see the #115 amendment.)*
+  nonlinear block, see the #115 amendment.  #116: the rejection is gone;
+  every solver fits the block, see the #116 amendment.)*
 - **Unscaled exponential path:** no code change. Decision 1 ratifies the
   existing `nonneg_lower` rows. The unscaled `InteractionBasis` path gained
   the equivalent rows in [#158](https://github.com/RMKruse/mltpy/issues/158)

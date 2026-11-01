@@ -11,9 +11,9 @@ Decision 2, simplification 1).  SLSQP and trust-constr fit it as a linear
 row; auglag solves in increment coordinates where ``θ_b[0] ≥ 0`` and
 ``D θ_b ≥ 0`` are hard bounds of every inner solve (issue #161; ADR 0005
 #114 / #161 amendments).  A shift block (or a non-zero offset) makes the row
-non-linear in ``γ``: auglag fits it through its nonlinear inequality block
-(issue #115, ``tests/test_exponential_scaling_shift.py``), while SLSQP and
-trust-constr still raise ``NotImplementedError`` (issue #116).
+non-linear in ``γ``: every solver fits it through the nonlinear support block
+(auglag issue #115, SLSQP / trust-constr issue #116;
+``tests/test_exponential_scaling_shift.py``).
 
 R reference (``reference/mlt_exponential_scaling_*.txt``, generated in
 ``reference/generate_reference.R``): ``mlt(ctm(Bernstein, scaling = ~x_s,
@@ -147,11 +147,13 @@ def _h_grid(
 
 
 class TestGuards:
-    """``MLT.__init__`` and ``optimize()`` reject only the non-linear cases.
+    """``MLT.__init__`` accepts the scale-only combination on the shift basis.
 
-    Since issue #115 the default auglag solver fits the non-linear cases (a
-    shift block or a non-zero offset); the rejection tests below therefore
-    run on SLSQP / trust-constr, which still raise (issue #116).
+    The non-linear cases (a shift block or a non-zero offset) were rejected
+    for SLSQP / trust-constr until issue #116; every solver now fits them.
+    The former rejection tests became the "fits" tests below, run on the
+    scipy solvers; R parity for them is in
+    ``tests/test_exponential_scaling_shift.py``.
     """
 
     def test_init_accepts_scale_only(self, ref: dict[str, object]) -> None:
@@ -165,68 +167,77 @@ class TestGuards:
 
     @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
     @pytest.mark.parametrize("q_d", [1, 2])
-    def test_fit_with_shift_block_raises(
+    def test_fit_with_shift_block_fits(
         self, ref: dict[str, object], q_d: int, solver: str
     ) -> None:
+        """Issue #116: the scipy solvers fit a shift block and agree with auglag."""
         y = ref["y"]
         X = np.random.default_rng(q_d).normal(size=(len(y), q_d))  # type: ignore[arg-type]
-        model = MLT(
-            order=_ORDER,
-            support=ref["support"],  # type: ignore[arg-type]
-            base_distribution="exponential",
-            scaling=ref["x_s"],  # type: ignore[arg-type]
-            optimizer_config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
-        )
-        with pytest.raises(NotImplementedError, match="shift") as exc:
-            model.fit(y, X=X)  # type: ignore[arg-type]
-        assert "0005" in str(exc.value)
-        assert "#116" in str(exc.value)
-        assert not model.is_fitted_
-
-    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
-    def test_optimize_with_shift_block_raises(
-        self, ref: dict[str, object], solver: str
-    ) -> None:
-        y = ref["y"]
-        X = np.ones((len(y), 1))  # type: ignore[arg-type]
-        with pytest.raises(NotImplementedError, match="shift"):
-            optimize(
-                BernsteinBasis(order=_ORDER, support=ref["support"]),  # type: ignore[arg-type]
-                y,  # type: ignore[arg-type]
-                X,
+        fits = {}
+        for s in ("auglag", solver):
+            model = MLT(
+                order=_ORDER,
+                support=ref["support"],  # type: ignore[arg-type]
                 base_distribution="exponential",
                 scaling=ref["x_s"],  # type: ignore[arg-type]
-                config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
+                optimizer_config=OptimizerConfig(solver=s, random_state=0),  # type: ignore[arg-type]
             )
+            model.fit(y, X=X)  # type: ignore[arg-type]
+            fits[s] = model
+        model = fits[solver]
+        assert model.is_fitted_
+        theta = model.theta_
+        f = np.exp(0.5 * (ref["x_s"] @ model.gamma_))  # type: ignore[operator]
+        g = theta[0] * f + X @ theta[_P : _P + q_d]
+        assert g.min() >= -_FEAS_TOL
+        assert np.all(np.diff(theta[:_P]) >= -_FEAS_TOL)
+        np.testing.assert_allclose(
+            model.result_.log_likelihood,
+            fits["auglag"].result_.log_likelihood,
+            rtol=_LL_RTOL,
+        )
 
     @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
-    @pytest.mark.parametrize("value", [0.3, -0.3])
-    def test_fit_with_nonzero_offset_raises(
-        self, ref: dict[str, object], value: float, solver: str
+    def test_optimize_with_shift_block_fits(
+        self, ref: dict[str, object], solver: str
     ) -> None:
-        """``θ_b[0]·f_i ≥ −offset_i`` is non-linear in γ for a non-zero offset."""
+        """``optimize()`` no longer rejects the scipy solvers (issue #116)."""
         y = ref["y"]
-        offset = np.full(len(y), value)  # type: ignore[arg-type]
-        model = MLT(
-            order=_ORDER,
-            support=ref["support"],  # type: ignore[arg-type]
+        X = np.random.default_rng(3).normal(size=(len(y), 1))  # type: ignore[arg-type]
+        res = optimize(
+            BernsteinBasis(order=_ORDER, support=ref["support"]),  # type: ignore[arg-type]
+            y,  # type: ignore[arg-type]
+            X,
             base_distribution="exponential",
             scaling=ref["x_s"],  # type: ignore[arg-type]
-            optimizer_config=OptimizerConfig(solver=solver),  # type: ignore[arg-type]
+            config=OptimizerConfig(solver=solver, random_state=0),  # type: ignore[arg-type]
         )
-        with pytest.raises(NotImplementedError, match="offset"):
-            model.fit(y, offset=offset)  # type: ignore[arg-type]
+        f = np.exp(0.5 * (ref["x_s"] @ res.theta[_P + 1 :]))  # type: ignore[operator]
+        assert np.min(res.theta[0] * f + X[:, 0] * res.theta[_P]) >= -_FEAS_TOL
+        assert np.isfinite(res.log_likelihood)
 
+    @pytest.mark.parametrize("solver", _SOLVERS)
     @pytest.mark.parametrize("value", [0.3, -0.3])
-    def test_auglag_fits_nonzero_offset(
-        self, ref: dict[str, object], value: float
+    def test_fits_nonzero_offset(
+        self, ref: dict[str, object], value: float, solver: str
     ) -> None:
-        """auglag fits the non-linear rows (issue #115): h(a|x_i) ≥ 0."""
+        """``θ_b[0]·f_i ≥ −offset_i`` is non-linear in γ for a non-zero offset.
+
+        auglag fits it since issue #115; SLSQP / trust-constr raised
+        ``NotImplementedError`` until issue #116 and now fit it too.
+        """
         y = ref["y"]
         offset = np.full(len(y), value)  # type: ignore[arg-type]
-        model = _fit(ref, offset=offset)
+        model = _fit(ref, solver=solver, offset=offset)
         f = np.exp(0.5 * (ref["x_s"] @ model.gamma_))  # type: ignore[operator]
         assert np.min(model.theta_[0] * f + value) >= -_FEAS_TOL
+        if solver != "auglag":
+            auglag = _fit(ref, offset=offset)
+            np.testing.assert_allclose(
+                model.result_.log_likelihood,
+                auglag.result_.log_likelihood,
+                rtol=_LL_RTOL,
+            )
 
     def test_zero_offset_matches_no_offset(
         self, ref: dict[str, object], fitted_auglag: MLT
@@ -323,8 +334,12 @@ class TestConstraintRows:
                 q_s=1,
             )
 
-    def test_nonzero_offset_with_scaling_rejected(self) -> None:
-        with pytest.raises(NotImplementedError, match="offset"):
+    def test_nonzero_offset_with_scaling_needs_x_scale(self) -> None:
+        """Issue #116: the scipy builder carries a non-zero offset as the
+        nonlinear block, which needs the scaling design (formerly a
+        ``NotImplementedError``; covered in ``test_exponential_scaling_shift``).
+        """
+        with pytest.raises(ValueError, match="X_scale"):
             build_constraints(
                 _P,
                 total_params=_P + 1,

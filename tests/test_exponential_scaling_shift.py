@@ -12,8 +12,10 @@ with Jacobian, in the ``[θ_b | β | γ]`` layout,
 ``∂g_i/∂γ = 0.5 · θ_b[0] · f_i · x_s,i`` and zero on ``θ_b[1:]``.
 
 auglag (the default solver) carries the block as a nonlinear inequality next to
-the linear monotonicity rows (ADR 0005 Decision 3).  SLSQP and trust-constr are
-issue #116 and still raise ``NotImplementedError``.
+the linear monotonicity rows (ADR 0005 Decision 3, issue #115).  SLSQP takes the
+same ``(g, J)`` as a ``type='ineq'`` dict and trust-constr as a
+:class:`scipy.optimize.NonlinearConstraint` (issue #116); all three solvers fit
+the same fixture.
 
 R reference (``reference/mlt_exponential_scaling_shift_*.txt``, generated in
 ``reference/generate_reference.R``): R ``mlt`` has no support rule (ADR 0005
@@ -41,6 +43,7 @@ from mltpy.constraints import (
     MonotonicityConstraint,
     ScaledSupportConstraint,
     build_constraint_matrices,
+    build_constraints,
     build_scaled_support_constraint,
 )
 from mltpy.likelihood import negative_log_likelihood
@@ -222,6 +225,54 @@ class TestScaledSupportConstraint:
         with pytest.raises(exc, match=match):
             build_scaled_support_constraint(**args)  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    @pytest.mark.parametrize(("q_d", "q_s"), [(1, 1), (0, 2), (2, 3)])
+    def test_hessian_matches_finite_differences(
+        self, seed: int, q_d: int, q_s: int
+    ) -> None:
+        """``Σ v_i ∇²g_i`` vs central differences of ``vᵀ J(θ)`` (#116)."""
+        p, n = 4, 7
+        X, X_s, off = _design(n, max(q_d, 1), q_s, seed=seed)
+        g = build_scaled_support_constraint(p, X[:, :q_d] if q_d else None, X_s, off)
+        rng = np.random.default_rng(seed + 10)
+        theta = rng.normal(size=g.n_total)
+        v = rng.uniform(0.0, 2.0, size=n)
+        eps = 1e-6
+        fd = np.empty((g.n_total, g.n_total))
+        for j in range(g.n_total):
+            e = np.zeros(g.n_total)
+            e[j] = eps
+            fd[:, j] = (v @ g(theta + e)[1] - v @ g(theta - e)[1]) / (2.0 * eps)
+        hess = g.hessian(theta, v)
+        np.testing.assert_allclose(hess, fd, rtol=1e-6, atol=1e-8)
+        np.testing.assert_array_equal(hess, hess.T)
+
+    def test_hessian_known_values(self) -> None:
+        """One row, q_s = 1: cross term 0.5·f·x_s, γγ term 0.25·θ_b[0]·f·x_s²."""
+        g = build_scaled_support_constraint(
+            2, np.array([[1.0]]), np.array([[2.0]]), np.array([0.5])
+        )
+        # θ = [θ_b (2) | β | γ], γ = 0 → f = 1.
+        hess = g.hessian(np.array([3.0, 4.0, -1.0, 0.0]), np.array([2.0]))
+        expected = np.zeros((4, 4))
+        expected[0, 3] = expected[3, 0] = 2.0 * 0.5 * 2.0
+        expected[3, 3] = 2.0 * 0.25 * 3.0 * 4.0
+        np.testing.assert_array_equal(hess, expected)
+
+    def test_hessian_zero_weights(self) -> None:
+        X, X_s, off = _design(4, 1, 2)
+        g = build_scaled_support_constraint(3, X, X_s, off)
+        hess = g.hessian(np.ones(g.n_total), np.zeros(4))
+        np.testing.assert_array_equal(hess, 0.0)
+
+    def test_hessian_bad_shapes(self) -> None:
+        X, X_s, off = _design(4, 1, 1)
+        g = build_scaled_support_constraint(3, X, X_s, off)
+        with pytest.raises(ValueError, match="theta must have shape"):
+            g.hessian(np.ones(g.n_total + 1), np.ones(4))
+        with pytest.raises(ValueError, match="one weight per support row"):
+            g.hessian(np.ones(g.n_total), np.ones(3))
+
     def test_wrong_theta_length(self) -> None:
         g = build_scaled_support_constraint(3, np.ones((2, 1)), np.ones((2, 1)), None)
         with pytest.raises(ValueError, match="theta"):
@@ -316,6 +367,140 @@ class TestConstraintMatricesSurface:
     def test_default_field_is_none(self) -> None:
         cm = build_constraint_matrices(4)
         assert cm.nonlinear_ineq is None
+
+
+class TestScipyConstraintForms:
+    """``build_constraints(X_scale=…)`` gives the block in scipy's forms (#116)."""
+
+    @staticmethod
+    def _build(
+        solver: str, *, q_d: int = 1, with_offset: bool = True
+    ) -> tuple[list[object], ScaledSupportConstraint, int]:
+        p, q_s, n = 4, 2, 6
+        X, X_s, off = _design(n, max(q_d, 1), q_s, seed=5)
+        x_d = X[:, :q_d] if q_d else None
+        offset = off if with_offset else None
+        total = p + q_d + q_s
+        cons = build_constraints(
+            p,
+            solver=solver,  # type: ignore[call-overload]
+            total_params=total,
+            nonneg_lower=True,
+            X=x_d,
+            offset=offset,
+            q_s=q_s,
+            X_scale=X_s,
+        )
+        return cons, build_scaled_support_constraint(p, x_d, X_s, offset), total
+
+    @pytest.mark.parametrize(("q_d", "with_offset"), [(1, True), (2, False), (0, True)])
+    def test_slsqp_dict(self, q_d: int, with_offset: bool) -> None:
+        cons, g, total = self._build("slsqp", q_d=q_d, with_offset=with_offset)
+        # [monotonicity, support]; the support dict is g itself.
+        assert len(cons) == 2
+        d = cons[1]
+        assert isinstance(d, dict) and d["type"] == "ineq"
+        theta = np.random.default_rng(1).normal(size=total)
+        np.testing.assert_array_equal(d["fun"](theta), g(theta)[0])
+        np.testing.assert_array_equal(d["jac"](theta), g(theta)[1])
+        mono = cons[0]
+        assert isinstance(mono, dict)
+        assert np.asarray(mono["jac"](theta)).shape == (3, total)
+
+    @pytest.mark.parametrize(("q_d", "with_offset"), [(1, True), (2, False), (0, True)])
+    def test_trust_constr_nonlinear_constraint(
+        self, q_d: int, with_offset: bool
+    ) -> None:
+        cons, g, total = self._build("trust-constr", q_d=q_d, with_offset=with_offset)
+        assert len(cons) == 2
+        assert isinstance(cons[0], LinearConstraint)
+        nlc = cons[1]
+        assert isinstance(nlc, NonlinearConstraint)
+        assert np.all(np.asarray(nlc.lb) == 0.0)
+        assert np.all(np.isposinf(np.asarray(nlc.ub)))
+        theta = np.random.default_rng(2).normal(size=total)
+        np.testing.assert_array_equal(nlc.fun(theta), g(theta)[0])
+        np.testing.assert_array_equal(nlc.jac(theta), g(theta)[1])
+        v = np.linspace(0.0, 1.0, g.n_rows)
+        np.testing.assert_array_equal(nlc.hess(theta, v), g.hessian(theta, v))
+
+    def test_gamma_zero_matches_linear_rows(self) -> None:
+        """At γ = 0 the SLSQP block equals the unscaled linear support rows."""
+        p, q_s, n = 4, 1, 5
+        X, X_s, off = _design(n, 1, q_s, seed=9)
+        scaled = build_constraints(
+            p,
+            solver="slsqp",
+            total_params=p + 1 + q_s,
+            nonneg_lower=True,
+            X=X,
+            offset=off,
+            q_s=q_s,
+            X_scale=X_s,
+        )
+        linear = build_constraints(
+            p, solver="slsqp", total_params=p + 1, nonneg_lower=True, X=X, offset=off
+        )
+        theta = np.array([0.3, 0.5, 0.9, 1.2, -0.4])
+        np.testing.assert_allclose(
+            scaled[1]["fun"](np.append(theta, 0.0)),
+            linear[1]["fun"](theta),
+            rtol=0,
+            atol=1e-15,
+        )
+
+    def test_scale_only_zero_offset_stays_linear(self) -> None:
+        """The #114 collapse is unchanged when X_scale is passed."""
+        cons = build_constraints(
+            4,
+            solver="trust-constr",
+            total_params=5,
+            nonneg_lower=True,
+            q_s=1,
+            X_scale=np.ones((3, 1)),
+        )
+        assert all(isinstance(c, LinearConstraint) for c in cons)
+        assert len(cons) == 2
+
+    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
+    def test_missing_x_scale_raises(self, solver: str) -> None:
+        with pytest.raises(ValueError, match="X_scale"):
+            build_constraints(
+                4,
+                solver=solver,  # type: ignore[call-overload]
+                total_params=6,
+                nonneg_lower=True,
+                X=np.ones((3, 1)),
+                q_s=1,
+            )
+
+    def test_x_scale_row_mismatch_raises(self) -> None:
+        with pytest.raises(ValueError, match="same number of rows"):
+            build_constraints(
+                4,
+                solver="slsqp",
+                total_params=6,
+                nonneg_lower=True,
+                X=np.ones((3, 1)),
+                q_s=1,
+                X_scale=np.ones((4, 1)),
+            )
+
+    def test_boundary_rows_follow_support(self) -> None:
+        """``lower`` / ``upper`` pins come after the nonlinear block."""
+        cons = build_constraints(
+            4,
+            1.0,
+            2.0,
+            solver="trust-constr",
+            total_params=6,
+            nonneg_lower=True,
+            X=np.ones((3, 1)),
+            q_s=1,
+            X_scale=np.ones((3, 1)),
+        )
+        assert isinstance(cons[1], NonlinearConstraint)
+        assert isinstance(cons[2], LinearConstraint)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +607,21 @@ def _trust_constr_reference(
     assert support(res.x).min() >= -1e-6
     assert np.all(mono @ res.x >= -1e-6)
     return float(-res.fun)
+
+
+def _censored(
+    ref: dict[str, NDArray[np.float64]], censoring: CensoringType
+) -> CensoredData:
+    """Censor the fixture's ``y``: top 20 % right, bottom 20 % left, or ±20 %."""
+    y = ref["y"]
+    if censoring is CensoringType.RIGHT:
+        c = float(np.quantile(y, 0.8))
+        return CensoredData.right_censored(np.minimum(y, c), y <= c)
+    if censoring is CensoringType.LEFT:
+        c = float(np.quantile(y, 0.2))
+        return CensoredData.left_censored(np.maximum(y, c), y < c)
+    upper = np.minimum(1.25 * y, float(ref["support"][1]))
+    return CensoredData.interval_censored(0.8 * y, upper)
 
 
 @pytest.fixture(scope="module")
@@ -607,26 +807,213 @@ class TestFeasibility:
         assert cdf.min() >= -_FEAS_TOL
 
 
+_SOLVERS = ("auglag", "slsqp", "trust-constr")
+_SCIPY_SOLVERS = ("slsqp", "trust-constr")
+# θ tolerances against the reference.  logLik is held to CLAUDE.md's
+# rtol=1e-6 by every solver, and auglag and trust-constr (with the analytic
+# constraint Hessian) meet rtol=1e-6, atol=1e-10 on θ too.  SLSQP stops on
+# its line search ~3e-5 relative short along the flat y-shape direction
+# θ_b[1:] (logLik within 5e-8; a tighter ``tol`` does not move it), the same
+# behaviour and tolerance as tests/test_exponential_scaling_no_shift.py.
+_THETA_TOL: dict[str, dict[str, float]] = {
+    "auglag": {"rtol": 1e-6, "atol": 1e-10},
+    "slsqp": {"rtol": 1e-4, "atol": 1e-4},
+    "trust-constr": {"rtol": 1e-6, "atol": 1e-10},
+}
+
+
+def _solver(model: MLT) -> str:
+    return str(model.optimizer_config.solver)
+
+
+@pytest.fixture(scope="module", params=_SOLVERS)
+def solver_fitted(
+    request: pytest.FixtureRequest, ref: dict[str, NDArray[np.float64]]
+) -> MLT:
+    """The R fixture fitted on each of the three solvers (issue #116)."""
+    model = _model(ref, solver=request.param)
+    model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
+    return model
+
+
+class TestSolverParity:
+    """auglag, SLSQP and trust-constr fit the shift block identically (#116).
+
+    The scipy solvers get the support rows natively (SLSQP ``type='ineq'``
+    dict, trust-constr ``NonlinearConstraint``), built from the same
+    :class:`ScaledSupportConstraint` auglag uses.  Tolerances are CLAUDE.md's
+    ``rtol=1e-6, atol=1e-10`` against the ``alabama::auglag`` reference.
+    """
+
+    def test_converged(self, solver_fitted: MLT) -> None:
+        assert solver_fitted.result_.converged
+
+    def test_log_likelihood(
+        self, solver_fitted: MLT, ref: dict[str, NDArray[np.float64]]
+    ) -> None:
+        np.testing.assert_allclose(
+            solver_fitted.result_.log_likelihood, ref["ll"][0], rtol=1e-6, atol=1e-10
+        )
+
+    def test_theta(
+        self, solver_fitted: MLT, ref: dict[str, NDArray[np.float64]]
+    ) -> None:
+        np.testing.assert_allclose(
+            solver_fitted.theta_, ref["theta"], **_THETA_TOL[_solver(solver_fitted)]
+        )
+
+    def test_agrees_with_auglag(self, solver_fitted: MLT, fitted: MLT) -> None:
+        np.testing.assert_allclose(
+            solver_fitted.theta_, fitted.theta_, **_THETA_TOL[_solver(solver_fitted)]
+        )
+        np.testing.assert_allclose(
+            solver_fitted.result_.log_likelihood,
+            fitted.result_.log_likelihood,
+            rtol=1e-6,
+            atol=1e-10,
+        )
+
+    def test_support_rows_nonnegative(
+        self, solver_fitted: MLT, ref: dict[str, NDArray[np.float64]]
+    ) -> None:
+        g = _support_values(solver_fitted, ref["x_d"], ref["x_s"], ref["offset"])
+        assert g.min() >= -_FEAS_TOL
+        # The reference's two binding rows sit on the boundary.
+        assert np.sum(g < 1e-6) == 2
+
+    def test_h_nonnegative_on_support_grid(
+        self, solver_fitted: MLT, ref: dict[str, NDArray[np.float64]]
+    ) -> None:
+        """``min_y h(y|x_i) ≥ 0`` for every training row, on a dense grid."""
+        sup = ref["support"]
+        grid = np.linspace(sup[0], sup[1], 201)
+        theta = solver_fitted.theta_
+        h0 = solver_fitted.basis.evaluate(grid) @ theta[:_P]
+        f = np.exp(0.5 * ref["x_s"][:, 0] * theta[_GAMMA])
+        shift = ref["x_d"][:, 0] * theta[_BETA] + ref["offset"]
+        h = f[:, None] * h0[None, :] + shift[:, None]
+        assert h.min() >= -_FEAS_TOL
+        assert np.all(np.diff(theta[:_P]) >= -_FEAS_TOL)
+
+
 class TestSolverDispatch:
-    """auglag carries the block; SLSQP / trust-constr are issue #116."""
+    """``optimize()`` routes the nonlinear block to every solver."""
 
-    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
-    def test_scipy_solvers_shift_block_raise(
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_optimize_direct_scipy(
         self, ref: dict[str, NDArray[np.float64]], solver: str
     ) -> None:
+        """``optimize()`` fits the shift block on SLSQP / trust-constr (#116)."""
+        sup = ref["support"]
+        res = optimize(
+            BernsteinBasis(order=_ORDER, support=(float(sup[0]), float(sup[1]))),
+            ref["y"],
+            ref["x_d"],
+            base_distribution="exponential",
+            offset=ref["offset"],
+            scaling=ref["x_s"],
+            config=OptimizerConfig(random_state=0, solver=solver),  # type: ignore[arg-type]
+        )
+        assert res.converged
+        np.testing.assert_allclose(
+            res.log_likelihood, ref["ll"][0], rtol=1e-6, atol=1e-10
+        )
+        np.testing.assert_allclose(res.theta, ref["theta"], **_THETA_TOL[solver])
+
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_scale_only_nonzero_offset_scipy(
+        self, ref: dict[str, NDArray[np.float64]], solver: str
+    ) -> None:
+        """``q_d = 0`` with an offset is nonlinear too; scipy solvers fit it."""
         model = _model(ref, solver=solver)
-        with pytest.raises(NotImplementedError, match="#116") as exc:
+        model.fit(ref["y"], offset=ref["offset"])
+        g = _support_values(model, None, ref["x_s"], ref["offset"])
+        assert g.min() >= -_FEAS_TOL
+        assert model.result_.converged
+        ref_ll = _trust_constr_reference(ref, ref["y"], None, CensoringType.NONE)
+        assert model.result_.log_likelihood >= ref_ll - 1e-6
+        np.testing.assert_allclose(model.result_.log_likelihood, ref_ll, rtol=1e-6)
+
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_fixed_beta_reduction(
+        self, ref: dict[str, NDArray[np.float64]], solver: str
+    ) -> None:
+        """``fixed_params`` reduction slices the nonlinear block to the free θ."""
+        beta = float(ref["theta"][_BETA])
+        model = _model(ref, solver=solver, fixed_params={_BETA: beta})
+        model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
+        assert model.theta_[_BETA] == beta
+        np.testing.assert_allclose(model.theta_, ref["theta"], **_THETA_TOL[solver])
+
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_fixed_gamma_zero_equals_unscaled_fit(
+        self, ref: dict[str, NDArray[np.float64]], solver: str
+    ) -> None:
+        """γ pinned at 0 turns the block into the unscaled linear rows (#160)."""
+        model = _model(ref, solver=solver, fixed_params={_GAMMA: 0.0})
+        model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
+        sup = ref["support"]
+        unscaled = MLT(
+            order=_ORDER,
+            support=(float(sup[0]), float(sup[1])),
+            base_distribution="exponential",
+            optimizer_config=OptimizerConfig(random_state=0, solver=solver),  # type: ignore[arg-type]
+        )
+        unscaled.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
+        assert model.theta_[_GAMMA] == 0.0
+        np.testing.assert_allclose(
+            model.result_.log_likelihood, unscaled.result_.log_likelihood, rtol=1e-6
+        )
+
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    @pytest.mark.parametrize(
+        "censoring", [CensoringType.RIGHT, CensoringType.LEFT, CensoringType.INTERVAL]
+    )
+    def test_censored_fit_scipy(
+        self,
+        ref: dict[str, NDArray[np.float64]],
+        censoring: CensoringType,
+        solver: str,
+    ) -> None:
+        """Censored fits on the scipy solvers match the trust-constr reference."""
+        data = _censored(ref, censoring)
+        model = _model(ref, censoring=censoring, solver=solver)
+        model.fit(data, X=ref["x_d"], offset=ref["offset"])
+        g = _support_values(model, ref["x_d"], ref["x_s"], ref["offset"])
+        assert g.min() >= -_FEAS_TOL
+        assert np.all(np.diff(model.theta_[:_P]) >= -_FEAS_TOL)
+        # Right-censoring leaves θ_b[-1] (above the censoring point) nearly
+        # unidentified; trust-constr then ends ~2e-8 relative short of the
+        # reference in logLik, inside CLAUDE.md's rtol but not within 1e-6
+        # absolute, so only the relative comparison is made here.
+        ref_ll = _trust_constr_reference(ref, data, ref["x_d"], censoring)
+        np.testing.assert_allclose(model.result_.log_likelihood, ref_ll, rtol=1e-6)
+
+    def test_trust_constr_first_attempt_warning_free(
+        self, ref: dict[str, NDArray[np.float64]]
+    ) -> None:
+        """With the analytic constraint Hessian, trust-constr needs no restart.
+
+        A quasi-Newton constraint Hessian sees ``J`` unchanged along every
+        step in ``θ_b[1:]`` / ``β`` and warns ``delta_grad == 0.0``; it also
+        ran out of iterations from the default start.
+        """
+        model = _model(ref, solver="trust-constr", max_restarts=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
-        assert "auglag" in str(exc.value)
-        assert not model.is_fitted_
+        assert model.result_.converged
+        assert model.result_.n_restarts == 0
+        np.testing.assert_allclose(model.theta_, ref["theta"], rtol=1e-6, atol=1e-10)
 
-    @pytest.mark.parametrize("solver", ["slsqp", "trust-constr"])
-    def test_scipy_solvers_scale_only_offset_raise(
+    @pytest.mark.parametrize("solver", _SCIPY_SOLVERS)
+    def test_restarts_stay_feasible(
         self, ref: dict[str, NDArray[np.float64]], solver: str
     ) -> None:
-        model = _model(ref, solver=solver)
-        with pytest.raises(NotImplementedError, match="offset"):
-            model.fit(ref["y"], offset=ref["offset"])
+        """Restarts perturb the γ = 0 start, where the rows are linear (#160)."""
+        model = _model(ref, solver=solver, random_state=7, max_restarts=3)
+        model.fit(ref["y"], X=ref["x_d"], offset=ref["offset"])
+        np.testing.assert_allclose(model.theta_, ref["theta"], **_THETA_TOL[solver])
 
     def test_optimize_direct(self, ref: dict[str, NDArray[np.float64]]) -> None:
         """``optimize()`` itself fits the shift block on auglag."""
@@ -717,16 +1104,7 @@ class TestComposition:
         ``θ_b`` before monotonicity was kept as hard bounds in the inner
         solve (``optimizer._increment_auglag``).
         """
-        y = ref["y"]
-        if censoring is CensoringType.RIGHT:
-            c = float(np.quantile(y, 0.8))
-            data = CensoredData.right_censored(np.minimum(y, c), y <= c)
-        elif censoring is CensoringType.LEFT:
-            c = float(np.quantile(y, 0.2))
-            data = CensoredData.left_censored(np.maximum(y, c), y < c)
-        else:
-            upper = np.minimum(1.25 * y, float(ref["support"][1]))
-            data = CensoredData.interval_censored(0.8 * y, upper)
+        data = _censored(ref, censoring)
         model = _model(ref, censoring=censoring)
         model.fit(data, X=ref["x_d"], offset=ref["offset"])
         g = _support_values(model, ref["x_d"], ref["x_s"], ref["offset"])

@@ -12,8 +12,8 @@ one censoring type each."
 ``"exponential"`` × scaling has its own R-parity tests: the scale-only case
 in :mod:`tests.test_exponential_scaling_no_shift` (issue #114) and the
 shift-block case, whose support row is non-linear in ``γ`` (ADR 0005
-Decision 2), in :mod:`tests.test_exponential_scaling_shift` (issue #115,
-auglag only; SLSQP / trust-constr still raise ``NotImplementedError``, #116).
+Decision 2), in :mod:`tests.test_exponential_scaling_shift` (issue #115 on
+auglag, issue #116 on SLSQP / trust-constr).
 """
 
 from __future__ import annotations
@@ -238,8 +238,8 @@ def test_scaled_gradient_interval_for_each_distribution(
 # ---------------------------------------------------------------------------
 
 
-def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
-    """``base_distribution='exponential'`` + ``scaling=`` + ``x_d`` fails at fit.
+def test_exponential_with_scaling_and_shift_fits_on_slsqp() -> None:
+    """``base_distribution='exponential'`` + ``scaling=`` + ``x_d`` fits on SLSQP.
 
     Formerly a ``ValueError`` at ``__init__`` for every exponential +
     scaling model (ADR 0002 Decision 3).  Issue #114 narrowed the guard: the
@@ -247,22 +247,34 @@ def test_exponential_with_scaling_and_shift_rejected_at_fit() -> None:
     ``__init__`` now accepts the combination, and the shift design, which
     only arrives at ``fit``, decides.  With a shift block the support row
     ``θ_b[0]·exp(0.5·x_s·γ) + x_d·β ≥ 0`` is non-linear in ``γ``.  Issue #115
-    fits it on the default auglag solver
-    (``tests/test_exponential_scaling_shift.py``); SLSQP and trust-constr
-    still reject it (issue #116), which this test now pins.
+    fits it on the default auglag solver and issue #116 on SLSQP and
+    trust-constr (``tests/test_exponential_scaling_shift.py``).  This test,
+    which pinned the SLSQP rejection until #116, now pins that SLSQP fits it
+    inside the support with a likelihood that matches auglag's.
     """
     y, x_d, x_s, _ = _make_dataset()
     y_pos = y - y.min() + 0.01
     sup = (0.0, float(y_pos.max() + 0.5))
-    model = MLT(
-        order=4,
-        support=sup,
-        base_distribution="exponential",
-        scaling=x_s,
-        optimizer_config=OptimizerConfig(solver="slsqp"),
-    )
-    with pytest.raises(NotImplementedError, match="shift block"):
+    fits = {}
+    for solver in ("auglag", "slsqp"):
+        model = MLT(
+            order=4,
+            support=sup,
+            base_distribution="exponential",
+            scaling=x_s,
+            optimizer_config=OptimizerConfig(solver=solver, random_state=0),  # type: ignore[arg-type]
+        )
         model.fit(y_pos, X=x_d)
+        fits[solver] = model
+    theta = fits["slsqp"].theta_
+    p, q_d = 5, x_d.shape[1]
+    f = np.exp(0.5 * (x_s @ theta[p + q_d :]))
+    assert np.min(theta[0] * f + x_d @ theta[p : p + q_d]) >= -1e-7
+    np.testing.assert_allclose(
+        fits["slsqp"].result_.log_likelihood,
+        fits["auglag"].result_.log_likelihood,
+        rtol=1e-6,
+    )
 
 
 def test_exponential_without_scaling_still_works() -> None:

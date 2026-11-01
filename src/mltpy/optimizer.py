@@ -17,7 +17,12 @@ from typing import Any, Callable, Literal, cast
 import numpy as np
 from numpy.linalg import LinAlgError
 from numpy.typing import NDArray
-from scipy.optimize import LinearConstraint, OptimizeResult, minimize
+from scipy.optimize import (
+    LinearConstraint,
+    NonlinearConstraint,
+    OptimizeResult,
+    minimize,
+)
 
 from mltpy._auglag import (
     AugLagOptions,
@@ -942,14 +947,18 @@ def optimize(
         :class:`~mltpy.variables.CensoredData` with censored rows (the
         interaction likelihood is exact-data only), when ``scaling`` is
         combined with ``base_distribution="exponential"``, or when
-        ``config.fixed_params`` is set.  On the shift basis, when ``scaling``
-        is combined with ``base_distribution="exponential"`` and a shift
-        block (``X`` with columns) or a non-zero ``offset`` under
-        ``solver="slsqp"`` / ``"trust-constr"``: the support row is then
-        non-linear in ``γ`` (ADR 0005 Decision 2) and only auglag carries it
-        (issue #115; the scipy solvers are issue #116).  The scale-only
-        case (no ``X``, zero or no offset) fits on every solver, its support
-        row collapsing to ``θ_b[0] ≥ 0`` (issue #114).
+        ``config.fixed_params`` is set.
+
+    Notes
+    -----
+    On the shift basis ``scaling`` combined with
+    ``base_distribution="exponential"`` fits on every solver.  The support
+    rule ``θ_b[0]·exp(0.5·x_s,i·γ) + x_i·β ≥ −offset_i`` collapses to the
+    linear row ``θ_b[0] ≥ 0`` without a shift block and with a zero offset
+    (issue #114); otherwise it is non-linear in ``γ`` (ADR 0005 Decision 2):
+    auglag carries it as its nonlinear inequality block (issue #115), SLSQP
+    as an ``ineq`` dict and trust-constr as a ``NonlinearConstraint`` with
+    the analytic Jacobian and Hessian (issue #116).
     """
     # Fail fast for unsupported base distributions before entering scipy.
     dist = _get_dist(base_distribution)
@@ -995,37 +1004,14 @@ def optimize(
             nonneg_lower=base_distribution == "exponential",
         )
 
+    # ADR 0005 Decision 2 — under scaling the exponential support rule
+    # h(a|x_i) ≥ 0 reads θ_b[0]·f_i + x_i·β ≥ −offset_i with
+    # f_i = exp(0.5·x_s,i·γ).  Without a shift block and with a zero offset
+    # it collapses to the linear row θ_b[0] ≥ 0 (issue #114); every other
+    # case is the nonlinear block, which every solver carries: auglag as
+    # ``nonlinear_ineq`` (issue #115), SLSQP / trust-constr natively
+    # (issue #116).
     q_s = scaling.shape[1] if scaling is not None else 0
-    if (
-        scaling is not None
-        and base_distribution == "exponential"
-        and config.solver != "auglag"
-    ):
-        # ADR 0005 Decision 2 — under scaling the support rule h(a|x_i) ≥ 0
-        # reads θ_b[0]·f_i + x_i·β ≥ −offset_i with f_i = exp(0.5·x_s,i·γ).
-        # Without a shift block and with a zero offset it collapses to the
-        # linear row θ_b[0] ≥ 0 (issue #114) and fits on every solver.  Every
-        # other case is non-linear in γ: auglag carries it as a nonlinear
-        # inequality block (issue #115); SLSQP / trust-constr are issue #116.
-        q_d = X.shape[1] if X is not None else 0
-        if q_d > 0:
-            raise NotImplementedError(
-                f"scaling= with base_distribution='exponential' and a shift "
-                f"block (X has {q_d} column(s)) is not yet implemented for "
-                f"solver={config.solver!r}: the support row "
-                "θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0 is non-linear in γ and only "
-                "the default solver='auglag' carries it (issue #116; see "
-                "docs/adr/0005-exponential-scaling-constraint.md, Decision 3)."
-            )
-        if offset is not None and np.any(np.asarray(offset) != 0.0):
-            raise NotImplementedError(
-                "scaling= with base_distribution='exponential' and a non-zero "
-                "offset is not yet implemented for "
-                f"solver={config.solver!r}: the support row "
-                "θ_b[0]·exp(0.5·x_s·γ) + offset ≥ 0 is non-linear in γ and "
-                "only the default solver='auglag' carries it (issue #116; see "
-                "docs/adr/0005-exponential-scaling-constraint.md, Decision 3)."
-            )
     n_params = basis.order + 1
     total_params = n_params + (X.shape[1] if X is not None else 0) + q_s
     nonneg_lower = base_distribution == "exponential"
@@ -1121,7 +1107,11 @@ def _optimize_scipy(
     # included (ADR 0005 Decision 1, issue #160).  Without covariates this
     # reduces to theta_b[0] >= max_i(-offset_i); with covariates we add one
     # linear inequality per training row: theta_b[0] + X_i @ beta >= -offset_i.
-    # Under scaling with no shift block it is theta_b[0] >= 0 (issue #114).
+    # Under scaling with no shift block and a zero offset it is
+    # theta_b[0] >= 0 (issue #114); otherwise the rows
+    # theta_b[0]·exp(0.5·x_s,i·γ) + X_i @ beta >= -offset_i are non-linear in
+    # γ and enter natively — an SLSQP ``ineq`` dict or a trust-constr
+    # ``NonlinearConstraint`` with the analytic Jacobian (issue #116).
     constraints = build_constraints(
         n_params,
         lower=config.lower,
@@ -1132,6 +1122,7 @@ def _optimize_scipy(
         X=X if nonneg_lower else None,
         offset=offset if nonneg_lower else None,
         q_s=scaling.shape[1] if scaling is not None else 0,
+        X_scale=scaling if nonneg_lower else None,
     )
 
     true_nll = _make_true_nll(basis, y, X, censoring, dist, weights, offset, scaling)
@@ -1219,7 +1210,26 @@ def _optimize_scipy(
             constraints_used = [_wrap_dict(d) for d in constraints]
         else:  # trust-constr
 
-            def _slice_lc(lc: LinearConstraint) -> LinearConstraint:
+            def _slice_lc(
+                lc: LinearConstraint | NonlinearConstraint,
+            ) -> LinearConstraint | NonlinearConstraint:
+                if isinstance(lc, NonlinearConstraint):
+                    # Scaled exponential support rows (issue #116): evaluate
+                    # on the full θ, keep the free columns of the Jacobian
+                    # and the free block of the Hessian term.
+                    f, j, hs = lc.fun, lc.jac, lc.hess
+                    free_block = np.ix_(_free_idx, _free_idx)
+                    return NonlinearConstraint(
+                        lambda tf, _f=f: _f(_reconstruct(tf)),
+                        lc.lb,
+                        lc.ub,
+                        jac=lambda tf, _j=j: np.asarray(_j(_reconstruct(tf)))[
+                            :, _free_idx
+                        ],
+                        hess=lambda tf, v, _h=hs: np.asarray(_h(_reconstruct(tf), v))[
+                            free_block
+                        ],
+                    )
                 A = np.atleast_2d(np.asarray(lc.A, dtype=np.float64))
                 shift = A[:, _fixed_idx] @ _fixed_vals  # shape (m,)
                 lb_arr = (

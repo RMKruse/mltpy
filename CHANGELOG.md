@@ -18,8 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`reference/mlt_exponential_scaling_shift_*`) is a multi-start
   explicit-constraint `alabama::auglag` fit on mlt's likelihood, polished by
   Newton on its non-degenerate KKT system; θ, logLik and the multipliers
-  match at `rtol=1e-6`. SLSQP and trust-constr still raise
-  `NotImplementedError` for this case (#116). (#115)
+  match at `rtol=1e-6`. (#115)
+- The same case on `solver="slsqp"` and `solver="trust-constr"`.
+  `build_constraints(..., X_scale=)` passes the nonlinear support rows
+  natively: SLSQP as an `ineq` dict, trust-constr as a `NonlinearConstraint`
+  with the analytic Jacobian and the closed-form constraint Hessian
+  `ScaledSupportConstraint.hessian(θ, v) = Σ v_i ∇²g_i`. scipy's BFGS default
+  for that Hessian stalled at its iteration limit and warned
+  `delta_grad == 0.0`. On the #115 fixture, all three solvers match the
+  reference logLik at `rtol=1e-6`. trust-constr also matches θ at `rtol=1e-6`.
+  SLSQP matches θ at `1e-4`: it stops about 3e-5 short along a flat direction.
+  `fixed_params` works on both scipy solvers. (#116)
 - `auglag_minimize(..., nonlinear_ineq=g)`: an optional smooth inequality
   block `g(θ) ≥ 0`, `g: θ ↦ (values, Jacobian)`, stacked below the linear rows
   with the same PHR penalty, multiplier update, KKT residual and ADR 0004

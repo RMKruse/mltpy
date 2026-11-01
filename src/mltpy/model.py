@@ -537,9 +537,8 @@ class ConditionalTransformationModel:
             # combination is accepted here.  The scale-only, zero-offset
             # support row collapses to θ_b[0] ≥ 0 (issue #114) and fits on
             # every solver; a shift block or a non-zero offset makes the rows
-            # non-linear in γ (ADR 0005 Decision 2), which auglag fits
-            # (issue #115) and ``optimize()`` rejects for SLSQP /
-            # trust-constr (issue #116).
+            # non-linear in γ (ADR 0005 Decision 2), which every solver fits:
+            # auglag (issue #115), SLSQP and trust-constr (issue #116).
             if base_distribution == "exponential" and isinstance(
                 basis, InteractionBasis
             ):

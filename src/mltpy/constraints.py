@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import LinearConstraint
+from scipy.optimize import LinearConstraint, NonlinearConstraint
 
 if TYPE_CHECKING:
     from mltpy.basis import InteractionBasis
@@ -353,6 +353,67 @@ class ScaledSupportConstraint:
         jac[:, p + q_d :] = (0.5 * t0 * f)[:, None] * self.X_scale
         return np.asarray(values, dtype=np.float64), jac
 
+    def hessian(
+        self, theta: NDArray[np.float64], v: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """Weighted sum of the row Hessians, ``Σ_i v_i ∇²g_i(θ)``.
+
+        The form scipy's ``NonlinearConstraint(hess=…)`` expects (issue #116).
+
+        Parameters
+        ----------
+        theta:
+            Parameter vector ``[θ_b | β | γ]``, shape ``(n_total,)``.
+        v:
+            One weight per support row (trust-constr's Lagrange multipliers),
+            shape ``(n,)``.
+
+        Returns
+        -------
+        NDArray of shape ``(n_total, n_total)``
+            Symmetric; zero outside the ``θ_b[0]`` / ``γ`` rows and columns.
+
+        Raises
+        ------
+        ValueError
+            If ``theta`` does not have shape ``(n_total,)`` or ``v`` does not
+            have shape ``(n,)``.
+
+        Notes
+        -----
+        ``g_i`` is linear in ``θ_b[1:]`` and ``β``; its only curvature is in
+        ``(θ_b[0], γ)``:
+
+        .. math::
+
+            \\frac{∂^2 g_i}{∂θ_b[0]\\,∂γ} = 0.5\\, f_i\\, x_{s,i}, \\qquad
+            \\frac{∂^2 g_i}{∂γ\\,∂γ^\\top} = 0.25\\, θ_b[0]\\, f_i\\,
+            x_{s,i} x_{s,i}^\\top .
+        """
+        th = np.asarray(theta, dtype=np.float64)
+        if th.shape != (self.n_total,):
+            raise ValueError(
+                f"theta must have shape ({self.n_total},) = p + q_d + q_s; got "
+                f"shape {th.shape}."
+            )
+        w = np.asarray(v, dtype=np.float64)
+        if w.shape != (self.n_rows,):
+            raise ValueError(
+                f"v must have one weight per support row, shape ({self.n_rows},); "
+                f"got shape {w.shape}."
+            )
+        g0 = self.n_params + self.q_d  # first γ index
+        t0 = th[0]
+        wf = w * np.exp(0.5 * (self.X_scale @ th[g0:]))  # v_i · f_i
+        hess = np.zeros((self.n_total, self.n_total), dtype=np.float64)
+        cross = 0.5 * (self.X_scale.T @ wf)
+        hess[0, g0:] = cross
+        hess[g0:, 0] = cross
+        gg = 0.25 * t0 * ((self.X_scale * wf[:, None]).T @ self.X_scale)
+        # Exact symmetry; the product is symmetric only up to rounding.
+        hess[g0:, g0:] = 0.5 * (gg + gg.T)
+        return hess
+
 
 def build_scaled_support_constraint(
     n_params: int,
@@ -566,7 +627,9 @@ def _scaled_support_row(
     Raises
     ------
     NotImplementedError
-        If a shift block is present (``q_d > 0``) or the offset is non-zero.
+        If a shift block is present (``q_d > 0``) or the offset is non-zero:
+        an internal guard, since both builders route those cases to the
+        nonlinear block (:func:`_split_support`) before reaching this helper.
     ValueError
         If ``X`` is not 2-D, or ``offset`` is empty, not finite, or does not
         match the rows of ``X``.
@@ -578,10 +641,10 @@ def _scaled_support_row(
     rule ``h(a|x_i) ≥ 0`` is ``θ_b[0]·f_i ≥ 0 ⇔ θ_b[0] ≥ 0`` for every ``i``
     (ADR 0005 Decision 2, simplification 1).  Otherwise the row is non-linear
     in ``γ`` (``θ_b[0] ≥ −offset_i / f_i``, or the β term), which needs the
-    nonlinear inequality block of ADR 0005 Decision 2.  The auglag builder
-    :func:`build_constraint_matrices` provides it (``X_scale=``, issue #115)
-    and never reaches this helper in that case; the SLSQP / trust-constr
-    builder :func:`build_constraints` has no nonlinear form yet (issue #116).
+    nonlinear inequality block of ADR 0005 Decision 2.  Both builders provide
+    it from ``X_scale=`` (:func:`build_constraint_matrices`, issue #115;
+    :func:`build_constraints`, issue #116) and never reach this helper in
+    that case.
     """
     q_d = total - n_params - q_s
     n_rows: int | None = None
@@ -595,17 +658,18 @@ def _scaled_support_row(
         raise NotImplementedError(
             "The exponential support row with scaling= and a shift block "
             f"(q_d={q_d}) is θ_b[0]·exp(0.5·x_s·γ) + x·β ≥ 0, which is "
-            "non-linear in γ; only the auglag builder (build_constraint_matrices "
-            "with X_scale=) supports it, SLSQP / trust-constr are issue #116 "
-            "(see docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
+            "non-linear in γ and has no linear-row form; build it as the "
+            "nonlinear block via build_constraints / build_constraint_matrices "
+            "with X_scale= (see docs/adr/0005-exponential-scaling-constraint.md, "
+            "Decision 2)."
         )
     off = _validate_support_offset(offset, n_rows)
     if off is not None and np.any(off != 0.0):
         raise NotImplementedError(
             "The exponential support row with scaling= and a non-zero offset "
             "is θ_b[0] ≥ −offset_i·exp(−0.5·x_s,i·γ), which is non-linear in "
-            "γ; only the auglag builder (build_constraint_matrices with "
-            "X_scale=) supports it, SLSQP / trust-constr are issue #116 (see "
+            "γ and has no linear-row form; build it as the nonlinear block via "
+            "build_constraints / build_constraint_matrices with X_scale= (see "
             "docs/adr/0005-exponential-scaling-constraint.md, Decision 2)."
         )
     rows = np.zeros((1, total), dtype=np.float64)
@@ -682,7 +746,9 @@ def _assemble_constraint_arrays(
         is negative or exceeds ``total_params - n_params``.
     NotImplementedError
         If ``nonneg_lower=True`` and ``q_s > 0`` with a shift block or a
-        non-zero offset (the support row is then non-linear in ``γ``).
+        non-zero offset (the support row is then non-linear in ``γ``).  The
+        builders never pass that case here: :func:`_split_support` routes it
+        to the nonlinear block first.
 
     Notes
     -----
@@ -699,7 +765,8 @@ def _assemble_constraint_arrays(
     offset it collapses to ``θ_b[0]·f_i ≥ 0 ⇔ θ_b[0] ≥ 0`` (ADR 0005
     Decision 2, simplification 1): the single row ``[1, 0, …, 0 | 0_{q_s}]``
     (issue #114).  Every other scaled case needs the nonlinear block of ADR
-    0005 Decision 2 and raises ``NotImplementedError``.
+    0005 Decision 2 (:func:`_split_support`) and raises
+    ``NotImplementedError`` here.
     """
     total = total_params if total_params is not None else n_params
     if isinstance(q_s, bool) or not isinstance(q_s, (int, np.integer)):
@@ -1057,30 +1124,15 @@ def build_constraint_matrices(
     [0.0, 0.0, -0.5, 0.25]
     """
     total = total_params if total_params is not None else n_params
-    nonlinear: ScaledSupportConstraint | None = None
-    if (
-        nonneg_lower
-        and isinstance(q_s, (int, np.integer))
-        and not isinstance(q_s, bool)
-        and q_s > 0
-        and _scaled_support_is_nonlinear(n_params, total, q_s, X, offset)
-    ):
-        # Issue #115: θ_b[0]·f_i + X_i·β ≥ −offset_i is non-linear in γ; the
-        # linear block keeps monotonicity only and the support rows become
-        # the nonlinear block (ADR 0005 Decision 3).
-        nonlinear = _scaled_support_block(n_params, total, q_s, X, X_scale, offset)
-        D, support_rows, support_rhs = _assemble_constraint_arrays(
-            n_params, total_params=total_params, nonneg_lower=False, X=None, q_s=q_s
-        )
-    else:
-        D, support_rows, support_rhs = _assemble_constraint_arrays(
-            n_params,
-            total_params=total_params,
-            nonneg_lower=nonneg_lower,
-            X=X,
-            offset=offset,
-            q_s=q_s,
-        )
+    D, support_rows, support_rhs, nonlinear = _split_support(
+        n_params,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        X=X,
+        offset=offset,
+        q_s=q_s,
+        X_scale=X_scale,
+    )
 
     b_ineq = np.zeros(D.shape[0], dtype=np.float64)
     if support_rows is not None and support_rhs is not None:
@@ -1117,6 +1169,92 @@ def build_constraint_matrices(
         d_eq=d_eq,
         nonlinear_ineq=nonlinear,
     )
+
+
+def _scaled_support_nonlinear_constraint(
+    g: ScaledSupportConstraint,
+) -> NonlinearConstraint:
+    """The scaled support rows as a trust-constr ``NonlinearConstraint``.
+
+    ``0 ≤ g(θ) < ∞`` with the analytic Jacobian and the analytic Hessian
+    term ``Σ_i v_i ∇²g_i`` of :class:`ScaledSupportConstraint` (issue #116).
+    scipy's default quasi-Newton update would see no change in ``J`` along
+    every step in ``θ_b[1:]`` or ``β`` (``g`` is linear there) and warn
+    ``delta_grad == 0.0``.
+    """
+    return NonlinearConstraint(
+        lambda theta: g(theta)[0],
+        0.0,
+        np.inf,
+        jac=lambda theta: g(theta)[1],
+        hess=g.hessian,
+    )
+
+
+def _split_support(
+    n_params: int,
+    *,
+    total_params: int | None,
+    nonneg_lower: bool,
+    X: NDArray[np.float64] | None,
+    offset: NDArray[np.float64] | None,
+    q_s: int,
+    X_scale: NDArray[np.float64] | None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    ScaledSupportConstraint | None,
+]:
+    """Split the inequality rows into linear rows and the nonlinear block.
+
+    Shared by :func:`build_constraint_matrices` (auglag) and
+    :func:`build_constraints` (SLSQP / trust-constr), so every solver gets
+    the same support form.
+
+    Returns
+    -------
+    D : NDArray of shape ``(n_params-1, total)``
+        Padded monotonicity matrix.
+    support_rows, support_rhs : NDArray or None
+        Linear support rows ``support_rows @ θ ≥ support_rhs``; ``None`` on
+        the scaled nonlinear case and when ``nonneg_lower=False``.
+    nonlinear : ScaledSupportConstraint or None
+        The scaled support rows ``θ_b[0]·f_i + X_i·β ≥ −offset_i`` when they
+        are non-linear in ``γ`` (``q_s > 0`` with a shift block or a non-zero
+        offset; ADR 0005 Decision 2), else ``None``.
+
+    Raises
+    ------
+    TypeError, ValueError
+        As :func:`_assemble_constraint_arrays` and
+        :func:`_scaled_support_block`.
+    """
+    total = total_params if total_params is not None else n_params
+    if (
+        nonneg_lower
+        and isinstance(q_s, (int, np.integer))
+        and not isinstance(q_s, bool)
+        and q_s > 0
+        and _scaled_support_is_nonlinear(n_params, total, q_s, X, offset)
+    ):
+        # Issues #115 / #116: θ_b[0]·f_i + X_i·β ≥ −offset_i is non-linear in
+        # γ; the linear block keeps monotonicity only and the support rows
+        # become the nonlinear block (ADR 0005 Decision 3).
+        nonlinear = _scaled_support_block(n_params, total, q_s, X, X_scale, offset)
+        D, _, _ = _assemble_constraint_arrays(
+            n_params, total_params=total_params, nonneg_lower=False, X=None, q_s=q_s
+        )
+        return D, None, None, nonlinear
+    D, support_rows, support_rhs = _assemble_constraint_arrays(
+        n_params,
+        total_params=total_params,
+        nonneg_lower=nonneg_lower,
+        X=X,
+        offset=offset,
+        q_s=q_s,
+    )
+    return D, support_rows, support_rhs, None
 
 
 def _scaled_support_block(
@@ -1192,6 +1330,7 @@ def build_constraints(
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     q_s: int = 0,
+    X_scale: NDArray[np.float64] | None = None,
 ) -> list[dict[str, Any]]: ...
 
 
@@ -1207,7 +1346,8 @@ def build_constraints(
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     q_s: int = 0,
-) -> list[LinearConstraint]: ...
+    X_scale: NDArray[np.float64] | None = None,
+) -> list[LinearConstraint | NonlinearConstraint]: ...
 
 
 def build_constraints(
@@ -1221,8 +1361,9 @@ def build_constraints(
     X: NDArray[np.float64] | None = None,
     offset: NDArray[np.float64] | None = None,
     q_s: int = 0,
-) -> list[dict[str, Any]] | list[LinearConstraint]:
-    """Build all optimisation constraints for a Bernstein model.
+    X_scale: NDArray[np.float64] | None = None,
+) -> list[dict[str, Any]] | list[LinearConstraint | NonlinearConstraint]:
+    r"""Build all optimisation constraints for a Bernstein model.
 
     Always includes the monotonicity constraint (non-decreasing ``theta``).
     Optionally adds boundary equality constraints when ``lower`` or ``upper``
@@ -1244,7 +1385,9 @@ def build_constraints(
         ``"slsqp"``  → returns ``list[dict]`` (for ``scipy.optimize.minimize``
                         with ``method="SLSQP"``).
         ``"trust-constr"`` → returns ``list[LinearConstraint]`` (for
-                             ``method="trust-constr"``).
+                             ``method="trust-constr"``), with a
+                             ``NonlinearConstraint`` for the scaled
+                             support rows (see ``q_s``).
     total_params:
         Total length of the parameter vector passed to the optimiser, including
         any regression coefficients (``beta``).  When ``total_params > n_params``
@@ -1286,9 +1429,20 @@ def build_constraints(
         right-hand side at zero.
     q_s:
         Number of scaling-design columns (trailing ``γ`` block), included in
-        ``total_params``.  See :func:`build_constraint_matrices`: with
-        ``nonneg_lower=True`` and ``q_s > 0`` the support rule collapses to
-        ``θ_b[0] ≥ 0`` without a shift block and with a zero offset.
+        ``total_params``.  With ``nonneg_lower=True`` and ``q_s > 0`` the
+        support rule ``θ_b[0]·exp(0.5·x_s,i·γ) + X_i·β ≥ −offset_i`` collapses
+        to the linear row ``θ_b[0] ≥ 0`` without a shift block and with a
+        zero offset (issue #114).  Otherwise it is non-linear in ``γ`` and is
+        returned as one nonlinear inequality built from ``X_scale`` (issue
+        #116): an SLSQP ``{"type": "ineq", "fun": g, "jac": J}`` dict, or a
+        :class:`scipy.optimize.NonlinearConstraint` ``0 ≤ g(θ) < ∞`` with
+        ``jac=J`` and the analytic ``hess`` of
+        :meth:`ScaledSupportConstraint.hessian`.  Its position is where the
+        linear support rows would be: after monotonicity, before the
+        ``lower`` / ``upper`` pins.
+    X_scale:
+        Scaling design, shape ``(n, q_s)``.  Required in the nonlinear case
+        above; ignored otherwise.  See :func:`build_scaled_support_constraint`.
 
     Raises
     ------
@@ -1299,15 +1453,25 @@ def build_constraints(
         ``total_params - n_params``, if ``nonneg_lower=True`` with ``X``
         but ``total_params`` is omitted, if ``offset`` is empty, not
         finite, or does not have one entry per row of ``X``, or if ``q_s``
-        is negative or exceeds ``total_params - n_params``.
-    NotImplementedError
-        If ``nonneg_lower=True`` and ``q_s > 0`` together with a shift block
-        or a non-zero offset (ADR 0005 Decision 2).
+        is negative or exceeds ``total_params - n_params``; or, in the
+        scaled nonlinear case, if ``X_scale`` is missing, does not have
+        ``q_s`` columns, or does not match the rows of ``X`` / ``offset``.
 
     Returns
     -------
-    list[dict] for ``solver="slsqp"``, list[LinearConstraint] for
-    ``solver="trust-constr"``.
+    list[dict] for ``solver="slsqp"``, list[LinearConstraint |
+    NonlinearConstraint] for ``solver="trust-constr"``.
+
+    Notes
+    -----
+    The scaled nonlinear rows are those of :class:`ScaledSupportConstraint`
+    (ADR 0005 Decision 2), shared with the auglag builder
+    :func:`build_constraint_matrices`:
+
+    .. math::
+
+        g_i(θ) = θ_b[0]\, e^{0.5\, x_{s,i} γ} + x_{d,i} β + \mathrm{offset}_i
+        \ge 0 .
 
     Examples
     --------
@@ -1325,13 +1489,14 @@ def build_constraints(
     [0.75, 0.0]
     """
     total = total_params if total_params is not None else n_params
-    D, support_rows, support_rhs = _assemble_constraint_arrays(
+    D, support_rows, support_rhs, nonlinear = _split_support(
         n_params,
         total_params=total_params,
         nonneg_lower=nonneg_lower,
         X=X,
         offset=offset,
         q_s=q_s,
+        X_scale=X_scale,
     )
 
     if solver == "slsqp":
@@ -1352,6 +1517,16 @@ def build_constraints(
                     "jac": lambda theta, _S=support_rows: _S,
                 }
             )
+        if nonlinear is not None:
+            # Issue #116: the scaled support rows g(θ) ≥ 0 with their
+            # analytic Jacobian (ADR 0005 Decision 2).
+            result.append(
+                {
+                    "type": "ineq",
+                    "fun": lambda theta, _g=nonlinear: _g(theta)[0],
+                    "jac": lambda theta, _g=nonlinear: _g(theta)[1],
+                }
+            )
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(
                 n_params, lower=lower, upper=upper, total_params=total
@@ -1360,9 +1535,13 @@ def build_constraints(
         return result
 
     else:  # trust-constr
-        lcs: list[LinearConstraint] = [LinearConstraint(D, lb=0.0, ub=np.inf)]
+        lcs: list[LinearConstraint | NonlinearConstraint] = [
+            LinearConstraint(D, lb=0.0, ub=np.inf)
+        ]
         if support_rows is not None and support_rhs is not None:
             lcs.append(LinearConstraint(support_rows, lb=support_rhs, ub=np.inf))
+        if nonlinear is not None:
+            lcs.append(_scaled_support_nonlinear_constraint(nonlinear))
         if lower is not None or upper is not None:
             bc = BoundaryConstraint(
                 n_params, lower=lower, upper=upper, total_params=total
